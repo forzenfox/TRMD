@@ -12,35 +12,138 @@ on:
         default: 'latest'
 
 jobs:
-  build:
+  # ============================================================
+  # Job 1: 构建基础镜像（系统依赖 + Python 依赖）
+  #         缓存命中时秒级完成，仅 requirements.txt 变更时慢
+  # ============================================================
+  base:
+    name: Build base image
     runs-on: ubuntu-latest
 
     steps:
-      # 1.检出代码。
-      - name: Checkout repository
+      - name: 检出代码
         uses: actions/checkout@v6
 
-      # 2.设置 Docker Buildx。
-      - name: Set up Docker Buildx
+      - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 3.登录到 GitHub Container Registry。
-      - name: Login to GitHub Container Registry
+      - name: 登录到 GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      # 4.构建并推送镜像。
-      - name: Build and push Docker image
+      - name: 构建并推送基础镜像
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.base
+          push: true
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          tags: ghcr.io/${{ github.repository_owner }}/trmd-base:latest
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+  # ============================================================
+  # Job 2: 矩阵并行构建各平台运行时镜像（不推送最终标签）
+  # ============================================================
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    needs: base
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+          - linux/arm/v7
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v6
+
+      - name: 设置 QEMU（为非 amd64 平台提供模拟层）
+        uses: docker/setup-qemu-action@v3
+        if: matrix.platform != 'linux/amd64'
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录到 GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: 构建并推送（${{ matrix.platform }}）
         uses: docker/build-push-action@v5
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/386
+          platforms: ${{ matrix.platform }}
+          build-args: |
+            BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/trmd-base
           tags: |
-            ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }}
-            ghcr.io/${{ github.repository_owner }}/trmd:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }}-${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+
+  # ============================================================
+  # Job 3: 合并 manifest，生成统一的 multi-arch 镜像标签
+  # ============================================================
+  manifest:
+    name: Merge manifest
+    runs-on: ubuntu-latest
+    needs: build
+    if: success()
+
+    steps:
+      - name: 登录到 GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: 创建并推送 multi-arch manifest
+        run: |
+          IMAGES=""
+          for platform in linux/amd64 linux/arm64 linux/arm/v7; do
+            TAG_PLATFORM="${platform//\//-}"
+            IMAGES="$IMAGES ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }}-${TAG_PLATFORM}"
+          done
+
+          # 创建版本标签 manifest
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }} $IMAGES
+
+          # 创建 latest 标签 manifest
+          docker buildx imagetools create -t ghcr.io/${{ github.repository_owner }}/trmd:latest $IMAGES
+
+      - name: 清理临时平台标签
+        run: |
+          REPO_LC="${{ github.repository }}"
+          REPO_LC="${REPO_LC,,}"
+
+          for platform in linux/amd64 linux/arm64 linux/arm/v7; do
+            TAG_PLATFORM="${platform//\//-}"
+            TAG_NAME="${{ github.ref_name }}-${TAG_PLATFORM}"
+            echo "删除临时标签: ${TAG_NAME}"
+
+            DIGEST=$(curl -s -I \
+              -H "Authorization: Bearer ${{ secrets.GHCR_TOKEN }}" \
+              "https://ghcr.io/v2/${REPO_LC}/trmd/manifests/${TAG_NAME}" \
+              | grep -i "docker-content-digest" \
+              | awk '{print $2}' \
+              | tr -d '\r')
+
+            if [ -n "$DIGEST" ]; then
+              curl -s -X DELETE \
+                -H "Authorization: Bearer ${{ secrets.GHCR_TOKEN }}" \
+                "https://ghcr.io/v2/${REPO_LC}/trmd/manifests/${DIGEST}" || true
+              echo "已删除: ${TAG_NAME}"
+            fi
+          done
+        continue-on-error: true
