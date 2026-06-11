@@ -24,12 +24,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 3.登录到 Docker Hub。
-      - name: Login to Docker Hub
+      # 3.登录到 GitHub Container Registry。
+      - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GHCR_TOKEN }}
 
       # 4.构建并推送镜像。
       - name: Build and push Docker image
@@ -39,7 +40,7 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/386
           tags: |
-            ${{ secrets.DOCKER_HUB_USERNAME }}/telegram_restricted_media_downloader:${{ github.ref_name }}
-            ${{ secrets.DOCKER_HUB_USERNAME }}/telegram_restricted_media_downloader:latest
+            ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/trmd:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
