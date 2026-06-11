@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '镜像标签'
+        description: '镜像标签（例如: v1.2.3）'
         required: false
         default: 'latest'
 
@@ -86,8 +86,9 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             BASE_IMAGE=ghcr.io/${{ github.repository_owner }}/trmd-base
+          # 使用 fromJSON 将平台名中的斜杠替换为横杠，避免 Docker tag 格式非法
           tags: |
-            ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }}-${{ matrix.platform }}
+            ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }}-${{ fromJSON('{"linux/amd64":"linux-amd64","linux/arm64":"linux-arm64","linux/arm/v7":"linux-arm-v7"}')[matrix.platform] }}
           cache-from: type=gha,scope=${{ matrix.platform }}
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
 
@@ -112,6 +113,7 @@ jobs:
         run: |
           IMAGES=""
           for platform in linux/amd64 linux/arm64 linux/arm/v7; do
+            # 将平台名中的斜杠替换为横杠
             TAG_PLATFORM="${platform//\//-}"
             IMAGES="$IMAGES ghcr.io/${{ github.repository_owner }}/trmd:${{ github.ref_name }}-${TAG_PLATFORM}"
           done
