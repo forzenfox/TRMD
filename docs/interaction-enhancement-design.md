@@ -1,9 +1,10 @@
 # Telegram Bot 交互体验增强设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
-> **文档版本**: v1.0  
-> **创建日期**: 2026-06-12  
-> **作者**: SOLO  
+> **文档版本**: v5.0
+> **创建日期**: 2026-06-12
+> **更新日期**: 2026-06-12
+> **作者**: SOLO
 > **状态**: 待审核
 
 ---
@@ -12,27 +13,103 @@
 
 ### 1.1 痛点分析
 
-当前项目的 Bot 交互存在以下用户体验痛点：
+当前项目存在以下用户体验痛点：
 
 | 痛点 | 描述 | 影响 |
 |------|------|------|
-| **命令格式繁琐** | 转发命令必须按 `/forward 原始频道 目标频道 起始ID 结束ID` 格式书写，即使是单条文件转发也要严格按照格式 | 用户记忆负担重，容易出错 |
-| **本地文件媒体组上传缺失** | 本地文件无法满足将多个文件上传到同一媒体组的需求，每次只能上传单个文件 | 无法保持文件的媒体组关联，影响浏览体验 |
+| **命令格式繁琐** | 转发命令必须按 `/forward 原始频道 目标频道 起始ID 结束ID` 格式书写 | 用户记忆负担重，容易出错 |
+| **本地文件媒体组上传缺失** | 无法将多个本地文件上传到同一媒体组 | 无法保持文件的媒体组关联 |
 | **批量操作效率低** | 批量下载/转发需要预先整理好所有链接，一次性发送长命令 | 操作繁琐，容易遗漏或格式错误 |
+| **配置管理困难** | 配置文件通过命令行交互式修改，不够直观 | 配置错误风险高 |
+| **任务监控缺失** | 无法直观查看任务进度和状态 | 需要等待 Bot 通知，体验差 |
 
 ### 1.2 设计目标
 
-在现有 Bot 基础上增加交互式操作模式，通过**状态机管理**实现：
+采用**模块化设计**，重新划分 Bot 和 WebUI 的职责边界：
 
-1. **交互式批量下载/转发** - 用户逐条发送链接，Bot 自动收集并批量处理
-2. **本地文件选择 + 媒体组上传** - 可视化文件列表选择，支持多文件作为同一媒体组上传
-3. **向后兼容** - 所有原有命令保持不变，新功能作为可选增强
+| 端 | 定位 | 职责 |
+|----|------|------|
+| **Bot 端** | 轻量级操作入口 | 简单命令、状态查询、WebUI 引导 |
+| **WebUI 端** | 完整管理界面 | 复杂任务配置、文件管理、任务监控、配置管理 |
+
+**核心原则：**
+1. **Bot 简化** - Bot 只保留简单命令，复杂操作引导用户到 WebUI
+2. **WebUI 增强** - 提供完整的任务管理、文件管理、配置管理功能
+3. **共享核心** - Bot 和 WebUI 共享核心业务逻辑层，避免重复实现
+4. **向后兼容** - 所有原有命令保持不变，新增功能作为可选增强
+5. **单用户** - 当前版本仅支持单用户，无需多用户隔离
+6. **Token 认证** - Bot `/web` 命令生成临时 Token（1 小时有效期），WebUI 通过 URL Token 认证，无需手动登录
+7. **资源保护** - 单次任务 5GB 告警、10GB 禁止，转发任务默认上传后删除本地文件，多任务并发限制（可配置）
 
 ---
 
 ## 二、系统架构
 
-### 2.1 状态机设计
+### 2.1 整体架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         用户层                               │
+│  ┌──────────────────┐         ┌──────────────────────────┐  │
+│  │  Telegram Bot    │         │      WebUI (浏览器)       │
+│  │  (轻量操作入口)   │         │   (完整管理界面)          │  │
+│  └────────┬─────────┘         └────────────┬─────────────┘  │
+└───────────┼────────────────────────────────┼────────────────┘
+            │                                │
+┌───────────▼────────────────────────────────▼────────────────┐
+│                    Token 认证层（新增）                        │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │  TokenManager: 生成/验证临时访问 Token                   │ │
+│  │  - Bot: /web 命令生成 Token，有效期 1 小时              │ │
+│  │  - WebUI: 链接自动携带 Token，无需手动输入              │ │
+│  │  - API: 所有接口校验 Token 有效性                        │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+            │                                │
+┌───────────▼────────────────────────────────▼────────────────┐
+│                      API 网关层                              │
+│  ┌──────────────────┐         ┌──────────────────────────┐  │
+│  │  Bot API Handler │         │    FastAPI REST API      │  │
+│  │  (命令解析)       │         │    (WebUI 接口)          │  │
+│  │  +filters.user   │         │    +Token 中间件          │  │
+│  └────────┬─────────┘         └────────────┬─────────────┘  │
+└───────────┼────────────────────────────────┼────────────────┘
+            │                                │
+┌───────────▼────────────────────────────────▼────────────────┐
+│                      核心业务层                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │ TaskManager  │  │FileManager   │  │ ConfigManager    │  │
+│  │ (任务管理)    │  │(文件管理)     │  │ (配置管理)        │  │
+│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │InteractionMgr│  │Monitor       │  │ TelegramClient   │  │
+│  │(交互状态)     │  │(任务监控)     │  │ (Telegram API)   │  │
+│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+            │
+┌───────────▼─────────────────────────────────────────────────┐
+│                      数据持久层                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐  │
+│  │   SQLite     │  │  File System │  │   Config Files   │  │
+│  │  (任务/日志)  │  │  (文件存储)   │  │  (YAML 配置)     │  │
+│  └──────────────┘  └──────────────┘  └──────────────────┘  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 2.2 模块划分
+
+| 模块 | 职责 | 使用方 |
+|------|------|--------|
+| **TokenManager** | 生成/验证临时访问 Token，管理过期时间 | Bot + WebAPI 共享 |
+| **Bot Module** | 命令解析、消息处理、状态查询（已有 `filters.user(self.root)` 保护） | Bot 端 |
+| **Web API Module** | RESTful API、WebSocket 实时推送、Token 中间件 | WebUI 端 |
+| **Task Manager** | 任务创建、执行、重试、取消、状态管理 | 共享 |
+| **File Manager** | 文件浏览、选择、上传、媒体组处理 | 共享 |
+| **Config Manager** | 配置读取、修改、保存 | 共享 |
+| **Interaction Manager** | 交互状态管理、超时处理 | 共享 |
+| **Monitor** | 任务进度监控、日志收集 | 共享 |
+
+### 2.3 状态机设计
 
 ```
                     ┌─────────────┐
@@ -69,397 +146,769 @@
                     └─────────────┘
 ```
 
-### 2.2 核心概念
-
-| 概念 | 说明 |
-|------|------|
-| **InteractionMode** | 交互模式类型枚举（批量下载、批量转发、相册选择） |
-| **InteractionState** | 单个用户会话的状态对象 |
-| **InteractionManager** | 全局交互状态管理器，管理所有活跃会话 |
-| **超时机制** | 默认 5 分钟无操作自动退出交互模式，防止 Bot 状态卡死 |
-
 ---
 
-## 三、功能详细设计
+## 三、Bot 端设计（轻量级）
 
-### 3.1 功能一：交互式批量下载
+### 3.1 命令体系
 
-#### 3.1.1 触发方式
+Bot 端只保留简单命令，复杂操作引导到 WebUI：
 
-- **新命令**: `/download_batch`
-- **原有命令保留**: `/download` 命令格式完全不变
+| 命令 | 功能 | 复杂度 |
+|------|------|--------|
+| `/start` | 欢迎信息 + WebUI 地址 | 低 |
+| `/help` | 帮助信息 | 低 |
+| `/download <链接>` | 单条链接下载 | 低 |
+| `/forward <源> <目标> <起始> <结束>` | 单条转发（原有格式保留） | 中 |
+| `/upload <文件> <目标>` | 单文件上传（原有格式保留） | 中 |
+| `/status` | 查看当前任务状态 | 低 |
+| `/web` | 获取 WebUI 访问链接（带 Token，1 小时有效期） | 低 |
+| `/web_revoke` | 撤销所有已生成的 WebUI Token | 低 |
+| `/batch` | 进入批量操作模式（简化版） | 中 |
 
-#### 3.1.2 交互流程
+### 3.2 `/web` 命令
 
-```
-用户: /download_batch
-Bot: 📥 已进入批量下载模式
-     请逐条发送下载链接（每条消息一条链接）
-     发送 /done 结束，发送 /cancel 取消
-     当前: 0 条链接待处理
-     [/done 结束] [/cancel 取消]
-
-用户: https://t.me/channel/123
-Bot: ✅ 已添加: https://t.me/channel/123
-     当前: 1 条链接待处理
-     [/done 结束] [/cancel 取消]
-
-用户: https://t.me/channel/456
-Bot: ✅ 已添加: https://t.me/channel/456
-     当前: 2 条链接待处理
-     [/done 结束] [/cancel 取消]
-
-用户: /done
-Bot: 📥 开始处理 2 条下载链接...
-     （调用现有下载逻辑）
-     批量下载模式已关闭
-```
-
-#### 3.1.3 状态设计
-
-```python
-class InteractionState:
-    mode: str = "download_batch"  # 交互模式类型
-    user_id: int                  # 用户 Telegram ID
-    target_link: str | None       # 转发目标频道（转发模式使用）
-    pending_items: list[str]      # 待处理链接列表
-    timeout: int = 300            # 超时时间（秒），默认 5 分钟
-    created_at: datetime          # 会话创建时间
-    last_activity: datetime       # 最后活动时间
-```
-
-#### 3.1.4 超时机制
-
-- 默认 **5 分钟**无操作自动退出交互模式
-- 退出时清理所有待处理数据
-- 每次用户输入重置超时计时
-- 超时前 1 分钟发送提醒消息
-
----
-
-### 3.2 功能二：交互式批量转发
-
-#### 3.2.1 触发方式
-
-- **新命令**: `/forward_batch`
-- **原有命令保留**: `/forward` 命令格式完全不变
-
-#### 3.2.2 交互流程
+用户通过 `/web` 命令获取 WebUI 访问链接，链接自动携带认证 Token：
 
 ```
-用户: /forward_batch
-Bot: 📤 批量转发模式
-     请先发送目标频道链接：
-     例如: https://t.me/target_channel
+用户: /web
+Bot: 🌐 WebUI 管理面板
 
-用户: https://t.me/target_channel
-Bot: ✅ 目标频道已设置
-     现在请逐条发送源频道链接（每条消息一条链接）
-     支持格式:
-       - https://t.me/source_channel （转发全部）
-       - https://t.me/source_channel/100 （转发单条）
-       - https://t.me/source_channel/100-200 （转发范围）
-     当前: 0 条链接待处理
-     [/done 结束] [/cancel 取消]
-
-用户: https://t.me/source/100-200
-Bot: ✅ 已添加: https://t.me/source/100-200 (101 条消息)
-     当前: 1 条链接待处理，预计转发 101 条消息
-     [/done 结束] [/cancel 取消]
-
-用户: /done
-Bot: 📤 开始处理 1 条转发任务，预计转发 101 条消息...
-     （调用现有转发逻辑）
-     批量转发模式已关闭
+     访问链接: http://192.168.1.100:8080/?token=eyJhbGciOi...
+     有效期: 1 小时（2026-06-12 15:30 过期）
+     
+     💡 点击链接即可直接进入管理界面，无需额外登录
+     ⚠️ Token 过期后请重新发送 /web 获取新链接
 ```
 
----
+**认证原理：**
+- Bot 端沿用现有机制：只有登录的用户账户 ID（`self.root`）才能下达 Bot 指令
+- 用户发送 `/web` 命令时，Bot 已通过 `filters.user(self.root)` 验证身份
+- 验证通过后生成临时 Token，有效期 1 小时
+- Token 以 URL 参数形式附带在链接中（`?token=xxx`）
+- WebUI 收到请求时，通过 Token 验证身份，无需手动输入 User ID
 
-### 3.3 功能三：本地文件选择 + 媒体组上传
+**Token 设计：**
+- 格式：随机字符串（如 `secrets.token_urlsafe(32)`）
+- 存储：内存字典 `{token: {expires_at}}`
+- 有效期：1 小时
+- 每次 `/web` 命令生成新 Token，旧 Token 仍然有效（直到过期）
 
-#### 3.3.1 触发方式
+### 3.3 简化批量操作
 
-- **新命令**: `/upload_album`
-- **原有命令保留**: `/upload` 和 `/upload_r` 命令格式完全不变
+Bot 端提供简化版批量操作，复杂场景引导到 WebUI：
 
-#### 3.3.2 交互流程（文件数量 >= 10，编号模式）
+```
+用户: /batch
+Bot: 📦 批量操作模式
+     请逐条发送链接（每条消息一条）
+     发送 /done 结束，/cancel 取消
+     当前: 0 条待处理
+     [/done] [/cancel]
+     
+     💡 提示：复杂批量操作请使用 WebUI
+     发送 /web 获取访问地址
+```
+
+### 3.4 WebUI 引导
+
+当用户尝试复杂操作时，Bot 引导到 WebUI：
 
 ```
 用户: /upload_album
-Bot: 📁 请选择要上传的文件
-     请输入文件所在目录路径：
-     （或发送 . 表示当前工作目录）
-
-用户: /downloads/videos
-Bot: 📂 找到 35 个文件，共 2.5 GB
-     由于文件数量较多，请使用编号选择：
+Bot: 📁 媒体组上传功能请使用 WebUI 操作
+     WebUI 支持：
+     ✅ 可视化文件浏览
+     ✅ 勾选式文件选择
+     ✅ 实时上传进度
+     ✅ 自动媒体组拆分
      
-     1. video_001.mp4 (85 MB)
-     2. video_002.mp4 (120 MB)
-     ...
-     35. video_035.mp4 (65 MB)
-     
-     选择方式:
-       - 单个或多个: 1,3,5
-       - 范围: 1-10
-       - 全选: all
-     输入 /done 确认选择，/cancel 取消
-
-用户: 1-5,8,10-15
-Bot: ✅ 已选择 12 个文件，共 1.2 GB
-     请输入目标频道链接：
-     
-用户: https://t.me/target_channel
-Bot: 📤 开始上传媒体组...
-     (1/12) video_001.mp4
-     (2/12) video_002.mp4
-     ...
-     ✅ 媒体组上传完成！共 12 个文件
+     获取访问地址: /web
 ```
-
-#### 3.3.3 交互流程（文件数量 < 10，按钮模式）
-
-```
-Bot: 📂 找到 5 个文件:
-     
-     [✓] video_001.mp4 (85 MB)
-     [✓] video_002.mp4 (120 MB)
-     [  ] video_003.mp4 (45 MB)
-     [✓] video_004.mp4 (90 MB)
-     [✓] video_005.mp4 (65 MB)
-     
-     点击按钮切换选择状态
-     [/done 确认] [/cancel 取消]
-```
-
-#### 3.3.4 媒体组上传技术要点
-
-| 要点 | 说明 |
-|------|------|
-| **API 使用** | 使用 pyrogram 的 `send_media_group` API |
-| **InputMedia 对象** | 需要先将文件收集为 InputMedia 对象列表 |
-| **数量限制** | Telegram 限制单个媒体组最多 **10 个文件** |
-| **自动拆分** | 超过 10 个文件时自动拆分为多个媒体组 |
-| **文件类型** | 支持图片、视频、音频等媒体类型，文档类型不支持媒体组 |
 
 ---
 
-## 四、技术实现方案
+## 四、WebUI 端设计（完整功能）
 
-### 4.1 文件结构变更
+### 4.1 技术选型
+
+| 组件 | 选型 | 理由 |
+|------|------|------|
+| **后端框架** | FastAPI | 异步高性能，与 PRD 技术栈一致 |
+| **前端** | 原生 HTML + Alpine.js + Tailwind CSS | 轻量无构建，易于集成 |
+| **实时通信** | WebSocket | 任务进度实时推送 |
+| **认证** | URL Token（1 小时有效期） | Bot `/web` 命令生成，链接自动携带，无需手动输入 |
+| **数据库** | SQLite | 轻量，无外部依赖 |
+
+### 4.2 功能模块
+
+#### 4.2.1 任务管理
+
+| 功能 | 描述 |
+|------|------|
+| **创建下载任务** | 输入频道链接 + 消息范围（日期范围/ID 范围/多个 ID 或链接/全部消息）+ 类型过滤，预览后确认提交 |
+| **创建转发任务** | 输入源/目标频道链接 + 消息范围（日期范围/ID 范围/多个 ID 或链接/全部消息）+ 类型过滤，支持选择「上传后删除本地文件」（默认勾选），预览后确认提交 |
+| **创建上传任务** | 输入本地文件路径，支持多文件选择、媒体组配置 |
+| **任务队列** | 查看任务列表、开始/重试/取消任务 |
+| **任务详情** | 查看任务进度、日志、错误信息 |
+
+#### 4.2.1.1 消息范围选择
+
+所有批量下载/转发任务支持以下四种消息范围选择模式：
+
+| 模式 | 输入方式 | 适用场景 |
+|------|---------|---------|
+| **日期范围** | 选择开始日期 + 结束日期 | 按时间维度筛选，如"最近一周的视频" |
+| **消息 ID 范围** | 输入最小 ID + 最大 ID（如 `100 - 500`） | 连续消息范围 |
+| **多个消息 ID / 链接** | 输入一组消息 ID 或消息链接（每行一个，如 `100`、`150`、`https://t.me/ch/200`） | 零散/不连续的消息 |
+| **全部消息** | 勾选「全部消息」复选框 | 处理目标频道/群组历史所有消息 |
+
+**交互示例（日期范围模式）：**
 
 ```
-module/
-├── interaction.py      # [新增] 状态机和交互管理核心模块
-├── bot.py              # [修改] 添加新命令 handler
-├── uploader.py         # [修改] 支持媒体组上传
-├── enums.py            # [修改] 添加新枚举
-└── language.py         # [修改] 添加新交互文案
+┌─────────────────────────────────────────────────────┐
+│  消息范围选择模式：                                   │
+│  [ ] 日期范围  [●] 消息 ID 范围  [ ] 多个 ID/链接   │
+│  [ ] 全部消息                                       │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  最小消息 ID: ┌──────────┐  最大消息 ID: ┌──────────┐│
+│               │ 100      │               │ 500      ││
+│               └──────────┘               └──────────┘│
+└─────────────────────────────────────────────────────┘
 ```
 
-### 4.2 InteractionManager 设计
+**交互示例（多个 ID / 链接模式）：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  消息范围选择模式：                                   │
+│  [ ] 日期范围  [ ] 消息 ID 范围  [●] 多个 ID/链接   │
+│  [ ] 全部消息                                       │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  请输入消息 ID 或链接（每行一个）：                    │
+│  ┌─────────────────────────────────────────────┐    │
+│  │ 100                                         │    │
+│  │ 150                                         │    │
+│  │ https://t.me/source_channel/200             │    │
+│  │ 250                                         │    │
+│  │ ...                                         │    │
+│  └─────────────────────────────────────────────┘    │
+│  已输入 4 条                                        │
+└─────────────────────────────────────────────────────┘
+```
+
+**交互示例（全部消息模式）：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  消息范围选择模式：                                   │
+│  [ ] 日期范围  [ ] 消息 ID 范围  [ ] 多个 ID/链接   │
+│  [●] 全部消息                                       │
+├─────────────────────────────────────────────────────┤
+│  ⚠️ 将处理频道历史所有消息，可能耗时较长             │
+│  💡 统计时将采用抽样估算，避免大量 API 调用           │
+│  确认要继续吗？ [ 取消 ]  [ 继续统计 ]               │
+└─────────────────────────────────────────────────────┘
+```
+
+> **注意：**「全部消息」模式下，消息统计采用**抽样估算**策略（获取头尾各 10 条消息作为样本），避免遍历全部消息导致 API 超限。
+
+#### 4.2.1.2 资源保护
+
+为防止单次任务消耗过多服务器资源（磁盘空间、带宽），所有下载/转发任务预览时进行边界判断：
+
+| 阈值 | 行为 | 说明 |
+|------|------|------|
+| **< 5GB** | 正常创建 | 无告警，直接确认创建 |
+| **5GB - 10GB** | 告警 + 二次确认 | 弹窗提示任务总量，用户确认后继续 |
+| **> 10GB** | 禁止创建 | 弹窗提示超出上限，要求缩小范围 |
+
+**告警弹窗示例：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  ⚠️ 资源告警                                        │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  当前任务统计结果：                                  │
+│  - 消息总数：850 条                                  │
+│  - 总大小：7.2 GB                                    │
+│  - 预估时间：约 45 分钟                              │
+│                                                      │
+│  ⚠️ 任务总量超过 5GB，请确认：                       │
+│  - 你的服务器磁盘有足够空间                          │
+│  - 你知晓该任务可能消耗较多带宽                      │
+│                                                      │
+│          [ 返回修改 ]        [ 确认创建 ]            │
+└─────────────────────────────────────────────────────┘
+```
+
+**超限禁止示例：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  ❌ 任务超出限制                                     │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  当前任务统计结果：                                  │
+│  - 消息总数：2,000 条                                │
+│  - 总大小：15.3 GB                                   │
+│                                                      │
+│  ❌ 单次任务上限为 10GB，请缩小范围后重试            │
+│                                                      │
+│  建议：                                             │
+│  - 缩小消息 ID 范围                                  │
+│  - 缩小日期范围                                      │
+│  - 使用类型过滤（如只选择视频或图片）                 │
+│                                                      │
+│                     [ 返回修改 ]                     │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 4.2.1.3 转发任务本地文件清理
+
+转发任务（先下载再上传）支持配置本地文件清理策略：
+
+| 选项 | 说明 |
+|------|------|
+| **上传成功后删除本地文件**（默认 ✅ 勾选） | 文件上传到目标频道后立即删除本地副本，及时释放磁盘 |
+| **保留本地文件** | 上传后保留本地副本，用于后续查看或重试 |
+
+**交互示例：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  转发任务配置                                       │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  [✓] 上传成功后自动删除本地文件                      │
+│      （释放磁盘空间，推荐开启）                      │
+│                                                      │
+│  [ ] 保留本地文件                                    │
+│      （文件保留在下载目录）                          │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 4.2.1.4 多任务并发资源限制
+
+为防止多个任务同时执行导致 CPU 满载、内存溢出、磁盘占满等问题，系统提供多维度资源限制，**所有参数均可配置**：
+
+**任务并发控制：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `max_concurrent_tasks` | 1 | 同时执行的最大任务数（超出部分进入队列等待） |
+| `max_download_concurrency` | 3 | 单个任务内同时下载的文件数 |
+| `max_upload_concurrency` | 1 | 单个任务内同时上传的文件数 |
+| `max_forward_concurrency` | 1 | 转发任务并发数（同时占用上下行带宽，需保守） |
+
+**带宽参考与建议值（以用户服务器实际带宽为准）：**
+
+| 服务器带宽 | 建议下载并发 | 建议上传并发 | 建议任务并发 |
+|-----------|------------|------------|------------|
+| 上行 30 Mbps / 下行 200 Mbps | 3 | 1 | 1 |
+| 上行 100 Mbps / 下行 500 Mbps | 5 | 2 | 2 |
+| 上行 500 Mbps+ / 下行 1000 Mbps+ | 10 | 5 | 3 |
+
+**资源保护限制：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `min_disk_space_gb` | 2 | 剩余磁盘空间低于此值时禁止新任务 |
+| `memory_limit_mb` | 512 | 单文件内存缓存上限（流式下载避免全量加载） |
+| `task_size_warning_gb` | 5 | 单次任务总量超过此值告警 |
+| `task_size_max_gb` | 10 | 单次任务上限，超过禁止创建 |
+
+**配置示例（config.yaml）：**
+
+```yaml
+# config.yaml - 资源限制配置
+
+resource_limits:
+  # 任务并发
+  max_concurrent_tasks: 1        # 同时执行的最大任务数
+  max_download_concurrency: 3    # 单任务下载并发数
+  max_upload_concurrency: 1      # 单任务上传并发数
+  max_forward_concurrency: 1     # 转发任务并发数
+
+  # 磁盘与内存保护
+  min_disk_space_gb: 2           # 最小剩余磁盘空间（GB）
+  memory_limit_mb: 512           # 单文件内存缓存上限（MB）
+
+  # 任务大小限制
+  task_size_warning_gb: 5        # 告警阈值（GB）
+  task_size_max_gb: 10           # 最大限制（GB）
+```
+
+**任务队列行为：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  任务队列状态                                        │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  正在执行（1/1）：                                   │
+│    📥 #101  下载任务  ████████░░  80%               │
+│                                                      │
+│  等待队列（2 个）：                                  │
+│    📤 #102  转发任务  [ 排队中 ]                     │
+│    📥 #103  下载任务  [ 排队中 ]                     │
+│                                                      │
+│  队列规则：                                          │
+│  - 当前最大并发任务数：1                             │
+│  - 任务按创建顺序执行                                │
+│  - 当前任务完成后自动启动下一个                      │
+│  - 可取消排队中的任务                                │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+```
+
+**磁盘空间不足告警：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  ❌ 无法创建任务                                     │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  当前磁盘状态：                                      │
+│  - 总空间：50 GB                                     │
+│  - 已用：49.5 GB                                     │
+│  - 剩余：0.5 GB                                      │
+│                                                      │
+│  ❌ 剩余空间不足 2 GB（配置的 min_disk_space_gb）    │
+│  请清理磁盘空间后重试                                │
+│                                                      │
+│                     [ 我知道了 ]                     │
+└─────────────────────────────────────────────────────┘
+```
+
+#### 4.2.2 文件管理
+
+| 功能 | 描述 |
+|------|------|
+| **文件浏览** | 树形目录结构，支持路径导航 |
+| **文件选择** | 勾选式多选，支持全选/反选 |
+| **媒体组配置** | 设置分组大小、排序方式 |
+| **上传预览** | 预览待上传文件列表 |
+| **上传进度** | 实时显示上传进度和状态 |
+
+#### 4.2.3 配置管理
+
+| 功能 | 描述 |
+|------|------|
+| **基础配置** | API ID、API Hash、Bot Token |
+| **下载配置** | 下载类型、并发数、重试次数 |
+| **上传配置** | 上传类型、并发数、媒体组设置 |
+| **代理配置** | 代理开关、类型、地址、认证 |
+| **通知配置** | 完成通知、错误通知开关 |
+
+#### 4.2.4 监控面板
+
+| 功能 | 描述 |
+|------|------|
+| **实时统计** | 下载/上传速度、任务数、文件数 |
+| **任务列表** | 进行中/已完成/失败任务 |
+| **日志查看** | 实时日志流，支持过滤 |
+| **系统状态** | CPU、内存、磁盘使用率 |
+
+### 4.3 页面设计
+
+#### 4.3.1 页面结构
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Header: Logo | 导航 | 设置                              │
+├──────────┬──────────────────────────────────────────────┤
+│          │                                              │
+│  Sidebar │              Main Content                    │
+│          │                                              │
+│  - 任务   │  ┌──────────────────────────────────────┐  │
+│  - 文件   │  │                                      │  │
+│  - 配置   │  │                                      │  │
+│  - 监控   │  │                                      │  │
+│  - 日志   │  │                                      │  │
+│          │  │                                      │  │
+│          │  └──────────────────────────────────────┘  │
+│          │                                              │
+└──────────┴──────────────────────────────────────────────┘
+```
+
+#### 4.3.2 核心页面
+
+| 页面 | 功能 |
+|------|------|
+| **Dashboard** | 概览统计、快速操作入口 |
+| **Tasks** | 任务列表、创建任务、任务详情 |
+| **Files** | 文件浏览、选择、上传 |
+| **Settings** | 配置管理 |
+| **Monitor** | 实时监控、日志查看 |
+
+### 4.4 API 设计
+
+#### 4.4.1 认证机制
+
+所有 API 接口（包括 WebSocket）均需携带 Token 进行认证：
+
+**认证流程：**
+1. 用户通过 Bot `/web` 命令获取带 Token 的访问链接（`?token=xxx`）
+2. URL Token 仅用于首次进入页面
+3. 首次访问成功后，WebUI 通过 `Set-Cookie` 下发 **HttpOnly Cookie**
+4. 后续 AJAX/Fetch 请求使用 `Authorization: Bearer xxx` Header
+5. WebSocket 连接使用 URL 参数传递 Token
+
+| 方式 | 说明 |
+|------|------|
+| **URL 参数** | `?token=xxx`，仅用于首次页面访问和 WebSocket 连接 |
+| **HttpOnly Cookie** | 首次验证后自动下发，防止 XSS 泄露 |
+| **请求头** | `Authorization: Bearer xxx`，用于 AJAX/Fetch 请求 |
+
+Token 无效或过期时，所有接口返回 `401 Unauthorized`。
+
+**Token 安全：**
+- Token 存储于 SQLite 数据库，进程重启后可恢复
+- Token 有效期 1 小时，支持手动撤销（Bot 端 `/web_revoke` 命令）
+- 每次 `/web` 命令生成新 Token，旧 Token 仍然有效（直到过期或撤销）
+
+#### 4.4.2 RESTful API
+
+**任务管理：**
+
+| 端点 | 方法 | 功能 | 认证 |
+|------|------|------|------|
+| `/api/tasks` | GET | 获取任务列表（支持 `?status=pending` 过滤） | Token |
+| `/api/tasks` | POST | 创建任务（需指定 `task_type`：`download`/`forward`/`upload`） | Token |
+| `/api/tasks/{id}` | GET | 获取任务详情 | Token |
+| `/api/tasks/{id}/start` | POST | 开始任务（手动触发排队中的任务） | Token |
+| `/api/tasks/{id}` | DELETE | 取消任务 | Token |
+| `/api/tasks/{id}/retry` | POST | 重试任务 | Token |
+
+**频道与消息（带缓存）：**
+
+| 端点 | 方法 | 功能 | 认证 | 缓存 |
+|------|------|------|------|------|
+| `/api/chats` | GET | 获取用户加入的频道列表（优先读缓存） | Token | 1 小时 |
+| `/api/chats/{chat_id}/messages/estimate` | POST | 估算消息范围统计（样本采样） | Token | 10 分钟 |
+| `/api/chats/{chat_id}/messages/analyze` | POST | 精确分析消息范围（遍历全部） | Token | 按参数缓存 |
+
+**文件与配置：**
+
+| 端点 | 方法 | 功能 | 认证 |
+|------|------|------|------|
+| `/api/files` | GET | 获取文件列表（`?path=xxx`） | Token |
+| `/api/files/upload` | POST | 上传文件 | Token |
+| `/api/config` | GET | 获取配置 | Token |
+| `/api/config` | PUT | 更新配置 | Token |
+| `/api/monitor/stats` | GET | 获取监控统计 | Token |
+| `/api/resource/status` | GET | 获取资源状态（磁盘/内存/并发数） | Token |
+
+#### 4.4.3 WebSocket
+
+| 端点 | 功能 | 认证 | 断线重连 |
+|------|------|------|---------|
+| `/ws/tasks` | 任务状态实时推送 | Token（URL 参数） | 自动重连，重发最后状态 |
+| `/ws/monitor` | 监控数据实时推送 | Token（URL 参数） | 自动重连 |
+| `/ws/logs` | 日志实时推送 | Token（URL 参数） | 自动重连 |
+
+**WebSocket Token 续期：**
+- 长任务执行期间 Token 可能过期，WebSocket 连接保持活跃
+- 连接建立后，Token 过期不影响已建立的 WebSocket 连接
+- 断线重连时需携带新的有效 Token
+
+---
+
+## 五、核心模块设计
+
+### 5.1 TaskManager
+
+**任务状态定义：**
+
+| 状态 | 说明 | 转换路径 |
+|------|------|---------|
+| `pending` | 已创建，等待队列 | 创建 → pending |
+| `running` | 正在执行 | pending → running |
+| `completed` | 执行成功 | running → completed |
+| `failed` | 执行失败 | running → failed |
+| `cancelled` | 用户取消 | pending/running → cancelled |
+| `queued` | 排队等待（超出并发限制） | 创建 → queued → pending |
+
+**任务与队列关系：**
+- `self.tasks`：所有任务的存储字典，键为任务 ID
+- `self.task_queue`：FIFO 队列，存放状态为 `queued` 的任务
+- 当前执行任务数 < `max_concurrent_tasks` 时，自动从队列取出下一个任务
+
+```python
+class TaskManager:
+    """任务管理器 - Bot 和 WebUI 共享（单用户）"""
+    
+    def __init__(self, config: dict):
+        self.tasks: dict[str, Task] = {}          # 所有任务
+        self.task_queue: asyncio.Queue = asyncio.Queue()  # 排队中的任务
+        self.running_count: int = 0               # 当前执行中任务数
+        self.max_concurrent: int = config.get('max_concurrent_tasks', 1)
+    
+    async def create_task(self, task_type: TaskType, params: dict) -> Task:
+        """创建任务：资源检查 → 创建 → 排队或执行"""
+    
+    async def start_task(self, task_id: str) -> bool:
+        """手动开始排队中的任务（或任务满时排队）"""
+    
+    async def cancel_task(self, task_id: str) -> bool:
+        """取消任务：running → cancelled，queued 直接移除"""
+    
+    async def retry_task(self, task_id: str) -> bool:
+        """重试任务：基于子任务状态只重试失败的文件"""
+    
+    async def get_task(self, task_id: str) -> Task | None:
+        """获取任务"""
+    
+    async def list_tasks(self, status: TaskStatus | None = None) -> list[Task]:
+        """获取任务列表"""
+    
+    async def _on_task_complete(self, task: Task) -> None:
+        """任务完成后，自动启动队列中下一个"""
+    
+    async def _check_resource_limits(self, task: Task) -> tuple[bool, str]:
+        """资源检查：磁盘空间、任务大小、并发数"""
+```
+
+#### 5.1.1 任务持久化
+
+| 维度 | 方案 |
+|------|------|
+| **任务状态** | SQLite 存储，进程重启后可恢复任务列表 |
+| **子任务状态** | 每个文件/消息作为子任务记录状态（pending/success/failed/skipped） |
+| **重试恢复** | 基于子任务状态，跳过已成功的文件，只重试失败的 |
+
+#### 5.1.2 重试逻辑原则
+
+重试功能的核心原则：**避免无效操作，节省带宽和 API 调用**
+
+| 原则 | 说明 |
+|------|------|
+| **避免重复下载/上传** | 已成功的文件不重新下载/上传，只重试失败的子项 |
+| **避免无效 API 调用** | 因消息被删除、频道被封等导致的失败不重试 |
+| **避免无效带宽消耗** | 已下载部分不重新下载 |
+
+**重试判断逻辑：**
+
+```
+任务失败 → 检查失败原因
+  ├─ 文件已存在且完整 → 跳过，不重试
+  ├─ 消息/文件已被删除 → 标记为不可重试，不重试
+  ├─ 频道/群组无权限 → 标记为不可重试，不重试
+  ├─ 网络超时/连接错误 → 可重试
+  ├─ FloodWait 限制 → 等待指定时间后可重试
+  └─ 其他可恢复错误 → 可重试
+```
+
+**下载任务重试：**
+- 检查本地文件是否存在且大小与 Telegram 返回的 `file_size` 一致
+- 一致 → 跳过该文件，不重新下载
+- 不一致或不存在 → 重新下载
+
+**上传任务重试：**
+- 查询目标频道是否已有该文件（通过 `file_id` 或文件名匹配）
+- 已存在 → 跳过该文件，不重新上传
+- 不存在 → 重新上传
+
+### 5.2 FileManager
+
+```python
+class FileManager:
+    """文件管理器 - Bot 和 WebUI 共享"""
+    
+    async def list_files(self, path: str, recursive: bool = False) -> list[FileInfo]:
+        """列出文件"""
+    
+    async def get_file_info(self, path: str) -> FileInfo:
+        """获取文件信息"""
+    
+    async def select_files(self, paths: list[str]) -> list[FileInfo]:
+        """选择文件"""
+    
+    async def upload_media_group(
+        self,
+        client: pyrogram.Client,
+        chat_id: Union[int, str],
+        file_paths: list[str],
+        progress_callback=None
+    ) -> list[pyrogram.types.Message]:
+        """上传媒体组"""
+    
+    async def upload_single(
+        self,
+        client: pyrogram.Client,
+        chat_id: Union[int, str],
+        file_path: str,
+        progress_callback=None
+    ) -> pyrogram.types.Message:
+        """上传单个文件"""
+```
+
+### 5.3 InteractionManager
 
 ```python
 class InteractionManager:
-    """全局交互状态管理器"""
+    """交互状态管理器 - 管理 Bot 交互状态"""
     
-    active_sessions: dict[int, InteractionState]  # user_id -> 会话状态
+    active_sessions: dict[int, InteractionState]
     
     def start_session(self, user_id: int, mode: InteractionMode, **kwargs) -> bool:
-        """启动新的交互会话"""
+        """启动交互会话"""
     
     def add_item(self, user_id: int, item: str) -> bool:
-        """添加待处理项到当前会话"""
+        """添加待处理项"""
     
     def end_session(self, user_id: int, execute: bool = True) -> list:
-        """结束会话，返回所有待处理项"""
+        """结束会话"""
     
     def cancel_session(self, user_id: int) -> bool:
         """取消会话"""
     
     def get_session(self, user_id: int) -> InteractionState | None:
-        """获取用户当前会话状态"""
+        """获取会话状态"""
     
     def check_timeout(self) -> list[int]:
-        """检查超时会话，返回超时用户 ID 列表"""
+        """检查超时会话"""
     
     def reset_timeout(self, user_id: int) -> None:
-        """重置用户会话超时计时"""
+        """重置超时"""
 ```
 
-### 4.3 与现有代码的集成点
+### 5.4 ConfigManager
+
+```python
+class ConfigManager:
+    """配置管理器 - Bot 和 WebUI 共享"""
+    
+    def load_config(self) -> dict:
+        """加载配置"""
+    
+    def save_config(self, config: dict) -> bool:
+        """保存配置"""
+    
+    def get_config(self, key: str, default=None):
+        """获取配置项"""
+    
+    def set_config(self, key: str, value) -> bool:
+        """设置配置项"""
+    
+    def validate_config(self, config: dict) -> tuple[bool, list[str]]:
+        """验证配置"""
+```
+
+---
+
+## 六、技术实现方案
+
+### 6.1 文件结构变更
+
+```
+module/
+├── core/                    # [新增] 核心业务层
+│   ├── __init__.py
+│   ├── task_manager.py      # 任务管理器
+│   ├── file_manager.py      # 文件管理器
+│   ├── config_manager.py    # 配置管理器
+│   ├── interaction.py       # 交互状态管理
+│   └── monitor.py           # 任务监控
+│
+├── api/                     # [新增] Web API 层
+│   ├── __init__.py
+│   ├── app.py               # FastAPI 应用
+│   ├── routes/              # API 路由
+│   │   ├── tasks.py
+│   │   ├── files.py
+│   │   ├── config.py
+│   │   ├── monitor.py
+│   │   └── auth.py
+│   ├── models/              # 数据模型
+│   │   ├── task.py
+│   │   ├── file.py
+│   │   └── config.py
+│   └── websocket/           # WebSocket 处理
+│       ├── tasks.py
+│       └── monitor.py
+│
+├── web/                     # [新增] WebUI 前端
+│   ├── static/
+│   │   ├── css/
+│   │   ├── js/
+│   │   └── img/
+│   └── templates/
+│       ├── index.html
+│       ├── tasks.html
+│       ├── files.html
+│       ├── settings.html
+│       └── monitor.html
+│
+├── bot.py                   # [修改] 简化命令，添加 WebUI 引导
+├── uploader.py              # [修改] 支持媒体组上传
+├── enums.py                 # [修改] 添加新枚举
+└── language.py              # [修改] 添加新文案
+```
+
+### 6.2 与现有代码的集成
 
 | 文件 | 修改内容 |
 |------|---------|
-| **bot.py** | 1. 添加 `/download_batch`、`/forward_batch`、`/upload_album` 命令 handler<br>2. 扩展 `handle_keyword_input` 处理交互模式下的普通消息<br>3. 在 `COMMANDS` 列表中注册新命令 |
-| **interaction.py** | 新增核心模块，包含 `InteractionMode`、`InteractionState`、`InteractionManager` 类 |
-| **uploader.py** | 新增 `upload_media_group()` 方法，支持多文件媒体组上传 |
-| **enums.py** | 新增 `InteractionMode` 枚举，`BotCallbackText` 和 `BotButton` 新增交互相关文本 |
-| **language.py** | 新增交互模式相关的多语言文案 |
-| **app.py** | 在定时任务中添加超时会话检查 |
+| **bot.py** | 1. 简化命令体系<br>2. 添加 `/web` 命令<br>3. 复杂操作引导到 WebUI<br>4. 保留原有命令兼容性 |
+| **app.py** | 1. 集成 TaskManager<br>2. 集成 ConfigManager<br>3. 启动 Web API 服务 |
+| **main.py** | 1. 支持同时启动 Bot 和 Web API<br>2. 添加启动参数控制 |
+| **enums.py** | 1. 新增 TaskType、TaskStatus 枚举<br>2. 新增 InteractionMode 枚举 |
 
-### 4.4 关键集成代码示意
+### 6.3 启动方式
 
-#### 4.4.1 Bot 消息处理扩展
+```bash
+# 仅启动 Bot（默认）
+python main.py
 
-```python
-# 在 bot.py 的消息处理流程中，优先检查交互模式
-async def handle_keyword_input(self, ...):
-    # 检查用户是否处于交互模式
-    session = self.interaction_manager.get_session(user_id)
-    if session:
-        # 重置超时
-        self.interaction_manager.reset_timeout(user_id)
-        
-        # 处理特殊命令
-        if text == '/done':
-            items = self.interaction_manager.end_session(user_id)
-            await self.execute_batch_task(user_id, items)
-            return
-        elif text == '/cancel':
-            self.interaction_manager.cancel_session(user_id)
-            await self.send_cancel_notice(user_id)
-            return
-        
-        # 根据模式处理输入
-        if session.mode == InteractionMode.DOWNLOAD_BATCH:
-            await self.process_download_link(user_id, text)
-        elif session.mode == InteractionMode.FORWARD_BATCH:
-            if not session.target_link:
-                session.target_link = text  # 第一条消息作为目标频道
-            else:
-                await self.process_forward_link(user_id, text)
-        elif session.mode == InteractionMode.ALBUM_SELECT:
-            await self.process_file_selection(user_id, text)
-```
+# 同时启动 Bot 和 WebUI
+python main.py --web
 
-#### 4.4.2 媒体组上传
+# 仅启动 WebUI
+python main.py --web-only
 
-```python
-# 在 uploader.py 中新增
-async def upload_media_group(
-    self,
-    client: pyrogram.Client,
-    chat_id: Union[int, str],
-    file_paths: List[str],
-    progress_callback=None
-) -> List[pyrogram.types.Message]:
-    """
-    将多个文件作为媒体组上传到指定频道
-    
-    Args:
-        client: Pyrogram 客户端
-        chat_id: 目标频道 ID 或链接
-        file_paths: 文件路径列表
-        progress_callback: 进度回调函数
-        
-    Returns:
-        上传成功的消息列表
-        
-    Note:
-        - Telegram 限制单个媒体组最多 10 个文件
-        - 超过 10 个文件时自动拆分为多个媒体组
-        - 文档类型不支持媒体组，使用单个上传
-    """
-    MAX_MEDIA_GROUP_SIZE = 10
-    
-    # 按 10 个拆分
-    batches = [
-        file_paths[i:i + MAX_MEDIA_GROUP_SIZE] 
-        for i in range(0, len(file_paths), MAX_MEDIA_GROUP_SIZE)
-    ]
-    
-    all_messages = []
-    for batch in batches:
-        media_group = []
-        for file_path in batch:
-            # 根据文件类型创建对应的 InputMedia 对象
-            input_media = self._create_input_media(file_path)
-            media_group.append(input_media)
-        
-        # 发送媒体组
-        messages = await client.send_media_group(
-            chat_id=chat_id,
-            media=media_group
-        )
-        all_messages.extend(messages)
-        
-        if progress_callback:
-            await progress_callback(batch, messages)
-    
-    return all_messages
+# 指定 WebUI 端口
+python main.py --web --port 8080
 ```
 
 ---
 
-## 五、枚举和常量设计
-
-### 5.1 InteractionMode 枚举
-
-```python
-class InteractionMode(Enum):
-    """交互模式类型"""
-    DOWNLOAD_BATCH = "download_batch"    # 批量下载模式
-    FORWARD_BATCH = "forward_batch"      # 批量转发模式
-    ALBUM_SELECT = "album_select"        # 相册文件选择模式
-```
-
-### 5.2 新增 BotCallbackText
-
-```python
-class BotCallbackText:
-    # 交互模式相关
-    BATCH_DOWNLOAD = "batch_download"
-    BATCH_FORWARD = "batch_forward"
-    ALBUM_UPLOAD = "album_upload"
-    ENTER_INTERACTION_MODE = "enter_interaction_mode"
-    EXIT_INTERACTION_MODE = "exit_interaction_mode"
-    TIMEOUT_WARNING = "timeout_warning"
-```
-
-### 5.3 新增 BotButton
-
-```python
-class BotButton:
-    # 交互模式按钮
-    DONE = "✅ 完成"
-    CANCEL = "❌ 取消"
-    SELECT_ALL = "全选"
-    DESELECT_ALL = "全不选"
-```
-
----
-
-## 六、非功能性需求
+## 七、非功能性需求
 
 | 类别 | 需求 | 验收标准 |
 |------|------|---------|
 | **兼容性** | 所有原有命令保持不变 | 现有 `/download`、`/forward`、`/upload` 命令功能不受影响 |
-| **超时保护** | 交互模式默认超时机制 | 5 分钟无操作自动退出，超时前 1 分钟提醒 |
-| **并发安全** | 多用户独立会话状态 | 不同用户的交互会话互不干扰 |
-| **错误处理** | 无效输入友好提示 | 链接格式错误、文件不存在等情况给出明确提示 |
-| **状态恢复** | Bot 重启后清理残留状态 | 重启后自动清理 `active_sessions` |
-| **资源清理** | 超时/取消时清理数据 | 释放临时文件和会话数据 |
-| **测试覆盖** | 单元测试 + 集成测试 | 核心交互流程单元测试覆盖率 ≥ 80% |
+| **安全性** | Bot + WebUI 统一认证 | Bot 已有 `filters.user(self.root)` 保护，WebUI 使用 URL Token（1 小时有效期），所有 API 接口强制 Token 校验 |
+| **性能** | WebUI 响应时间 | API 响应 < 200ms，页面加载 < 3s |
+| **单用户** | 仅支持单用户 | 无需多用户隔离、无需登录系统 |
+| **稳定性** | 服务可用性 | Bot 和 WebUI 独立运行，互不影响 |
+| **资源保护** | 并发/磁盘/内存限制 | 任务并发、磁盘阈值、内存限制均可配置，磁盘不足时禁止新任务 |
+| **测试覆盖** | 单元测试 + 集成测试 | 核心模块覆盖率 ≥ 80% |
 
 ---
 
-## 七、里程碑计划
+## 八、里程碑计划
 
 | 阶段 | 内容 | 前置条件 |
 |------|------|---------|
-| **M1: 交互框架** | InteractionManager、InteractionState、超时机制 | 设计文档审核通过 |
-| **M2: 批量下载** | `/download_batch` 命令、链接收集、批量处理 | M1 完成 |
-| **M3: 批量转发** | `/forward_batch` 命令、目标频道设置、批量转发 | M2 完成 |
-| **M4: 文件选择** | `/upload_album` 命令、文件列表展示、混合选择模式 | M1 完成 |
-| **M5: 媒体组上传** | `upload_media_group()` 方法、自动拆分、进度显示 | M4 完成 |
-| **M6: 测试与优化** | 单元测试、集成测试、错误处理完善 | M2-M5 完成 |
+| **M1: 核心层重构** | TaskManager、FileManager、ConfigManager 抽象 | 设计文档审核通过 |
+| **M2: Bot 简化** | 简化命令体系、添加 `/web` 命令、WebUI 引导 | M1 完成 |
+| **M3: Web API** | FastAPI 应用、RESTful API、WebSocket | M1 完成 |
+| **M4: WebUI 基础** | 页面框架、Dashboard、任务管理 | M3 完成 |
+| **M5: WebUI 文件** | 文件浏览、选择、媒体组上传 | M3 完成 |
+| **M6: WebUI 配置** | 配置管理、监控面板 | M3 完成 |
+| **M7: 测试与优化** | 单元测试、集成测试、性能优化 | M2-M6 完成 |
 
 ---
 
-## 八、附录
+## 九、附录
 
-### 8.1 Telegram 媒体组限制
+### 9.1 Telegram 媒体组限制
 
 | 限制 | 说明 |
 |------|------|
@@ -468,19 +917,25 @@ class BotButton:
 | **不支持类型** | 文档（document）、贴纸、GIF |
 | **总大小限制** | 普通用户 2GB，会员用户 4GB（单文件限制） |
 
-### 8.2 参考资源
+### 9.2 参考资源
 
+- [FastAPI 文档](https://fastapi.tiangolo.com/)
 - [pyrogram send_media_group 文档](https://docs.pyrogram.org/api/methods/send_media_group)
-- [python-telegram-bot 文档](https://docs.python-telegram-bot.org/)
-- [Telegram Bot API - InputMedia](https://core.telegram.org/bots/api#inputmedia)
+- [Alpine.js 文档](https://alpinejs.dev/)
+- [Tailwind CSS 文档](https://tailwindcss.com/)
 
 ---
 
-## 九、变更记录
+## 十、变更记录
 
 | 版本 | 日期 | 变更内容 | 作者 |
 |------|------|---------|------|
 | v1.0 | 2026-06-12 | 初始版本，完成交互体验增强设计 | SOLO |
+| v2.0 | 2026-06-12 | **重构为模块化设计**：<br>1. 重新划分 Bot 和 WebUI 职责<br>2. Bot 简化为轻量操作入口<br>3. 新增 WebUI 完整管理界面设计<br>4. 抽象核心业务层（TaskManager、FileManager 等）<br>5. 新增 Web API 设计（RESTful + WebSocket）<br>6. 更新文件结构和里程碑计划 | SOLO |
+| v2.1 | 2026-06-12 | **修正**：<br>1. 移除暂停/恢复任务，仅保留开始/重试/取消<br>2. 移除多用户设计，改为单用户<br>3. 新增重试逻辑原则（避免重复下载/上传、避免无效 API 调用、避免无效带宽消耗） | SOLO |
+| v3.0 | 2026-06-12 | **简化认证方案**：<br>1. 移除「## 三、用户白名单设计」整个章节（包括配置、验证逻辑、UserValidator 模块、登录页面）<br>2. 移除 `/web_login` 命令，整合到 `/web` 命令<br>3. Bot 端沿用现有 `filters.user(self.root)` 机制（登录用户账户 ID 才能下达指令）<br>4. WebUI 改为 Token 认证，无需手动输入 User ID | SOLO |
+| v4.0 | 2026-06-12 | **Token 认证方案**：<br>1. 新增 TokenManager 模块，生成/验证临时 Token（1 小时有效期）<br>2. `/web` 命令返回带 Token 的访问链接，无需手动输入 User ID<br>3. 所有 API 接口（REST + WebSocket）强制 Token 校验<br>4. Token 以 URL 参数或 Authorization Header 形式传递<br>5. 更新架构图、认证流程、非功能性需求 | SOLO |
+| v5.0 | 2026-06-12 | **消息范围 + 资源限制**：<br>1. 新增消息范围选择四种模式（日期范围/ID 范围/多个 ID 或链接/全部消息）<br>2. 新增资源保护机制（5GB 告警、10GB 禁止）<br>3. 新增转发任务本地文件清理策略（默认上传后删除）<br>4. 新增多任务并发资源限制（任务并发/文件并发/磁盘保护/内存保护，所有参数可配置）<br>5. 提供带宽参考建议表，方便用户根据服务器配置调整 | SOLO |
 
 ---
 

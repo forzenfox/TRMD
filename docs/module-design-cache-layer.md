@@ -1,0 +1,670 @@
+# CacheManager 模块设计文档
+
+> **项目名称**: Telegram_Restricted_Media_Downloader  
+> **文档版本**: v1.0  
+> **创建日期**: 2026-06-18  
+> **作者**: SOLO  
+> **状态**: 草案  
+
+---
+
+## 1. 设计目标与职责边界
+
+### 1.1 设计目标
+
+CacheManager 是 Telegram_Restricted_Media_Downloader 项目中负责**缓存 Telegram API 调用结果**的核心模块，主要解决以下问题：
+
+1. **降低 Telegram API 调用频率**：频道列表、消息列表、消息统计等信息变更频率低但 API 调用成本高，通过本地 SQLite 缓存减少对 Telegram 服务器的重复请求。
+2. **避免账号封禁风险**：频繁调用 `get_dialogs`、`get_chat_history`、`iter_messages` 等方法容易触发 FloodWait，缓存层可将可复用的查询收敛到可控范围内。
+3. **提升 WebUI / Bot 响应速度**：频道列表、消息统计等接口优先读缓存，避免用户每次操作都等待 Telegram API 返回。
+4. **统一缓存语义**：为 Bot 端与 WebUI 端提供一致的缓存访问入口，避免各模块自行维护临时字典导致数据不一致。
+
+### 1.2 职责边界
+
+| 职责 | 属于 CacheManager | 不属于 CacheManager |
+|------|------------------|--------------------|
+| 缓存频道/聊天列表、消息列表、消息统计信息 | ✅ | ❌ |
+| 定义 TTL 策略与过期清理 | ✅ | ❌ |
+| 提供强制刷新与自动过期两种刷新模式 | ✅ | ❌ |
+| 对「全部消息」统计执行抽样估算 | ✅ | ❌ |
+| 直接调用 Telegram API 获取原始数据 | ❌ | ✅（由 TelegramClient / Pyrogram 负责） |
+| 执行业务任务（下载/转发/上传） | ❌ | ✅（由 TaskManager 负责） |
+| 管理 Token 认证 | ❌ | ✅（由 TokenManager 负责） |
+| 多用户隔离 | ❌ | ✅（当前版本单用户，无需隔离） |
+
+### 1.3 与主设计文档的关系
+
+本模块对应主设计文档 [interaction-enhancement-design.md](./interaction-enhancement-design.md) 中：
+
+- **4.4.2 RESTful API** 的「频道与消息（带缓存）」接口：
+  - `GET /api/chats` → 频道列表缓存（1 小时）
+  - `POST /api/chats/{chat_id}/messages/estimate` → 消息统计缓存（10 分钟，抽样估算）
+  - `POST /api/chats/{chat_id}/messages/analyze` → 消息列表/精确分析缓存（30 分钟，按参数缓存）
+- **5.1 TaskManager** 预览阶段的资源保护：TaskManager 在创建任务前调用 CacheManager 获取消息统计，用于 5GB/10GB 资源阈值判断。
+- **6.1 文件结构变更**：新增 `module/core/cache_manager.py`（本文档覆盖模块）。
+
+---
+
+## 2. 缓存数据类型与 TTL 策略
+
+### 2.1 缓存数据类型
+
+| 数据类型 | 来源 | 典型大小 | 主要用途 |
+|---------|------|---------|---------|
+| 频道/聊天列表（Chat List） | `client.get_dialogs()` / `iter_dialogs()` | 数十至数千条 | WebUI 选择源/目标频道、Bot `/status` 展示 |
+| 消息列表（Message List） | `client.get_chat_history()` / `iter_messages()` | 与查询范围成正比 | 精确分析消息范围、按日期/ID 筛选 |
+| 消息统计信息（Message Statistics） | 基于抽样或精确遍历计算 | 小（聚合结果） | 任务预览阶段的资源保护（5GB/10GB 阈值） |
+
+### 2.2 TTL 策略
+
+| 数据类型 | TTL | 理由 |
+|---------|-----|------|
+| 频道/聊天列表 | **1 小时** | 用户加入/退出频道频率低，1 小时足够降低 API 调用且不会过度延迟新频道可见性 |
+| 消息列表 | **30 分钟** | 消息内容相对稳定，但任务创建过程中可能新增消息，30 分钟兼顾实时性与 API 消耗 |
+| 消息统计信息 | **10 分钟** | 统计结果用于资源保护决策，需要比消息列表更及时地反映新增消息带来的大小变化 |
+
+### 2.3 缓存键设计原则
+
+- **频道列表**：全局单用户，使用固定键 `chat_list`。
+- **消息列表**：键由 `chat_id` + 查询参数（范围类型、起止 ID/日期、媒体类型过滤等）生成，形式为 `messages:{chat_id}:{param_hash}`。
+- **消息统计**：键由 `chat_id` + 统计参数生成，形式为 `estimate:{chat_id}:{param_hash}`。
+
+参数哈希采用稳定序列化（如按 key 排序后的 JSON）+ SHA-256 前 16 位，确保相同语义参数命中同一份缓存。
+
+---
+
+## 3. 数据模型
+
+### 3.1 数据库选型
+
+采用 **SQLite**（Python 标准库 `sqlite3`），原因：
+
+- 项目已使用 SQLite 存储任务状态与 Token（见主设计文档 4.4.1、5.1.1）。
+- 单用户场景无需复杂隔离，SQLite 足够轻量。
+- 缓存与业务数据可共存于同一数据库文件，便于事务与备份。
+
+### 3.2 表结构
+
+#### 3.2.1 缓存主表 `cache_entries`
+
+```sql
+CREATE TABLE IF NOT EXISTS cache_entries (
+    cache_key       TEXT PRIMARY KEY,           -- 缓存键
+    cache_type      TEXT NOT NULL,              -- 数据类型：chat_list / message_list / message_stats
+    chat_id         TEXT,                       -- 频道/聊天 ID（全局数据可为 NULL）
+    payload         BLOB NOT NULL,              -- 序列化后的数据（msgpack / json）
+    expires_at      INTEGER NOT NULL,           -- 过期时间戳（Unix 秒）
+    created_at      INTEGER NOT NULL,           -- 创建时间戳（Unix 秒）
+    updated_at      INTEGER NOT NULL,           -- 更新时间戳（Unix 秒）
+    version         INTEGER NOT NULL DEFAULT 1  -- 缓存数据 schema 版本，便于未来迁移
+);
+```
+
+#### 3.2.2 缓存参数索引表 `cache_params`
+
+为支持按参数快速定位缓存，以及未来按 chat_id 清理，增加辅助表：
+
+```sql
+CREATE TABLE IF NOT EXISTS cache_params (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    cache_key       TEXT NOT NULL UNIQUE,       -- 外键关联 cache_entries.cache_key
+    param_hash      TEXT NOT NULL,              -- 参数哈希
+    param_json      TEXT NOT NULL,              -- 参数原始 JSON（便于调试与命中分析）
+    FOREIGN KEY (cache_key) REFERENCES cache_entries(cache_key)
+        ON DELETE CASCADE
+);
+```
+
+> 说明：`cache_params` 可选。若项目追求极简，可将 `param_hash` 直接编码进 `cache_key`，不建辅助表。但建议保留，便于后续按 chat_id 或参数维度清理、诊断。
+
+### 3.3 索引设计
+
+```sql
+-- 按类型与过期时间清理/查询
+CREATE INDEX IF NOT EXISTS idx_cache_entries_type_expires
+    ON cache_entries(cache_type, expires_at);
+
+-- 按 chat_id 清理（删除某个频道相关缓存）
+CREATE INDEX IF NOT EXISTS idx_cache_entries_chat_id
+    ON cache_entries(chat_id);
+
+-- 按参数哈希定位缓存
+CREATE INDEX IF NOT EXISTS idx_cache_params_hash
+    ON cache_params(param_hash);
+```
+
+### 3.4 序列化格式
+
+| 数据类型 | 推荐序列化方式 | 理由 |
+|---------|---------------|------|
+| 频道/聊天列表 | `msgpack` | Pyrogram `Chat`/`Dialog` 对象字段多，msgpack 体积小、反序列化快 |
+| 消息列表 | `msgpack` | 消息对象可能含媒体元数据，msgpack 优于 JSON |
+| 消息统计 | `json` 或 `msgpack` | 聚合结果结构简单，JSON 可读性更好 |
+
+> 若项目中未引入 `msgpack`，可继续使用 Python 标准库 `pickle`。但需注意：**缓存数据仅在本地使用，不跨进程/网络传输**，pickle 可接受。为避免与项目现有依赖冲突，优先使用标准库 `pickle`，后续如引入 msgpack 可迁移。
+
+---
+
+## 4. 接口契约
+
+### 4.1 CacheManager 类公共方法
+
+```python
+from typing import Any, Optional
+from datetime import timedelta
+
+class CacheManager:
+    """缓存管理器 - Bot 与 WebUI 共享（单用户）"""
+
+    def __init__(self, db_path: str, serializer: str = "pickle"):
+        """
+        初始化缓存管理器。
+
+        Args:
+            db_path: SQLite 数据库文件路径。
+            serializer: 序列化方式，默认 "pickle"，可选 "msgpack" / "json"。
+        """
+
+    # ---------- 频道/聊天列表 ----------
+
+    async def get_chat_list(
+        self,
+        fetcher: callable,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """
+        获取频道/聊天列表，优先读缓存，未命中或过期时调用 fetcher。
+
+        Args:
+            fetcher: 异步可调用对象，返回 Pyrogram Dialog/Chat 列表。
+            force_refresh: 是否强制刷新缓存。
+
+        Returns:
+            聊天对象列表（已反序列化为可安全使用的 dict）。
+        """
+
+    async def invalidate_chat_list(self) -> int:
+        """删除所有频道/聊天列表缓存，返回删除条数。"""
+
+    # ---------- 消息列表 ----------
+
+    async def get_message_list(
+        self,
+        chat_id: int | str,
+        params: dict,
+        fetcher: callable,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """
+        获取消息列表缓存。
+
+        Args:
+            chat_id: 频道/聊天 ID。
+            params: 查询参数（范围类型、起止 ID、日期、媒体过滤等）。
+            fetcher: 异步可调用对象，按 params 从 Telegram 获取消息。
+            force_refresh: 是否强制刷新缓存。
+        """
+
+    async def invalidate_message_list(
+        self,
+        chat_id: Optional[int | str] = None,
+    ) -> int:
+        """删除消息列表缓存。若指定 chat_id，仅删除该频道相关缓存。"""
+
+    # ---------- 消息统计 ----------
+
+    async def get_message_stats(
+        self,
+        chat_id: int | str,
+        params: dict,
+        estimator: callable,
+        force_refresh: bool = False,
+    ) -> dict:
+        """
+        获取消息统计信息（抽样估算或精确分析）。
+
+        Args:
+            chat_id: 频道/聊天 ID。
+            params: 统计参数（范围类型、媒体过滤等）。
+            estimator: 异步可调用对象，内部决定抽样估算或精确遍历。
+            force_refresh: 是否强制刷新缓存。
+
+        Returns:
+            统计结果字典，至少包含：
+            - total_messages: int
+            - total_size_bytes: int
+            - estimated: bool（是否为估算值）
+            - sample_count: int（抽样消息数）
+        """
+
+    async def invalidate_message_stats(
+        self,
+        chat_id: Optional[int | str] = None,
+    ) -> int:
+        """删除消息统计缓存。若指定 chat_id，仅删除该频道相关缓存。"""
+
+    # ---------- 通用操作 ----------
+
+    async def clear_expired(self) -> int:
+        """清理所有过期缓存条目，返回删除条数。"""
+
+    async def clear_all(self) -> int:
+        """清空全部缓存，返回删除条数。"""
+
+    async def get_cache_info(self) -> dict:
+        """返回缓存统计信息（各类型条目数、总大小、最早/最近过期时间）。"""
+
+    async def close(self) -> None:
+        """关闭数据库连接。"""
+```
+
+### 4.2 接口使用示例
+
+```python
+from module.core.cache_manager import CacheManager
+
+cache = CacheManager(db_path="data/app.db")
+
+# 频道列表
+chats = await cache.get_chat_list(
+    fetcher=lambda: client.get_dialogs(),
+    force_refresh=False,
+)
+
+# 消息列表
+messages = await cache.get_message_list(
+    chat_id="@source_channel",
+    params={"range_type": "id", "min_id": 100, "max_id": 500, "media_filter": "video"},
+    fetcher=lambda p: fetch_messages(client, p),
+)
+
+# 消息统计（内部采用抽样估算）
+stats = await cache.get_message_stats(
+    chat_id="@source_channel",
+    params={"range_type": "all", "media_filter": "video"},
+    estimator=lambda p: estimate_message_stats(client, p),
+)
+```
+
+---
+
+## 5. 缓存命中/未命中/过期流程
+
+### 5.1 流程图
+
+```
+┌─────────────────────────┐
+│ 调用 CacheManager.get_* │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│ force_refresh == True ? │
+└───────────┬─────────────┘
+            │
+       ┌────┴────┐
+       │         │
+      Yes       No
+       │         │
+       ▼         ▼
+  跳过缓存   查询 SQLite
+            检查 cache_key
+            与 expires_at
+       │         │
+       │    ┌────┴────┐
+       │  命中/未过期  未命中/已过期
+       │     │            │
+       │     ▼            ▼
+       │  反序列化    调用 fetcher/
+       │  返回数据    estimator
+       │              写入缓存
+       │              返回数据
+       ▼
+  调用 fetcher/
+  estimator
+  写入缓存
+  返回数据
+```
+
+### 5.2 详细流程说明
+
+1. **参数规范化**：将查询参数按固定规则排序并序列化，生成稳定 `cache_key` 与 `param_hash`。
+2. **强制刷新**：若 `force_refresh=True`，直接跳过缓存查询，调用数据获取函数，覆盖写入缓存。
+3. **缓存命中**：
+   - 从 `cache_entries` 读取 `payload` 与 `expires_at`。
+   - 若 `expires_at > now()`，反序列化并返回。
+4. **缓存未命中或过期**：
+   - 调用 `fetcher` / `estimator` 获取数据。
+   - 序列化后写入 `cache_entries`（`INSERT OR REPLACE`）。
+   - 若使用 `cache_params` 表，同步更新参数索引。
+5. **异常回退**：若数据获取失败但缓存中存在**已过期**数据，可选策略：
+   - 默认：抛出异常，调用方处理。
+   - 降级模式：返回过期数据并标记 `stale=True`（需在接口中显式开启，避免误导）。
+
+---
+
+## 6. 强制刷新机制
+
+### 6.1 触发条件
+
+| 场景 | 触发方式 | 说明 |
+|------|---------|------|
+| 用户主动刷新 | WebUI 点击「刷新」按钮，调用接口时携带 `force=true` | 常用于频道列表长时间未更新 |
+| 创建任务前校验 | TaskManager 在预览阶段可指定 `force_refresh=True` | 确保资源保护判断基于最新数据 |
+| 缓存缺失/过期 | 自动触发 | 见第 5 节 |
+| 手动清理后 | 调用 `invalidate_*` 后首次访问 | 等同于强制刷新 |
+
+### 6.2 接口层映射
+
+| API 端点 | 请求参数 | CacheManager 调用 |
+|---------|---------|------------------|
+| `GET /api/chats` | `?force=true` | `get_chat_list(force_refresh=True)` |
+| `POST /api/chats/{chat_id}/messages/estimate` | body 中 `force=true` | `get_message_stats(force_refresh=True)` |
+| `POST /api/chats/{chat_id}/messages/analyze` | body 中 `force=true` | `get_message_list(force_refresh=True)` |
+
+### 6.3 并发控制
+
+- 同一 `cache_key` 的强制刷新应避免并发重复调用 Telegram API。
+- 建议实现**单飞请求（single-flight）**机制：当多个请求同时请求同一缓存键且未命中时，仅执行一次底层调用，其他请求等待结果。
+- 实现方式：内存字典 `{cache_key: asyncio.Event}`，第一个请求创建 Event，后续请求等待 Event.set()。
+
+---
+
+## 7. 消息统计抽样估算策略
+
+### 7.1 问题背景
+
+「全部消息」模式下若精确遍历所有消息获取统计，将产生极高 API 调用量：
+
+- 一个拥有 10 万条消息的频道，逐条调用 `iter_messages` 可能触发数百次 API 请求。
+- 大频道极易触发 `FloodWait`，严重时导致账号受限。
+
+因此，**统计信息必须使用抽样估算**，仅在用户明确要求或范围较小时才执行精确分析。
+
+### 7.2 抽样算法
+
+#### 7.2.1 头尾样本抽样（默认）
+
+```python
+async def estimate_message_stats(client, chat_id, params):
+    """
+    默认抽样策略：获取消息范围头部和尾部各 N 条作为样本，
+    根据样本平均大小与消息总数估算总量。
+    """
+    SAMPLE_SIZE = 10  # 头尾各 10 条，共 20 条样本
+
+    # 1. 获取范围边界（最小/最大消息 ID 或日期）
+    first_messages = await fetch_head(client, chat_id, params, limit=SAMPLE_SIZE)
+    last_messages = await fetch_tail(client, chat_id, params, limit=SAMPLE_SIZE)
+
+    samples = first_messages + last_messages
+
+    # 2. 计算样本平均大小
+    sample_total_size = sum(m.file_size or 0 for m in samples if matches_filter(m, params))
+    sample_valid_count = sum(1 for m in samples if matches_filter(m, params))
+    avg_size = sample_total_size / sample_valid_count if sample_valid_count else 0
+
+    # 3. 获取消息总数（优先使用 get_chat_history 的 count 能力或频道元数据）
+    total_messages = await fetch_total_count(client, chat_id, params)
+
+    # 4. 估算
+    estimated_total_size = int(avg_size * total_messages)
+
+    return {
+        "total_messages": total_messages,
+        "total_size_bytes": estimated_total_size,
+        "estimated": True,
+        "sample_count": len(samples),
+        "sample_valid_count": sample_valid_count,
+        "avg_size_bytes": avg_size,
+    }
+```
+
+#### 7.2.2 算法说明
+
+| 步骤 | API 调用 | 目的 |
+|------|---------|------|
+| 获取头部样本 | `get_chat_history(chat_id, limit=10, offset_id=0)` 或等效调用 | 获取最新消息样本 |
+| 获取尾部样本 | `iter_messages(...).last(10)` 或反向偏移 | 获取最旧消息样本 |
+| 获取消息总数 | `get_chat_members_count` 不适用；使用 `get_chat_history` 的 `total_count` 或频道元数据 | 估算基数 |
+
+> 若 Telegram API 无法直接返回总数，则通过**二分查找最大消息 ID** 或读取频道 `message_id` 边界快速估算，API 调用量控制在 O(log N)。
+
+### 7.3 精确分析触发条件
+
+| 条件 | 行为 |
+|------|------|
+| 用户范围小于 500 条消息 | 可直接精确分析，不走抽样 |
+| 用户明确要求精确统计 | 走精确分析，结果缓存 30 分钟 |
+| 抽样结果处于 5GB/10GB 阈值边界（±20%） | 提示用户，并提供「精确统计」选项 |
+
+### 7.4 资源保护中的应用
+
+TaskManager 在创建任务前调用 `get_message_stats`：
+
+```
+统计结果 → 总大小估算
+    │
+    ├─ < 5GB   → 正常创建
+    ├─ 5GB-10GB → 告警 + 二次确认
+    └─ > 10GB   → 禁止创建
+```
+
+当统计为估算值且接近阈值时，UI 应明确提示：
+
+> ⚠️ 当前为抽样估算结果，实际大小可能上下浮动 20%。建议缩小范围或执行精确统计。
+
+---
+
+## 8. 缓存清理与容量控制
+
+### 8.1 过期清理
+
+| 策略 | 触发时机 | 实现 |
+|------|---------|------|
+| 惰性清理 | 每次查询时，删除当前 `cache_key` 的过期数据 | 在 `get_*` 流程中执行 `DELETE WHERE cache_key=? AND expires_at<=?` |
+| 定时清理 | 每小时后台运行一次 | `asyncio.create_task` 启动周期任务，调用 `clear_expired()` |
+| 启动清理 | 服务启动时 | 初始化 `CacheManager` 时执行一次 `DELETE WHERE expires_at<=?` |
+
+### 8.2 容量控制
+
+| 维度 | 策略 | 说明 |
+|------|------|------|
+| 条目数上限 | 默认单表不超过 10,000 条 | 超过时按 LRU 淘汰最旧条目 |
+| 单条大小上限 | 单条 `payload` 不超过 50MB | 超过时拆分存储或拒绝缓存 |
+| 总大小上限 | 默认缓存总大小不超过 500MB | 超过时按 LRU 淘汰 |
+
+### 8.3 LRU 淘汰实现
+
+```sql
+-- 按 updated_at 淘汰最旧的数据
+DELETE FROM cache_entries
+WHERE cache_key IN (
+    SELECT cache_key FROM cache_entries
+    ORDER BY updated_at ASC
+    LIMIT :oversize
+);
+```
+
+### 8.4 按频道清理
+
+当某个频道被删除或任务完成后不再需要其缓存时，可调用：
+
+```python
+await cache.invalidate_message_list(chat_id="@source_channel")
+await cache.invalidate_message_stats(chat_id="@source_channel")
+```
+
+---
+
+## 9. 错误处理
+
+### 9.1 错误分类
+
+| 错误类型 | 示例 | 处理策略 |
+|---------|------|---------|
+| Telegram API 错误 | `FloodWait`, `ChannelInvalid`, `AuthKeyUnregistered` | 向上抛出，由 TelegramClient 或调用方处理，不写入缓存 |
+| 序列化/反序列化错误 | `pickle.UnpicklingError` | 记录警告，删除损坏条目，重新获取 |
+| 数据库错误 | `sqlite3.OperationalError` | 记录错误，抛出 `CacheError`，避免返回错误数据 |
+| 参数校验错误 | 缺少 `chat_id`、范围参数不合法 | 立即抛出 `ValueError`，不访问数据库 |
+
+### 9.2 异常回退策略
+
+| 场景 | 行为 |
+|------|------|
+| 缓存读取失败 | 视为缓存未命中，调用 fetcher 重新获取 |
+| fetcher 失败但有过期缓存 | 默认抛异常；若启用 `allow_stale=True`，返回过期数据并标记 `stale=True` |
+| 写入缓存失败 | 记录警告，仍返回数据给调用方（缓存非强一致） |
+
+### 9.3 日志规范
+
+- 缓存命中：`DEBUG` 级别，记录 `cache_key`。
+- 缓存未命中/过期：`DEBUG` 级别。
+- 强制刷新：`INFO` 级别。
+- 缓存清理：`INFO` 级别，记录删除条数。
+- 序列化/数据库错误：`WARNING` 或 `ERROR` 级别。
+
+---
+
+## 10. TDD 测试策略
+
+### 10.1 测试目标
+
+- CacheManager 各公共方法行为正确。
+- TTL 过期与强制刷新逻辑正确。
+- 抽样估算结果在合理误差范围内。
+- 错误处理不泄露异常细节，且能优雅降级。
+- **覆盖率目标：≥ 80%**（与主设计文档非功能性需求一致）。
+
+### 10.2 单元测试用例清单
+
+| 用例编号 | 用例名称 | 验证点 |
+|---------|---------|--------|
+| TC-001 | 首次获取频道列表时未命中，调用 fetcher | 命中状态、写入缓存、expires_at 正确 |
+| TC-002 | 缓存未过期时再次获取命中缓存 | 不调用 fetcher、返回缓存数据 |
+| TC-003 | 缓存过期后自动调用 fetcher | expires_at 更新、数据更新 |
+| TC-004 | force_refresh=True 时跳过缓存 | 即使未过期也调用 fetcher |
+| TC-005 | 消息列表按参数生成不同缓存键 | 不同参数不互相覆盖 |
+| TC-006 | invalidate_chat_list 删除全部频道缓存 | 删除后首次获取未命中 |
+| TC-007 | invalidate_message_list 按 chat_id 删除 | 仅删除指定频道缓存 |
+| TC-008 | clear_expired 删除过期条目 | 过期条目删除、未过期条目保留 |
+| TC-009 | 数据库损坏时读取回退到 fetcher | 不崩溃、重新获取 |
+| TC-010 | fetcher 抛出 FloodWait 时不写入缓存 | 异常向上传播、缓存不变 |
+| TC-011 | 抽样估算大频道全部消息 | 样本数 ≤ 20、estimated=True、API 调用次数可控 |
+| TC-012 | 精确分析小范围消息 | estimated=False、结果精确 |
+| TC-013 | 缓存条目数超限触发 LRU 淘汰 | 最旧条目被删除 |
+| TC-014 | 并发强制刷新单飞请求 | 同一 cache_key 仅执行一次 fetcher |
+| TC-015 | close 后再次访问抛出 CacheError | 资源释放正确 |
+
+### 10.3 Mock 点
+
+| 依赖 | Mock 方式 | 说明 |
+|------|----------|------|
+| TelegramClient / Pyrogram | Mock `get_dialogs`、`get_chat_history`、`iter_messages` | 返回固定测试消息对象 |
+| 时间 | `freezegun.freeze_time` 或 `time.time` patch | 控制 TTL 过期 |
+| SQLite | 使用内存数据库 `:memory:` | 测试隔离 |
+| 序列化器 | patch `pickle.dumps/loads` | 模拟损坏数据 |
+| asyncio Event | 直接测试单飞逻辑 | 验证并发只调用一次 fetcher |
+
+### 10.4 测试框架
+
+- **pytest** + **pytest-asyncio**：异步测试。
+- **pytest-cov**：覆盖率统计。
+- 测试文件位置：`tests/core/test_cache_manager.py`。
+
+### 10.5 运行命令
+
+```bash
+pytest tests/core/test_cache_manager.py -v --cov=module.core.cache_manager --cov-report=term-missing
+```
+
+---
+
+## 11. 依赖关系
+
+### 11.1 内部依赖
+
+| 依赖模块 | 用途 |
+|---------|------|
+| `module.core.task_manager` | 创建任务时调用 `get_message_stats` 进行资源保护判断 |
+| `module.core.file_manager` | 文件上传预览可能依赖消息统计 |
+| `module.client.TelegramRestrictedMediaDownloaderClient` | 实际执行 Telegram API 调用 |
+
+### 11.2 外部依赖
+
+| 依赖 | 版本 | 用途 |
+|------|------|------|
+| Python 标准库 `sqlite3` | 内置 | SQLite 数据库操作 |
+| Python 标准库 `pickle` / `json` | 内置 | 数据序列化 |
+| `pyrogram` / `kurigram` | 项目已有 | Telegram API 客户端类型定义 |
+| `pytest` / `pytest-asyncio` / `pytest-cov` | 开发依赖 | 单元测试 |
+
+> 优先使用标准库，不引入额外运行时依赖。
+
+### 11.3 依赖方向
+
+```
+┌─────────────────┐
+│   Web API 路由   │
+│  /api/chats ... │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  CacheManager   │
+└────────┬────────┘
+         │
+    ┌────┴────┐
+    ▼         ▼
+┌────────┐ ┌──────────────┐
+│ SQLite │ │ TelegramClient│
+└────────┘ └──────────────┘
+```
+
+---
+
+## 12. 风险与假设
+
+### 12.1 风险
+
+| 风险 | 影响 | 缓解措施 |
+|------|------|---------|
+| 缓存过期导致资源保护判断偏差 | 用户基于过期统计创建任务，实际大小超出 10GB | 阈值边界时提示「精确统计」；缩短统计 TTL 至 10 分钟 |
+| 大频道消息列表缓存过大 | SQLite 文件膨胀，加载缓慢 | 设置单条/总量上限，LRU 淘汰；消息列表仅缓存必要字段 |
+| 并发强制刷新重复调用 API | 多用户 WebUI 同时刷新 | 实现单飞请求机制 |
+| Telegram API 字段变更 | 序列化后反序列化失败 | 为缓存数据增加 `version` 字段，schema 变更时自动失效 |
+| 抽样估算误差过大 | 大文件集中分布时估算失真 | 增加样本数到 20-50 或采用分位数抽样，UI 明确标注「估算」 |
+
+### 12.2 假设
+
+1. **单用户场景**：缓存无需按用户 ID 隔离，所有数据共享同一数据库。
+2. **本地运行**：SQLite 数据库与应用进程运行在同一机器，访问延迟可忽略。
+3. **数据可丢失**：缓存为性能优化层，丢失后可通过 Telegram API 重建，不破坏业务一致性。
+4. **标准库序列化足够**：当前使用 `pickle`，后续若需跨版本兼容可迁移至 `msgpack`。
+5. **Telegram API 调用成本远高于本地存储**：因此宁可多占磁盘，也要避免重复 API 调用。
+
+---
+
+## 附录 A：与主设计文档接口对照
+
+| 主设计文档接口 | CacheManager 方法 | TTL |
+|---------------|------------------|-----|
+| `GET /api/chats` | `get_chat_list()` | 1 小时 |
+| `POST /api/chats/{chat_id}/messages/estimate` | `get_message_stats()` | 10 分钟 |
+| `POST /api/chats/{chat_id}/messages/analyze` | `get_message_list()` | 30 分钟 |
+
+---
+
+## 附录 B：术语表
+
+| 术语 | 说明 |
+|------|------|
+| TTL | Time To Live，缓存有效期 |
+| LRU | Least Recently Used，最近最少使用 |
+| Single-Flight | 合并同一 key 的并发请求，只执行一次底层调用 |
+| Fetcher | 从 Telegram API 获取原始数据的可调用对象 |
+| Estimator | 执行抽样估算的可调用对象 |
+
+---
+
+> **文档结束**

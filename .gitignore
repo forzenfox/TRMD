@@ -1,27 +1,38 @@
-# ignore folders
-.idea/
+# Python cache
 __pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# Sessions
 sessions/
+*.session
+*.session-journal
+
+# Temporary directories
 temp/
 output/
 img/
-venv/
-ConfigBackup/
-tests/
-test*
 downloads/
 DownloadRecordForm/
-# ignore files
-*.txt
+
+# Tests
+.coverage
+
+# Config backup
+ConfigBackup/
+
+# Build artifacts
 *.exe
-*.yaml
-*.template
-*.xml
 *.lock
-*.session
-*.session-journal
-test*.py
-Pipfile
-# include files
-!rar.exe
-!requirements.txt
+
+# OS files
+.DS_Store
+Thumbs.db
