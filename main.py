@@ -3,12 +3,9 @@
 # Software:PyCharm
 # Time:2024/9/5 19:08
 # File:main.py
-import os
 import sys
 
-from module.enums import ENVIRON, MODE
 from module.utils.helpers import check_environ
-from module.web import Web
 from module.parser import PARSE_ARGS
 from module.downloader import TelegramRestrictedMediaDownloader
 
@@ -42,14 +39,7 @@ if __name__ == '__main__':
     elif PARSE_ARGS.web is not None:
         _run_web_api(port=web_port)
 
-    elif os.environ.get(ENVIRON.TRMD_WEB_PORT) and os.environ.get(ENVIRON.TRMD_WEB_PID) is None:
-        # 原有 ttyd+tmux Web 模式
-        web = Web(__file__)
-        if PARSE_ARGS.mode == MODE.SESSION:
-            web.run_session()
-        else:
-            web.run_once()
+    # 核心下载器模式
     else:
-        # 核心下载器模式
         trmd = TelegramRestrictedMediaDownloader()
         trmd.run()

@@ -59,7 +59,7 @@ def _load_log_levels_from_config():
 
     优先级：
     1. 工作目录下的 config.yaml 的 log 分组
-    2. 旧的 %APPDATA%/TRMD/.CONFIG.yaml（向后兼容）
+    2. 工作目录下的 .CONFIG.yaml
     3. 默认值 INFO / WARNING
     """
     global FILE_LOG_LEVEL, CONSOLE_LOG_LEVEL

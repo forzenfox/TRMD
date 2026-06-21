@@ -38,11 +38,7 @@ from module.utils.helpers import (
     is_allow_upload,
     format_chat_link,
     get_my_id,
-    add_executable_permission,
-    get_subprocess_args,
-    gen_random_credential,
     check_environ,
-    is_nuitka,
     is_docker,
     Issues,
 )
@@ -90,11 +86,7 @@ __all__ = [
     "is_allow_upload",
     "format_chat_link",
     "get_my_id",
-    "add_executable_permission",
-    "get_subprocess_args",
-    "gen_random_credential",
     "check_environ",
-    "is_nuitka",
     "is_docker",
     "Issues",
     # stdio exports

@@ -35,17 +35,14 @@ __copyright__ = f"Copyright (C) 2024-{__update_date__[:4]} {AUTHOR} <https://git
 SOFTWARE_FULL_NAME = "Telegram Restricted Media Downloader"
 SOFTWARE_SHORT_NAME = "TRMD"
 
+# 工作目录（软件所在目录）
+WORK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # 路径常量
-APPDATA_PATH = os.path.join(
-    os.environ.get("APPDATA")
-    or os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
-    SOFTWARE_SHORT_NAME,
-)
 GLOBAL_CONFIG_NAME = ".CONFIG.yaml"
-GLOBAL_CONFIG_PATH = os.path.join(APPDATA_PATH, GLOBAL_CONFIG_NAME)
+GLOBAL_CONFIG_PATH = os.path.join(WORK_DIR, GLOBAL_CONFIG_NAME)
 PLATFORM = platform.system()
-os.makedirs(APPDATA_PATH, exist_ok=True)
-INPUT_HISTORY_PATH = os.path.join(APPDATA_PATH, f".{SOFTWARE_SHORT_NAME}_HISTORY")
+INPUT_HISTORY_PATH = os.path.join(WORK_DIR, ".history")
 MAX_RECORD_LENGTH = 1000
 
 # 执行副作用：读取输入历史
@@ -54,7 +51,7 @@ read_input_history(
 )
 
 # 日志相关常量
-LOG_PATH = os.path.join(APPDATA_PATH, f"{SOFTWARE_SHORT_NAME}_LOG.log")
+LOG_PATH = os.path.join(WORK_DIR, "trmd.log")
 MAX_LOG_SIZE = 200 * 1024 * 1024  # 200MB
 BACKUP_COUNT = 0  # 不保留日志文件
 LOG_FORMAT = "%(name)s:%(funcName)s:%(lineno)d - %(message)s"
