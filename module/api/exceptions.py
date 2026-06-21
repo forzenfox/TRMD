@@ -88,7 +88,9 @@ def setup_exception_handlers(app: FastAPI) -> None:
     """
 
     @app.exception_handler(TRMDAPIException)
-    async def trmd_exception_handler(request: Request, exc: TRMDAPIException) -> JSONResponse:
+    async def trmd_exception_handler(
+        request: Request, exc: TRMDAPIException
+    ) -> JSONResponse:
         """处理业务异常。"""
         logger.warning("业务异常 [%d]: %s", exc.code, exc.message)
         return JSONResponse(

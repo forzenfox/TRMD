@@ -19,11 +19,12 @@ from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 import pyrogram
 
-from module.command_router import CommandRouter
-from module.state_manager import StateManager
+from module.bot.command_router import CommandRouter
+from module.bot.state_manager import StateManager
 
 
 # ==================== Fixtures ====================
+
 
 @pytest.fixture
 def mock_client():
@@ -61,6 +62,7 @@ def router(state):
 
 # ==================== 初始化测试 ====================
 
+
 class TestCommandRouterInit:
     """CommandRouter 初始化测试。"""
 
@@ -76,13 +78,15 @@ class TestCommandRouterInit:
 
     def test_create_with_custom_keyboard(self, state):
         """应支持传入自定义 KeyboardManager。"""
-        from module.keyboard_manager import KeyboardManager
+        from module.bot.keyboard_manager import KeyboardManager
+
         km = KeyboardManager()
         router = CommandRouter(state, km)
         assert router.keyboard_manager is km
 
 
 # ==================== 帮助/开始/表格命令测试 ====================
+
 
 class TestHelpStartTable:
     """帮助/开始/表格命令测试。"""
@@ -124,6 +128,7 @@ class TestHelpStartTable:
 
 # ==================== 下载命令测试 ====================
 
+
 class TestDownloadCommand:
     """下载命令解析测试。"""
 
@@ -148,7 +153,9 @@ class TestDownloadCommand:
     @pytest.mark.asyncio
     async def test_download_multiple_links(self, router, mock_client, mock_message):
         """/download 多条链接时应全部解析。"""
-        mock_message.text = "/download https://t.me/a/1 https://t.me/b/2 https://t.me/c/3"
+        mock_message.text = (
+            "/download https://t.me/a/1 https://t.me/b/2 https://t.me/c/3"
+        )
         result = await router.get_download_link_from_bot(mock_client, mock_message)
         assert result is not None
         assert len(result["right_link"]) == 3
@@ -206,6 +213,7 @@ class TestDownloadCommand:
 
 # ==================== 转发命令测试 ====================
 
+
 class TestForwardCommand:
     """转发命令解析测试。"""
 
@@ -245,6 +253,7 @@ class TestForwardCommand:
 
 # ==================== 上传命令测试 ====================
 
+
 class TestUploadCommand:
     """上传命令解析测试。"""
 
@@ -259,8 +268,10 @@ class TestUploadCommand:
     async def test_upload_file_not_found(self, router, mock_client, mock_message):
         """/upload 文件不存在时应提示。"""
         mock_message.text = "/upload /nonexistent/file.txt https://t.me/target"
-        with patch("os.path.isfile", return_value=False), \
-             patch("os.path.isdir", return_value=False):
+        with (
+            patch("os.path.isfile", return_value=False),
+            patch("os.path.isdir", return_value=False),
+        ):
             result = await router.get_upload_link_from_bot(mock_client, mock_message)
         assert result is None
 
@@ -275,13 +286,16 @@ class TestUploadCommand:
     async def test_upload_folder_empty(self, router, mock_client, mock_message):
         """/upload 文件夹为空时应提示。"""
         mock_message.text = "/upload /empty_folder https://t.me/target"
-        with patch("os.path.isdir", return_value=True), \
-             patch("module.path_tool.safe_scan_directory_file", return_value=[]):
+        with (
+            patch("os.path.isdir", return_value=True),
+            patch("module.path_tool.safe_scan_directory_file", return_value=[]),
+        ):
             result = await router.get_upload_link_from_bot(mock_client, mock_message)
         assert result is None
 
 
 # ==================== 退出命令测试 ====================
+
 
 class TestExit:
     """退出命令测试。"""
@@ -296,6 +310,7 @@ class TestExit:
 
 
 # ==================== 监听命令测试 ====================
+
 
 class TestListenCommands:
     """监听命令测试。"""
@@ -367,6 +382,7 @@ class TestListenCommands:
 
 # ==================== 关键词输入处理测试 ====================
 
+
 class TestKeywordInput:
     """关键词输入处理测试。"""
 
@@ -384,7 +400,7 @@ class TestKeywordInput:
             callback_query=mock_cq,
             callback_prompt=lambda: "请输入关键词:",
             _client=MagicMock(),
-            message=mock_msg
+            message=mock_msg,
         )
 
         assert router.state_manager.has_added_keyword("test_keyword")
@@ -402,13 +418,14 @@ class TestKeywordInput:
             callback_query=mock_cq,
             callback_prompt=lambda: "请输入关键词:",
             _client=MagicMock(),
-            message=mock_msg
+            message=mock_msg,
         )
         # 不应有关键词被添加
         assert router.state_manager.adding_keywords == []
 
 
 # ==================== 错误消息处理测试 ====================
+
 
 class TestErrorHandling:
     """错误消息处理测试。"""
@@ -421,7 +438,9 @@ class TestErrorHandling:
         assert mock_client.send_message.call_count >= 2
 
     @pytest.mark.asyncio
-    async def test_process_error_message_with_handler(self, router, mock_client, mock_message):
+    async def test_process_error_message_with_handler(
+        self, router, mock_client, mock_message
+    ):
         """存在 keyword_handler 时应跳过不处理。"""
         mock_handler = MagicMock()
         await router.process_error_message(mock_client, mock_message, mock_handler)
@@ -429,6 +448,7 @@ class TestErrorHandling:
 
 
 # ==================== 回调数据处理测试 ====================
+
 
 class TestCallbackData:
     """回调数据处理测试。"""
@@ -469,6 +489,7 @@ class TestCallbackData:
 
 # ==================== 下载频道命令测试 ====================
 
+
 class TestDownloadChatCommand:
     """get_download_chat_link_from_bot 测试。"""
 
@@ -482,7 +503,9 @@ class TestDownloadChatCommand:
         assert "请提供下载链接" in kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_download_chat_wrong_arg_count(self, router, mock_client, mock_message):
+    async def test_download_chat_wrong_arg_count(
+        self, router, mock_client, mock_message
+    ):
         """/download_chat 参数数量错误时应提示。"""
         mock_message.text = "/download_chat link1 link2"
         await router.get_download_chat_link_from_bot(mock_client, mock_message)
@@ -492,10 +515,15 @@ class TestDownloadChatCommand:
         assert "命令语法错误" in kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_download_chat_parse_link_fails(self, router, mock_client, mock_message):
+    async def test_download_chat_parse_link_fails(
+        self, router, mock_client, mock_message
+    ):
         """/download_chat parse_link 失败时应提示找不到频道。"""
         mock_message.text = "/download_chat https://t.me/test"
-        with patch("module.command_router.parse_link", AsyncMock(side_effect=ValueError("bad link"))):
+        with patch(
+            "module.bot.command_router.parse_link",
+            AsyncMock(side_effect=ValueError("bad link")),
+        ):
             await router.get_download_chat_link_from_bot(mock_client, mock_message)
         mock_client.send_message.assert_called_once()
         args, kwargs = mock_client.send_message.call_args
@@ -505,18 +533,26 @@ class TestDownloadChatCommand:
     async def test_download_chat_no_chat_id(self, router, mock_client, mock_message):
         """/download_chat 无法获取频道名时应提示。"""
         mock_message.text = "/download_chat https://t.me/test"
-        with patch("module.command_router.parse_link", AsyncMock(return_value={"chat_id": None})):
+        with patch(
+            "module.bot.command_router.parse_link",
+            AsyncMock(return_value={"chat_id": None}),
+        ):
             await router.get_download_chat_link_from_bot(mock_client, mock_message)
         mock_client.send_message.assert_called_once()
         args, kwargs = mock_client.send_message.call_args
         assert "无法获取频道名" in kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_download_chat_already_exists(self, router, mock_client, mock_message):
+    async def test_download_chat_already_exists(
+        self, router, mock_client, mock_message
+    ):
         """/download_chat 频道已存在时应提示。"""
         mock_message.text = "/download_chat https://t.me/test"
         router.state_manager.create_download_filter("channel_123")
-        with patch("module.command_router.parse_link", AsyncMock(return_value={"chat_id": "channel_123"})):
+        with patch(
+            "module.bot.command_router.parse_link",
+            AsyncMock(return_value={"chat_id": "channel_123"}),
+        ):
             await router.get_download_chat_link_from_bot(mock_client, mock_message)
         mock_client.send_message.assert_called_once()
         args, kwargs = mock_client.send_message.call_args
@@ -526,7 +562,10 @@ class TestDownloadChatCommand:
     async def test_download_chat_success(self, router, mock_client, mock_message):
         """/download_chat 成功时应创建过滤器并发送状态消息。"""
         mock_message.text = "/download_chat https://t.me/test"
-        with patch("module.command_router.parse_link", AsyncMock(return_value={"chat_id": "channel_123"})):
+        with patch(
+            "module.bot.command_router.parse_link",
+            AsyncMock(return_value={"chat_id": "channel_123"}),
+        ):
             await router.get_download_chat_link_from_bot(mock_client, mock_message)
         # 应创建过滤器并发送消息
         assert router.state_manager.has_download_filter("channel_123") is True
@@ -537,6 +576,7 @@ class TestDownloadChatCommand:
 
 
 # ==================== 关键词模式 Handler 管理测试 ====================
+
 
 class TestAddKeywordModeHandler:
     """add_keyword_mode_handler 静态方法测试。"""
@@ -564,8 +604,14 @@ class TestAddKeywordModeHandler:
     def handle_keyword_fn(self):
         return MagicMock()
 
-    def test_add_keyword_mode_handler_enable(self, add_handler_fn, remove_handler_fn,
-                                              callback_query, callback_prompt, handle_keyword_fn):
+    def test_add_keyword_mode_handler_enable(
+        self,
+        add_handler_fn,
+        remove_handler_fn,
+        callback_query,
+        callback_prompt,
+        handle_keyword_fn,
+    ):
         """enable=True 时应创建并添加 handler。"""
         result = CommandRouter.add_keyword_mode_handler(
             add_handler_fn=add_handler_fn,
@@ -575,7 +621,7 @@ class TestAddKeywordModeHandler:
             callback_query=callback_query,
             callback_prompt=callback_prompt,
             handle_keyword_fn=handle_keyword_fn,
-            enable=True
+            enable=True,
         )
         assert result is not None
         add_handler_fn.assert_called_once()
@@ -583,8 +629,14 @@ class TestAddKeywordModeHandler:
         _, call_kwargs = add_handler_fn.call_args
         assert call_kwargs.get("group") == -1
 
-    def test_add_keyword_mode_handler_disable(self, add_handler_fn, remove_handler_fn,
-                                               callback_query, callback_prompt, handle_keyword_fn):
+    def test_add_keyword_mode_handler_disable(
+        self,
+        add_handler_fn,
+        remove_handler_fn,
+        callback_query,
+        callback_prompt,
+        handle_keyword_fn,
+    ):
         """enable=False 时应移除已有 handler。"""
         result = CommandRouter.add_keyword_mode_handler(
             add_handler_fn=add_handler_fn,
@@ -594,7 +646,7 @@ class TestAddKeywordModeHandler:
             callback_query=callback_query,
             callback_prompt=callback_prompt,
             handle_keyword_fn=handle_keyword_fn,
-            enable=False
+            enable=False,
         )
         assert result is None
         remove_handler_fn.assert_called_once_with(None, group=-1)

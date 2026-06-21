@@ -18,7 +18,7 @@ import pyrogram
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 from pyrogram.errors import FloodWait
 
-from module.bot_utils import (
+from module.bot.utils import (
     MessageHelper,
     TextFormatter,
     ValidationHelper,
@@ -27,6 +27,7 @@ from module.bot_utils import (
 
 
 # ==================== Fixtures ====================
+
 
 @pytest.fixture
 def mock_client():
@@ -49,6 +50,7 @@ def mock_message():
 
 
 # ==================== MessageHelper 测试 ====================
+
 
 class TestMessageHelper:
     """MessageHelper 测试。"""
@@ -78,9 +80,9 @@ class TestMessageHelper:
     @pytest.mark.asyncio
     async def test_safe_process_message_multi_text(self, mock_client, mock_message):
         """safe_process_message 应支持多条文本发送。"""
-        mock_client.send_message = AsyncMock(side_effect=[
-            MagicMock(id=1), MagicMock(id=2), MagicMock(id=3)
-        ])
+        mock_client.send_message = AsyncMock(
+            side_effect=[MagicMock(id=1), MagicMock(id=2), MagicMock(id=3)]
+        )
         texts = ["msg1", "msg2", "msg3"]
         await MessageHelper.safe_process_message(mock_client, mock_message, texts)
         assert mock_client.send_message.call_count == 3
@@ -107,10 +109,7 @@ class TestMessageHelper:
     async def test_safe_edit_message_text_flood_wait(self, mock_client, mock_message):
         """safe_edit_message_text 应处理 FloodWait 后重试。"""
         # 第一次触发 FloodWait，第二次成功
-        mock_client.edit_message_text.side_effect = [
-            FloodWait(value=1),
-            MagicMock()
-        ]
+        mock_client.edit_message_text.side_effect = [FloodWait(value=1), MagicMock()]
         with patch("asyncio.sleep", AsyncMock()):
             result = await MessageHelper.safe_edit_message_text(
                 mock_client, mock_message, 50, "text after wait"
@@ -138,14 +137,14 @@ class TestMessageHelper:
 
 # ==================== TextFormatter 测试 ====================
 
+
 class TestTextFormatter:
     """TextFormatter 测试。"""
 
     def test_update_text_with_right_only(self):
         """update_text 只有有效链接时。"""
         result = TextFormatter.update_text(
-            right_link={"https://t.me/a/1", "https://t.me/a/2"},
-            invalid_link=set()
+            right_link={"https://t.me/a/1", "https://t.me/a/2"}, invalid_link=set()
         )
         assert isinstance(result, list)
         assert len(result) == 1
@@ -153,18 +152,14 @@ class TestTextFormatter:
 
     def test_update_text_with_invalid_only(self):
         """update_text 只有无效链接时。"""
-        result = TextFormatter.update_text(
-            right_link=set(),
-            invalid_link={"bad_link"}
-        )
+        result = TextFormatter.update_text(right_link=set(), invalid_link={"bad_link"})
         assert isinstance(result, list)
         assert "bad_link" in result[0]
 
     def test_update_text_with_both(self):
         """update_text 同时有有效和无效链接时。"""
         result = TextFormatter.update_text(
-            right_link={"https://t.me/a/1"},
-            invalid_link={"bad_link"}
+            right_link={"https://t.me/a/1"}, invalid_link={"bad_link"}
         )
         assert isinstance(result, list)
         assert len(result) == 1
@@ -174,7 +169,7 @@ class TestTextFormatter:
         result = TextFormatter.update_text(
             right_link={"https://t.me/a/1"},
             invalid_link=set(),
-            exist_link={"https://t.me/a/2"}
+            exist_link={"https://t.me/a/2"},
         )
         assert isinstance(result, list)
         text = result[0]
@@ -182,15 +177,14 @@ class TestTextFormatter:
 
     def test_update_text_empty(self):
         """update_text 所有集合为空时。"""
-        result = TextFormatter.update_text(
-            right_link=set(), invalid_link=set()
-        )
+        result = TextFormatter.update_text(right_link=set(), invalid_link=set())
         assert isinstance(result, list)
         # safe_message 对空字符串会添加换行符
         assert len(result) == 1
 
 
 # ==================== ValidationHelper 测试 ====================
+
 
 class TestValidationHelper:
     """ValidationHelper 测试。"""
@@ -246,7 +240,9 @@ class TestValidationHelper:
         mock_client.send_message.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_check_download_range_with_end_minus_one(self, mock_client, mock_message):
+    async def test_check_download_range_with_end_minus_one(
+        self, mock_client, mock_message
+    ):
         """check_download_range end_id=-1 且 start_id 有效时。"""
         mock_client.send_message = AsyncMock()
         result = await ValidationHelper.check_download_range(
@@ -258,14 +254,13 @@ class TestValidationHelper:
 
 # ==================== LinkHelper 测试 ====================
 
+
 class TestLinkHelper:
     """LinkHelper 测试。"""
 
     def test_parse_download_links_single(self):
         """parse_download_links 解析单条链接。"""
-        result = LinkHelper.parse_download_links(
-            "/download https://t.me/a/123"
-        )
+        result = LinkHelper.parse_download_links("/download https://t.me/a/123")
         assert result["is_range"] is False
         assert "https://t.me/a/123" in result["links"]
 
@@ -280,9 +275,7 @@ class TestLinkHelper:
 
     def test_parse_download_links_range(self):
         """parse_download_links 解析范围下载（3个参数的链接）。"""
-        result = LinkHelper.parse_download_links(
-            "/download https://t.me/a 1 100"
-        )
+        result = LinkHelper.parse_download_links("/download https://t.me/a 1 100")
         assert result["is_range"] is True
         assert len(result["links"]) == 3
 
@@ -296,9 +289,7 @@ class TestLinkHelper:
 
     def test_parse_download_links_strips_trailing_slash(self):
         """parse_download_links 应去除链接末尾的斜杠。"""
-        result = LinkHelper.parse_download_links(
-            "/download https://t.me/a/123/"
-        )
+        result = LinkHelper.parse_download_links("/download https://t.me/a/123/")
         assert result["links"][0].endswith("/") is False
 
     def test_extract_range_links(self):

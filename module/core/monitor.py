@@ -34,7 +34,7 @@ class Monitor:
 
             cpu_percent = psutil.cpu_percent(interval=0)
             memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
+            disk = psutil.disk_usage("/")
 
             return {
                 "cpu_percent": cpu_percent,
@@ -112,7 +112,11 @@ class Monitor:
             }
 
             for task in tasks:
-                status = task.status.value if hasattr(task.status, 'value') else str(task.status)
+                status = (
+                    task.status.value
+                    if hasattr(task.status, "value")
+                    else str(task.status)
+                )
                 if status in stats:
                     stats[status] += 1
 
@@ -130,7 +134,9 @@ class Monitor:
                 "error": str(e),
             }
 
-    def get_resource_status(self, task_manager=None, file_manager=None, config_manager=None) -> dict:
+    def get_resource_status(
+        self, task_manager=None, file_manager=None, config_manager=None
+    ) -> dict:
         """获取资源状态。
 
         Args:
@@ -171,9 +177,9 @@ class Monitor:
             disk = psutil.disk_usage(path)
 
             result["disk"] = {
-                "total_gb": round(disk.total / (1024 ** 3), 2),
-                "used_gb": round(disk.used / (1024 ** 3), 2),
-                "free_gb": round(disk.free / (1024 ** 3), 2),
+                "total_gb": round(disk.total / (1024**3), 2),
+                "used_gb": round(disk.used / (1024**3), 2),
+                "free_gb": round(disk.free / (1024**3), 2),
                 "percent": disk.percent,
             }
 
@@ -182,7 +188,7 @@ class Monitor:
             if config_manager:
                 min_disk_gb = config_manager.min_disk_space_gb
 
-            result["disk_space_sufficient"] = (disk.free / (1024 ** 3)) >= min_disk_gb
+            result["disk_space_sufficient"] = (disk.free / (1024**3)) >= min_disk_gb
 
         except ImportError:
             result["disk_space_sufficient"] = True

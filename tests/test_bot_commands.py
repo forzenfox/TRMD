@@ -15,12 +15,13 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
-from module.bot_commands import BotCommands
+from module.bot.commands import BotCommands
 from module.interaction_manager import InteractionManager, BatchStep
 from module.core.token_manager import TokenManager
 
 
 # ==================== Fixtures ====================
+
 
 @pytest.fixture
 def mock_client():
@@ -66,6 +67,7 @@ def bot_commands(token_manager, interaction_manager):
 
 # ==================== 初始化测试 ====================
 
+
 class TestBotCommandsInit:
     """BotCommands 初始化测试。"""
 
@@ -90,6 +92,7 @@ class TestBotCommandsInit:
 
 
 # ==================== /web 命令测试 ====================
+
 
 class TestCmdWeb:
     """cmd_web 命令测试。"""
@@ -155,6 +158,7 @@ class TestCmdWeb:
 
 # ==================== /batch 命令测试 ====================
 
+
 class TestCmdBatch:
     """cmd_batch 命令测试。"""
 
@@ -167,7 +171,9 @@ class TestCmdBatch:
         assert bot_commands._interaction_manager.has_active_flow(12345) is True
 
     @pytest.mark.asyncio
-    async def test_batch_shows_first_prompt(self, bot_commands, mock_client, mock_message):
+    async def test_batch_shows_first_prompt(
+        self, bot_commands, mock_client, mock_message
+    ):
         """cmd_batch 应显示第一步的提示（源频道）。"""
         mock_message.text = "/batch"
         await bot_commands.cmd_batch(mock_client, mock_message)
@@ -177,7 +183,9 @@ class TestCmdBatch:
         assert "源频道" in call_kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_batch_shows_cancel_hint(self, bot_commands, mock_client, mock_message):
+    async def test_batch_shows_cancel_hint(
+        self, bot_commands, mock_client, mock_message
+    ):
         """cmd_batch 应提示用户可以使用 /cancel 取消。"""
         mock_message.text = "/batch"
         await bot_commands.cmd_batch(mock_client, mock_message)
@@ -198,11 +206,14 @@ class TestCmdBatch:
 
 # ==================== 批量输入收集测试 ====================
 
+
 class TestBatchInputCollection:
     """批量操作流程的输入收集测试。"""
 
     @pytest.mark.asyncio
-    async def test_handle_batch_input_collects_source(self, bot_commands, mock_client, mock_message):
+    async def test_handle_batch_input_collects_source(
+        self, bot_commands, mock_client, mock_message
+    ):
         """应收集源频道链接。"""
         bot_commands._interaction_manager.start_flow(user_id=12345, command="/batch")
         mock_message.text = "https://t.me/source_channel"
@@ -210,26 +221,40 @@ class TestBatchInputCollection:
         await bot_commands.handle_batch_input(mock_client, mock_message)
 
         state = bot_commands._interaction_manager.get_active_flow(12345)
-        assert state.collected_data.get("source_channel") == "https://t.me/source_channel"
+        assert (
+            state.collected_data.get("source_channel") == "https://t.me/source_channel"
+        )
 
     @pytest.mark.asyncio
-    async def test_handle_batch_input_collects_target(self, bot_commands, mock_client, mock_message):
+    async def test_handle_batch_input_collects_target(
+        self, bot_commands, mock_client, mock_message
+    ):
         """应收集目标频道链接。"""
         bot_commands._interaction_manager.start_flow(user_id=12345, command="/batch")
-        bot_commands._interaction_manager.collect(user_id=12345, input_text="https://t.me/source")
+        bot_commands._interaction_manager.collect(
+            user_id=12345, input_text="https://t.me/source"
+        )
         mock_message.text = "https://t.me/target_channel"
         mock_message.from_user.id = 12345
         await bot_commands.handle_batch_input(mock_client, mock_message)
 
         state = bot_commands._interaction_manager.get_active_flow(12345)
-        assert state.collected_data.get("target_channel") == "https://t.me/target_channel"
+        assert (
+            state.collected_data.get("target_channel") == "https://t.me/target_channel"
+        )
 
     @pytest.mark.asyncio
-    async def test_handle_batch_input_collects_range(self, bot_commands, mock_client, mock_message):
+    async def test_handle_batch_input_collects_range(
+        self, bot_commands, mock_client, mock_message
+    ):
         """应收集消息范围。"""
         bot_commands._interaction_manager.start_flow(user_id=12345, command="/batch")
-        bot_commands._interaction_manager.collect(user_id=12345, input_text="https://t.me/source")
-        bot_commands._interaction_manager.collect(user_id=12345, input_text="https://t.me/target")
+        bot_commands._interaction_manager.collect(
+            user_id=12345, input_text="https://t.me/source"
+        )
+        bot_commands._interaction_manager.collect(
+            user_id=12345, input_text="https://t.me/target"
+        )
         mock_message.text = "1 100"
         mock_message.from_user.id = 12345
         await bot_commands.handle_batch_input(mock_client, mock_message)
@@ -238,7 +263,9 @@ class TestBatchInputCollection:
         assert state.collected_data.get("message_range") == "1 100"
 
     @pytest.mark.asyncio
-    async def test_handle_batch_input_invalid_when_no_flow(self, bot_commands, mock_client, mock_message):
+    async def test_handle_batch_input_invalid_when_no_flow(
+        self, bot_commands, mock_client, mock_message
+    ):
         """无活跃流程时应提示无效。"""
         mock_message.text = "https://t.me/source"
         mock_message.from_user.id = 12345
@@ -249,7 +276,9 @@ class TestBatchInputCollection:
         assert "未开始" in call_kwargs["text"] or "请先" in call_kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_handle_batch_input_invalid_input(self, bot_commands, mock_client, mock_message):
+    async def test_handle_batch_input_invalid_input(
+        self, bot_commands, mock_client, mock_message
+    ):
         """无效输入时应提示重新输入。"""
         bot_commands._interaction_manager.start_flow(user_id=12345, command="/batch")
         mock_message.text = "not_a_valid_link"
@@ -262,6 +291,7 @@ class TestBatchInputCollection:
 
 
 # ==================== /status 命令测试 ====================
+
 
 class TestCmdStatus:
     """cmd_status 命令测试。"""
@@ -277,19 +307,28 @@ class TestCmdStatus:
         assert "状态" in call_kwargs["text"] or "Status" in call_kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_status_guides_to_webui(self, bot_commands, mock_client, mock_message):
+    async def test_status_guides_to_webui(
+        self, bot_commands, mock_client, mock_message
+    ):
         """cmd_status 应引导复杂操作到 WebUI。"""
         mock_message.text = "/status"
         await bot_commands.cmd_status(mock_client, mock_message)
 
         call_kwargs = mock_client.send_message.call_args[1]
-        assert "WebUI" in call_kwargs["text"] or "http://localhost:8000" in call_kwargs["text"]
+        assert (
+            "WebUI" in call_kwargs["text"]
+            or "http://localhost:8000" in call_kwargs["text"]
+        )
 
     @pytest.mark.asyncio
-    async def test_status_shows_active_batch(self, bot_commands, mock_client, mock_message):
+    async def test_status_shows_active_batch(
+        self, bot_commands, mock_client, mock_message
+    ):
         """cmd_status 应显示活跃的批量操作流程。"""
         bot_commands._interaction_manager.start_flow(user_id=12345, command="/batch")
-        bot_commands._interaction_manager.collect(user_id=12345, input_text="https://t.me/source")
+        bot_commands._interaction_manager.collect(
+            user_id=12345, input_text="https://t.me/source"
+        )
         mock_message.text = "/status"
         await bot_commands.cmd_status(mock_client, mock_message)
 
@@ -298,6 +337,7 @@ class TestCmdStatus:
 
 
 # ==================== /cancel 命令测试 ====================
+
 
 class TestCmdCancel:
     """cmd_cancel 命令测试。"""
@@ -323,7 +363,9 @@ class TestCmdCancel:
         assert "没有" in call_kwargs["text"] or "进行" in call_kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_cancel_sends_confirmation(self, bot_commands, mock_client, mock_message):
+    async def test_cancel_sends_confirmation(
+        self, bot_commands, mock_client, mock_message
+    ):
         """cmd_cancel 应发送取消确认消息。"""
         bot_commands._interaction_manager.start_flow(user_id=12345, command="/batch")
         mock_message.text = "/cancel"
@@ -335,6 +377,7 @@ class TestCmdCancel:
 
 
 # ==================== WebUI 引导文案测试 ====================
+
 
 class TestWebUIGuidance:
     """WebUI 引导文案测试。"""
@@ -356,6 +399,7 @@ class TestWebUIGuidance:
 
 
 # ==================== 命令注册测试 ====================
+
 
 class TestCommandRegistration:
     """命令注册相关测试。"""

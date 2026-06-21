@@ -48,7 +48,7 @@ from pyrogram.types.messages_and_media import ReplyParameters
 from pyrogram.types.bots_and_keyboards import InlineKeyboardButton, InlineKeyboardMarkup
 
 from module import console, log, LINK_PREVIEW_OPTIONS, SLEEP_THRESHOLD
-from module.filter import Filter
+from module.utils.filter import Filter
 from module.app import Application
 from module.bot import Bot, KeyboardButton, CallbackData
 from module.enums import (
@@ -63,7 +63,7 @@ from module.enums import (
     SaveDirectoryPrefix,
 )
 from module.language import _t
-from module.path_tool import (
+from module.utils.path_tool import (
     is_file_duplicate,
     safe_delete,
     get_file_size,
@@ -74,9 +74,9 @@ from module.path_tool import (
     validate_title,
 )
 from module.task import DownloadTask, UploadTask
-from module.stdio import ProgressBar, Base64Image, MetaData
+from module.utils.stdio import ProgressBar, Base64Image, MetaData
 from module.uploader import TelegramUploader
-from module.util import (
+from module.utils.helpers import (
     is_docker,
     parse_link,
     format_chat_link,

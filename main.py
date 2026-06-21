@@ -7,7 +7,7 @@ import os
 import sys
 
 from module.enums import ENVIRON, MODE
-from module.util import check_environ
+from module.utils.helpers import check_environ
 from module.web import Web
 from module.parser import PARSE_ARGS
 from module.downloader import TelegramRestrictedMediaDownloader

@@ -19,6 +19,7 @@ from module.core.cache_manager import CacheManager, CacheError
 # 辅助函数
 # ---------------------------------------------------------------------------
 
+
 def _make_temp_db():
     """创建临时 SQLite 数据库路径"""
     fd, path = tempfile.mkstemp(suffix=".db")
@@ -56,6 +57,7 @@ def _mock_message_stats():
 # Fixture
 # ---------------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture
 async def cache():
     """每次测试使用独立的临时数据库"""
@@ -72,6 +74,7 @@ async def cache():
 # TC-001: 首次获取频道列表时未命中，调用 fetcher
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_chat_list_first_miss_calls_fetcher(cache: CacheManager):
     """首次获取频道列表，缓存未命中，应调用 fetcher 并写入缓存"""
@@ -87,6 +90,7 @@ async def test_get_chat_list_first_miss_calls_fetcher(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # TC-002: 缓存未过期时再次获取命中缓存
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_get_chat_list_cache_hit(cache: CacheManager):
@@ -106,6 +110,7 @@ async def test_get_chat_list_cache_hit(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # TC-003: 缓存过期后自动调用 fetcher
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_get_chat_list_expired_calls_fetcher(cache: CacheManager):
@@ -135,6 +140,7 @@ async def test_get_chat_list_expired_calls_fetcher(cache: CacheManager):
 # TC-004: force_refresh=True 时跳过缓存
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_chat_list_force_refresh(cache: CacheManager):
     """force_refresh=True 时，即使缓存未过期也应调用 fetcher"""
@@ -152,6 +158,7 @@ async def test_get_chat_list_force_refresh(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # TC-005: 消息列表按参数生成不同缓存键
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_message_list_different_params(cache: CacheManager):
@@ -181,6 +188,7 @@ async def test_message_list_different_params(cache: CacheManager):
 # TC-006: invalidate_chat_list 删除全部频道缓存
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_invalidate_chat_list(cache: CacheManager):
     """删除频道列表缓存后，下次获取应未命中"""
@@ -199,6 +207,7 @@ async def test_invalidate_chat_list(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # TC-007: invalidate_message_list 按 chat_id 删除
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_invalidate_message_list_by_chat_id(cache: CacheManager):
@@ -229,6 +238,7 @@ async def test_invalidate_message_list_by_chat_id(cache: CacheManager):
 # TC-008: clear_expired 删除过期条目
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_clear_expired(cache: CacheManager):
     """清理过期条目，保留未过期条目"""
@@ -256,6 +266,7 @@ async def test_clear_expired(cache: CacheManager):
 # TC-009: 数据库损坏时读取回退到 fetcher
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_db_corruption_fallback(cache: CacheManager):
     """缓存数据损坏时，应回退到 fetcher 而不崩溃"""
@@ -279,6 +290,7 @@ async def test_db_corruption_fallback(cache: CacheManager):
 # TC-010: fetcher 抛出异常时不写入缓存
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_fetcher_exception_no_cache_write(cache: CacheManager):
     """fetcher 抛出异常时，异常应传播且不写入缓存"""
@@ -300,6 +312,7 @@ async def test_fetcher_exception_no_cache_write(cache: CacheManager):
 # TC-011: 消息统计抽样估算
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_message_stats_estimated(cache: CacheManager):
     """消息统计使用抽样估算，返回 estimated=True"""
@@ -320,6 +333,7 @@ async def test_message_stats_estimated(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # TC-012: 精确分析小范围消息
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_message_stats_exact(cache: CacheManager):
@@ -346,6 +360,7 @@ async def test_message_stats_exact(cache: CacheManager):
 # TC-013: 缓存条目数超限触发 LRU 淘汰
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_lru_eviction_on_max_entries(cache: CacheManager):
     """缓存条目超过上限时，最旧条目被淘汰"""
@@ -368,6 +383,7 @@ async def test_lru_eviction_on_max_entries(cache: CacheManager):
 # TC-014: 并发强制刷新单飞请求
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_single_flight_concurrent_refresh(cache: CacheManager):
     """并发强制刷新同一缓存键时，fetcher 只应被调用一次"""
@@ -382,8 +398,7 @@ async def test_single_flight_concurrent_refresh(cache: CacheManager):
 
     # 同时发起多个强制刷新请求
     tasks = [
-        cache.get_chat_list(fetcher=slow_fetcher, force_refresh=True)
-        for _ in range(5)
+        cache.get_chat_list(fetcher=slow_fetcher, force_refresh=True) for _ in range(5)
     ]
     results = await asyncio.gather(*tasks)
 
@@ -394,6 +409,7 @@ async def test_single_flight_concurrent_refresh(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # TC-015: close 后再次访问抛出 CacheError
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_close_then_access_raises_error(cache: CacheManager):
@@ -407,6 +423,7 @@ async def test_close_then_access_raises_error(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # 额外测试：get_cache_info
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_get_cache_info(cache: CacheManager):
@@ -426,6 +443,7 @@ async def test_get_cache_info(cache: CacheManager):
 # 额外测试：clear_all
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_clear_all(cache: CacheManager):
     """清空全部缓存"""
@@ -444,6 +462,7 @@ async def test_clear_all(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # 额外测试：消息统计 TTL 正确
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_message_stats_ttl(cache: CacheManager):
@@ -471,6 +490,7 @@ async def test_message_stats_ttl(cache: CacheManager):
 # 额外测试：消息列表 TTL 正确
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_message_list_ttl(cache: CacheManager):
     """消息列表 TTL 为 30 分钟"""
@@ -497,6 +517,7 @@ async def test_message_list_ttl(cache: CacheManager):
 # 额外测试：频道列表 TTL 正确
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_chat_list_ttl(cache: CacheManager):
     """频道列表 TTL 为 1 小时"""
@@ -517,6 +538,7 @@ async def test_chat_list_ttl(cache: CacheManager):
 # ---------------------------------------------------------------------------
 # 额外测试：invalidate_message_stats
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_invalidate_message_stats(cache: CacheManager):

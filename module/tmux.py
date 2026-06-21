@@ -11,19 +11,16 @@ from typing import Union
 from pathlib import Path
 
 from module import log
-from module.util import (
-    add_executable_permission,
-    is_nuitka
-)
+from module.utils.helpers import add_executable_permission, is_nuitka
 
 
 class TMUX:
     # https://github.com/pythops/tmux-linux-binary
     # https://github.com/marlocarlo/psmux
     MACHINE: dict = {
-        'x86_64': 'tmux.linux-amd64',
-        'amd64': 'tmux.exe',
-        'aarch64': 'tmux.linux-arm64'
+        "x86_64": "tmux.linux-amd64",
+        "amd64": "tmux.exe",
+        "aarch64": "tmux.linux-arm64",
     }
 
     def __init__(self, main_file: str):
@@ -31,10 +28,14 @@ class TMUX:
         self.tmux_executable = self.get_tmux_executable()
         self.tmux_path = self.get_tmux_path()
         if not os.path.isfile(self.tmux_path):
-            log.info(f'在"{os.path.dirname(self.tmux_path)}"目录下未找到"{os.path.basename(self.tmux_path)}"。')
+            log.info(
+                f'在"{os.path.dirname(self.tmux_path)}"目录下未找到"{os.path.basename(self.tmux_path)}"。'
+            )
             self.tmux_path = self.get_system_tmux()
             if not self.tmux_path:
-                log.error(f'无法在"{os.path.dirname(self.tmux_path)}"目录和系统中未找到tmux。')
+                log.error(
+                    f'无法在"{os.path.dirname(self.tmux_path)}"目录和系统中未找到tmux。'
+                )
                 sys.exit(1)
         add_executable_permission(self.tmux_path)
 
@@ -44,7 +45,7 @@ class TMUX:
             log.info(f'在编译环境获取tmux路径:"{path}"。')
             return path
 
-        path = str(Path(f'res/bin/{self.tmux_executable}').resolve())
+        path = str(Path(f"res/bin/{self.tmux_executable}").resolve())
         log.info(f'在生产环境获取tmux路径:"{path}"。')
         return path
 
@@ -54,9 +55,10 @@ class TMUX:
 
     @staticmethod
     def get_system_tmux() -> Union[str, None]:
-        if sys.platform != 'win32':
+        if sys.platform != "win32":
             from shutil import which
-            tmux_path = which('tmux')
+
+            tmux_path = which("tmux")
             if tmux_path:
                 log.info(f'从环境变量中找到tmux:"{tmux_path}"。')
             return tmux_path

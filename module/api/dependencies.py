@@ -37,7 +37,11 @@ async def require_token(
         )
 
     # 提取 Bearer Token
-    token = raw.removeprefix("Bearer ").strip() if raw.startswith("Bearer ") else raw.strip()
+    token = (
+        raw.removeprefix("Bearer ").strip()
+        if raw.startswith("Bearer ")
+        else raw.strip()
+    )
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -78,7 +82,8 @@ def get_config_manager(request: Request):
     cm = request.app.state.config_manager
     if cm is None:
         # 延迟导入，避免循环依赖
-        from module.core.config_manager import ConfigManager
+        from module.config.config_manager import ConfigManager
+
         cm = ConfigManager()
         request.app.state.config_manager = cm
     return cm

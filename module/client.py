@@ -9,13 +9,7 @@ import inspect
 
 from datetime import datetime
 from hashlib import sha256
-from typing import (
-    AsyncGenerator,
-    Optional,
-    Union,
-    List,
-    Callable
-)
+from typing import AsyncGenerator, Optional, Union, List, Callable
 
 import pyrogram
 from pyrogram.crypto import aes
@@ -24,10 +18,7 @@ from pyrogram import raw, types, utils
 from pyrogram.errors.exceptions import PhoneNumberInvalid
 from pyrogram.raw.core import TLObject
 from pyrogram.session.session import Result
-from pyrogram.session import (
-    Auth,
-    Session
-)
+from pyrogram.session import Auth, Session
 from pyrogram.crypto import mtproto
 from pyrogram.errors import (
     FloodPremiumWait,
@@ -39,39 +30,33 @@ from pyrogram.errors import (
     BadMsgNotification,
     RPCError,
     CDNFileHashMismatch,
-    VolumeLocNotFound
+    VolumeLocNotFound,
 )
-from pyrogram.file_id import (
-    FileId,
-    FileType,
-    ThumbnailSource
-)
+from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.types import User
 
-from module import (
-    console,
-    SOFTWARE_SHORT_NAME,
-    log,
-    __version__
-)
+from module import console, SOFTWARE_SHORT_NAME, log, __version__
 from module.enums import KeyWord
 from module.language import _t
 
 
 class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
-
     async def authorize(self) -> pyrogram.types.User:
         console.print(
-            f'Pyrogram is free software and comes with ABSOLUTELY NO WARRANTY. Licensed\n'
-            f'under the terms of the {pyrogram.__license__}.')
+            f"Pyrogram is free software and comes with ABSOLUTELY NO WARRANTY. Licensed\n"
+            f"under the terms of the {pyrogram.__license__}."
+        )
         console.print(
-            f'欢迎使用[#b4009e]{SOFTWARE_SHORT_NAME}[/#b4009e] {__version__} (Pyrogram {pyrogram.__version__})')
+            f"欢迎使用[#b4009e]{SOFTWARE_SHORT_NAME}[/#b4009e] {__version__} (Pyrogram {pyrogram.__version__})"
+        )
         while True:
             try:
                 while True:
-                    value = console.input('请输入「电话号码」([#6a2c70]电话号码[/#6a2c70]需以[#b83b5e]「+地区」[/#b83b5e]开头!'
-                                          '如:[#f08a5d]+86[/#f08a5d][#f9ed69]15000000000[/#f9ed69]):').strip()
-                    if not value.startswith('+'):
+                    value = console.input(
+                        "请输入「电话号码」([#6a2c70]电话号码[/#6a2c70]需以[#b83b5e]「+地区」[/#b83b5e]开头!"
+                        "如:[#f08a5d]+86[/#f08a5d][#f9ed69]15000000000[/#f9ed69]):"
+                    ).strip()
+                    if not value.startswith("+"):
                         log.warning(f'意外的参数:"{value}",电话号码需以「+地区」开头!')
                         continue
                     if len(value) < 8 or len(value) > 16:
@@ -80,11 +65,16 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                     if not value:
                         continue
 
-                    confirm = console.input(
-                        f'所输入的「{value}」是否[#B1DB74]正确[/#B1DB74]? - 「y|n」(默认y):').strip().lower()
-                    if confirm in ('y', ''):
+                    confirm = (
+                        console.input(
+                            f"所输入的「{value}」是否[#B1DB74]正确[/#B1DB74]? - 「y|n」(默认y):"
+                        )
+                        .strip()
+                        .lower()
+                    )
+                    if confirm in ("y", ""):
                         break
-                    elif confirm == 'n':
+                    elif confirm == "n":
                         continue
                     else:
                         log.warning(f'意外的参数:"{confirm}",支持的参数 - 「y|n」')
@@ -95,22 +85,30 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                 self.phone_number = None
             except (pyrogram.errors.PhoneNumberInvalid, AttributeError) as e:
                 self.phone_number = None
-                log.error(f'「电话号码」错误,请重新输入!{_t(KeyWord.REASON)}:"{e.MESSAGE}"')
+                log.error(
+                    f'「电话号码」错误,请重新输入!{_t(KeyWord.REASON)}:"{e.MESSAGE}"'
+                )
             else:
                 break
         if sent_code.type == pyrogram.enums.SentCodeType.SETUP_EMAIL_REQUIRED:
-            console.print('需要「设置邮箱」以完成授权。')
+            console.print("需要「设置邮箱」以完成授权。")
 
             while True:
                 try:
                     while True:
-                        email = console.input('请输入「邮箱」:')
+                        email = console.input("请输入「邮箱」:")
                         if not email:
                             continue
-                        confirm = console.input(f'所输入的「{email}」是否正确? - 「y|n」(默认y):').strip().lower()
-                        if confirm in ('y', ''):
+                        confirm = (
+                            console.input(
+                                f"所输入的「{email}」是否正确? - 「y|n」(默认y):"
+                            )
+                            .strip()
+                            .lower()
+                        )
+                        if confirm in ("y", ""):
                             break
-                        elif confirm == 'n':
+                        elif confirm == "n":
                             continue
                         else:
                             log.warning(f'意外的参数:"{confirm}",支持的参数 - 「y|n」')
@@ -124,7 +122,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                         )
                     )
 
-                    email_code = console.input('请输入「验证码」:')
+                    email_code = console.input("请输入「验证码」:")
 
                     email_sent_code = await self.invoke(
                         raw.functions.account.VerifyEmail(
@@ -132,15 +130,22 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                                 phone_number=self.phone_number,
                                 phone_code_hash=sent_code.phone_code_hash,
                             ),
-                            verification=raw.types.EmailVerificationCode(code=email_code),
+                            verification=raw.types.EmailVerificationCode(
+                                code=email_code
+                            ),
                         )
                     )
 
-                    if isinstance(email_sent_code, raw.types.account.EmailVerifiedLogin):
-                        if isinstance(email_sent_code.sent_code, raw.types.auth.SentCodePaymentRequired):
+                    if isinstance(
+                        email_sent_code, raw.types.account.EmailVerifiedLogin
+                    ):
+                        if isinstance(
+                            email_sent_code.sent_code,
+                            raw.types.auth.SentCodePaymentRequired,
+                        ):
                             raise pyrogram.errors.Unauthorized(
-                                'You need to pay for or purchase premium to continue authorization '
-                                'process, which is currently not supported by Pyrogram.'
+                                "You need to pay for or purchase premium to continue authorization "
+                                "process, which is currently not supported by Pyrogram."
                             )
                 except pyrogram.errors.BadRequest as e:
                     console.print(e.MESSAGE)
@@ -149,52 +154,69 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 
         else:
             sent_code_descriptions = {
-                pyrogram.enums.SentCodeType.APP: 'Telegram app',
-                pyrogram.enums.SentCodeType.SMS: 'SMS',
-                pyrogram.enums.SentCodeType.CALL: 'phone call',
-                pyrogram.enums.SentCodeType.FLASH_CALL: 'phone flash call',
-                pyrogram.enums.SentCodeType.FRAGMENT_SMS: 'Fragment SMS',
-                pyrogram.enums.SentCodeType.EMAIL_CODE: 'email code'
+                pyrogram.enums.SentCodeType.APP: "Telegram app",
+                pyrogram.enums.SentCodeType.SMS: "SMS",
+                pyrogram.enums.SentCodeType.CALL: "phone call",
+                pyrogram.enums.SentCodeType.FLASH_CALL: "phone flash call",
+                pyrogram.enums.SentCodeType.FRAGMENT_SMS: "Fragment SMS",
+                pyrogram.enums.SentCodeType.EMAIL_CODE: "email code",
             }
 
             console.print(
-                f'[#f08a5d]「验证码」[/#f08a5d]已通过[#f9ed69]「{sent_code_descriptions[sent_code.type]}」[/#f9ed69]发送。')
+                f"[#f08a5d]「验证码」[/#f08a5d]已通过[#f9ed69]「{sent_code_descriptions[sent_code.type]}」[/#f9ed69]发送。"
+            )
 
         while True:
             if not self.phone_code:
-                self.phone_code = console.input('请输入收到的[#f08a5d]「验证码」[/#f08a5d]:').strip()
+                self.phone_code = console.input(
+                    "请输入收到的[#f08a5d]「验证码」[/#f08a5d]:"
+                ).strip()
 
             try:
-                signed_in = await self.sign_in(self.phone_number, sent_code.phone_code_hash, self.phone_code)
+                signed_in = await self.sign_in(
+                    self.phone_number, sent_code.phone_code_hash, self.phone_code
+                )
             except pyrogram.errors.BadRequest as e:
                 console.print(e.MESSAGE)
                 self.phone_code = None
             except pyrogram.errors.SessionPasswordNeeded as _:
                 console.print(
-                    '当前登录账号设置了[#f08a5d]「两步验证」[/#f08a5d],需要提供两步验证的[#f9ed69]「密码」[/#f9ed69]。')
+                    "当前登录账号设置了[#f08a5d]「两步验证」[/#f08a5d],需要提供两步验证的[#f9ed69]「密码」[/#f9ed69]。"
+                )
 
                 while True:
-                    console.print('密码提示:{}'.format(await self.get_password_hint()))
+                    console.print("密码提示:{}".format(await self.get_password_hint()))
 
                     if not self.password:
                         self.password = console.input(
-                            '输入[#f08a5d]「两步验证」[/#f08a5d]的[#f9ed69]「密码」[/#f9ed69](为空代表[#FF4689]忘记密码[/#FF4689]):',
-                            password=self.hide_password).strip()
+                            "输入[#f08a5d]「两步验证」[/#f08a5d]的[#f9ed69]「密码」[/#f9ed69](为空代表[#FF4689]忘记密码[/#FF4689]):",
+                            password=self.hide_password,
+                        ).strip()
 
                     try:
                         if not self.password:
-                            confirm = console.input(
-                                '所输入的[#f08a5d]「恢复密码」[/#f08a5d]是否正确? - 「y|n」(默认y):').strip().lower()
-                            if confirm in ('y', ''):
+                            confirm = (
+                                console.input(
+                                    "所输入的[#f08a5d]「恢复密码」[/#f08a5d]是否正确? - 「y|n」(默认y):"
+                                )
+                                .strip()
+                                .lower()
+                            )
+                            if confirm in ("y", ""):
                                 email_pattern = await self.send_recovery_code()
                                 console.print(
-                                    f'[#f08a5d]「恢复代码」[/#f08a5d]已发送到邮箱[#f9ed69]「{email_pattern}」[/#f9ed69]。')
+                                    f"[#f08a5d]「恢复代码」[/#f08a5d]已发送到邮箱[#f9ed69]「{email_pattern}」[/#f9ed69]。"
+                                )
 
                                 while True:
-                                    recovery_code = console.input('请输入[#f08a5d]「恢复代码」[/#f08a5d]:').strip()
+                                    recovery_code = console.input(
+                                        "请输入[#f08a5d]「恢复代码」[/#f08a5d]:"
+                                    ).strip()
 
                                     try:
-                                        return await self.recover_password(recovery_code)
+                                        return await self.recover_password(
+                                            recovery_code
+                                        )
                                     except pyrogram.errors.BadRequest as e:
                                         console.print(e.MESSAGE)
                                     except Exception as _:
@@ -214,15 +236,14 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
             return signed_in
 
         while True:
-            first_name = console.input('输入[#f08a5d]「名字」[/#f08a5d]:').strip()
-            last_name = console.input('输入[#f9ed69]「姓氏」[/#f9ed69](为空代表跳过): ').strip()
+            first_name = console.input("输入[#f08a5d]「名字」[/#f08a5d]:").strip()
+            last_name = console.input(
+                "输入[#f9ed69]「姓氏」[/#f9ed69](为空代表跳过): "
+            ).strip()
 
             try:
                 signed_up = await self.sign_up(
-                    self.phone_number,
-                    sent_code.phone_code_hash,
-                    first_name,
-                    last_name
+                    self.phone_number, sent_code.phone_code_hash, first_name, last_name
                 )
             except pyrogram.errors.BadRequest as e:
                 console.print(e.MESSAGE)
@@ -230,13 +251,14 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                 break
 
         if isinstance(signed_in, pyrogram.types.TermsOfService):
-            console.print('\n' + signed_in.text + '\n')
+            console.print("\n" + signed_in.text + "\n")
             await self.accept_terms_of_service(signed_in.id)
 
         return signed_up
 
     async def authorize_qr(self, except_ids: List[int] = []) -> "User":
         import qrcode
+
         qr_login = QRLogin(self, except_ids)
         await qr_login.recreate()
 
@@ -245,52 +267,63 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
         while True:
             try:
                 console.print(
-                    'Pyrogram is free software and comes with ABSOLUTELY NO WARRANTY. Licensed\n'
-                    f'under the terms of the {pyrogram.__license__}.\n'
-                    f'欢迎使用[#b4009e]{SOFTWARE_SHORT_NAME}[/#b4009e] {__version__} (Pyrogram {pyrogram.__version__})\n'
-                    '请扫描[#6a2c70]「二维码」[/#6a2c70]登录\n'
-                    '[#b83b5e]设置 (Settings)[/#b83b5e] -> [#f08a5d]设备 (Devices)[/#f08a5d] -> [#f9ed69]关联桌面设备 (Link Desktop Device)[/#f9ed69]'
+                    "Pyrogram is free software and comes with ABSOLUTELY NO WARRANTY. Licensed\n"
+                    f"under the terms of the {pyrogram.__license__}.\n"
+                    f"欢迎使用[#b4009e]{SOFTWARE_SHORT_NAME}[/#b4009e] {__version__} (Pyrogram {pyrogram.__version__})\n"
+                    "请扫描[#6a2c70]「二维码」[/#6a2c70]登录\n"
+                    "[#b83b5e]设置 (Settings)[/#b83b5e] -> [#f08a5d]设备 (Devices)[/#f08a5d] -> [#f9ed69]关联桌面设备 (Link Desktop Device)[/#f9ed69]"
                 )
 
                 qr.clear()
                 qr.add_data(qr_login.url)
                 qr.print_ascii(tty=True)
-                log.info('Waiting for QR code being scanned.')
+                log.info("Waiting for QR code being scanned.")
 
                 signed_in = await qr_login.wait()
 
                 if signed_in:
-                    log.info(f'Logged in successfully as {signed_in.full_name}')
+                    log.info(f"Logged in successfully as {signed_in.full_name}")
                     return signed_in
             except asyncio.TimeoutError:
-                log.info('Recreating QR code.')
+                log.info("Recreating QR code.")
                 await qr_login.recreate()
             except pyrogram.errors.SessionPasswordNeeded as e:
                 console.print(e.MESSAGE)
 
                 while True:
-                    console.print('密码提示:{}'.format(await self.get_password_hint()))
+                    console.print("密码提示:{}".format(await self.get_password_hint()))
 
                     if not self.password:
                         self.password = console.input(
-                            '输入[#f08a5d]「两步验证」[/#f08a5d]的[#f9ed69]「密码」[/#f9ed69](为空代表[#FF4689]忘记密码[/#FF4689]):',
-                            password=self.hide_password).strip()
+                            "输入[#f08a5d]「两步验证」[/#f08a5d]的[#f9ed69]「密码」[/#f9ed69](为空代表[#FF4689]忘记密码[/#FF4689]):",
+                            password=self.hide_password,
+                        ).strip()
 
                     try:
                         if not self.password:
-                            confirm = console.input(
-                                '所输入的[#f08a5d]「恢复密码」[/#f08a5d]是否正确? - 「y|n」(默认y):').strip().lower()
+                            confirm = (
+                                console.input(
+                                    "所输入的[#f08a5d]「恢复密码」[/#f08a5d]是否正确? - 「y|n」(默认y):"
+                                )
+                                .strip()
+                                .lower()
+                            )
 
-                            if confirm in ('y', ''):
+                            if confirm in ("y", ""):
                                 email_pattern = await self.send_recovery_code()
                                 console.print(
-                                    f'[#f08a5d]「恢复代码」[/#f08a5d]已发送到邮箱[#f9ed69]「{email_pattern}」[/#f9ed69]。')
+                                    f"[#f08a5d]「恢复代码」[/#f08a5d]已发送到邮箱[#f9ed69]「{email_pattern}」[/#f9ed69]。"
+                                )
 
                                 while True:
-                                    recovery_code = console.input('请输入[#f08a5d]「恢复代码」[/#f08a5d]:').strip()
+                                    recovery_code = console.input(
+                                        "请输入[#f08a5d]「恢复代码」[/#f08a5d]:"
+                                    ).strip()
 
                                     try:
-                                        return await self.recover_password(recovery_code)
+                                        return await self.recover_password(
+                                            recovery_code
+                                        )
                                     except pyrogram.errors.BadRequest as e:
                                         console.print(e.MESSAGE)
                                     except Exception as e:
@@ -307,15 +340,15 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                 break
 
     async def get_chat_history(
-            self: pyrogram.Client,
-            chat_id: Union[int, str],
-            limit: int = 0,
-            min_id: int = 0,
-            max_id: int = 0,
-            offset: int = 0,
-            offset_id: int = 0,
-            offset_date: datetime = utils.zero_datetime(),
-            reverse: bool = False,
+        self: pyrogram.Client,
+        chat_id: Union[int, str],
+        limit: int = 0,
+        min_id: int = 0,
+        max_id: int = 0,
+        offset: int = 0,
+        offset_id: int = 0,
+        offset_date: datetime = utils.zero_datetime(),
+        reverse: bool = False,
     ) -> Optional[AsyncGenerator["types.Message", None]]:
         # https://github.com/tangyoha/telegram_media_downloader/blob/master/module/get_chat_history_v2.py
         current = 0
@@ -349,15 +382,15 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                     return
 
     async def get_session(
-            self,
-            dc_id: Optional[int] = None,
-            is_media: Optional[bool] = False,
-            is_cdn: Optional[bool] = False,
-            business_connection_id: Optional[str] = None,
-            export_authorization: Optional[bool] = True,
-            server_address: Optional[str] = None,
-            port: Optional[int] = None,
-            temporary: Optional[bool] = False
+        self,
+        dc_id: Optional[int] = None,
+        is_media: Optional[bool] = False,
+        is_cdn: Optional[bool] = False,
+        business_connection_id: Optional[str] = None,
+        export_authorization: Optional[bool] = True,
+        server_address: Optional[str] = None,
+        port: Optional[int] = None,
+        temporary: Optional[bool] = False,
     ) -> "Session":
         if not dc_id:
             dc_id = await self.storage.dc_id()
@@ -372,7 +405,9 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                     )
                 )
 
-                dc_id = self.business_connections[business_connection_id] = connection.updates[0].connection.dc_id
+                dc_id = self.business_connections[business_connection_id] = (
+                    connection.updates[0].connection.dc_id
+                )
 
         is_current_dc = await self.storage.dc_id() == dc_id
 
@@ -385,7 +420,9 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
             return sessions[dc_id]
 
         if not server_address or not port:
-            dc_option = await self.get_dc_option(dc_id, is_media=is_media, ipv6=self.ipv6, is_cdn=is_cdn)
+            dc_option = await self.get_dc_option(
+                dc_id, is_media=is_media, ipv6=self.ipv6, is_cdn=is_cdn
+            )
 
             server_address = server_address or dc_option.ip_address
             port = port or dc_option.port
@@ -395,11 +432,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
         else:
             if not is_current_dc:
                 auth_key = await Auth(
-                    self,
-                    dc_id,
-                    server_address,
-                    port,
-                    await self.storage.test_mode()
+                    self, dc_id, server_address, port, await self.storage.test_mode()
                 ).create()
             else:
                 auth_key = await self.storage.auth_key()
@@ -411,7 +444,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
             port,
             auth_key,
             await self.storage.test_mode(),
-            is_media=is_media
+            is_media=is_media,
         )
 
         if not temporary:
@@ -422,16 +455,13 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
         if not is_current_dc and export_authorization:
             for _ in range(3):
                 exported_auth = await self.invoke(
-                    raw.functions.auth.ExportAuthorization(
-                        dc_id=dc_id
-                    )
+                    raw.functions.auth.ExportAuthorization(dc_id=dc_id)
                 )
 
                 try:
                     await session.invoke(
                         raw.functions.auth.ImportAuthorization(
-                            id=exported_auth.id,
-                            bytes=exported_auth.bytes
+                            id=exported_auth.id, bytes=exported_auth.bytes
                         )
                     )
                 except AuthBytesInvalid:
@@ -445,13 +475,13 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
         return session
 
     async def get_file(
-            self,
-            file_id: FileId,
-            file_size: int = 0,
-            limit: int = 0,
-            offset: int = 0,
-            progress: Callable = None,
-            progress_args: tuple = ()
+        self,
+        file_id: FileId,
+        file_size: int = 0,
+        limit: int = 0,
+        offset: int = 0,
+        progress: Callable = None,
+        progress_args: tuple = (),
     ) -> AsyncGenerator[bytes, None]:
         async with self.get_file_semaphore:
             file_type = file_id.file_type
@@ -459,38 +489,35 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
             if file_type == FileType.CHAT_PHOTO:
                 if file_id.chat_id > 0:
                     peer = raw.types.InputPeerUser(
-                        user_id=file_id.chat_id,
-                        access_hash=file_id.chat_access_hash
+                        user_id=file_id.chat_id, access_hash=file_id.chat_access_hash
                     )
                 else:
                     if file_id.chat_access_hash == 0:
-                        peer = raw.types.InputPeerChat(
-                            chat_id=-file_id.chat_id
-                        )
+                        peer = raw.types.InputPeerChat(chat_id=-file_id.chat_id)
                     else:
                         peer = raw.types.InputPeerChannel(
                             channel_id=utils.get_channel_id(file_id.chat_id),
-                            access_hash=file_id.chat_access_hash
+                            access_hash=file_id.chat_access_hash,
                         )
 
                 location = raw.types.InputPeerPhotoFileLocation(
                     peer=peer,
                     photo_id=file_id.media_id,
-                    big=file_id.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG
+                    big=file_id.thumbnail_source == ThumbnailSource.CHAT_PHOTO_BIG,
                 )
             elif file_type == FileType.PHOTO:
                 location = raw.types.InputPhotoFileLocation(
                     id=file_id.media_id,
                     access_hash=file_id.access_hash,
                     file_reference=file_id.file_reference,
-                    thumb_size=file_id.thumbnail_size
+                    thumb_size=file_id.thumbnail_size,
                 )
             else:
                 location = raw.types.InputDocumentFileLocation(
                     id=file_id.media_id,
                     access_hash=file_id.access_hash,
                     file_reference=file_id.file_reference,
-                    thumb_size=file_id.thumbnail_size
+                    thumb_size=file_id.thumbnail_size,
                 )
 
             current = 0
@@ -505,11 +532,9 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 
                 r = await session.invoke(
                     raw.functions.upload.GetFile(
-                        location=location,
-                        offset=offset_bytes,
-                        limit=chunk_size
+                        location=location, offset=offset_bytes, limit=chunk_size
                     ),
-                    sleep_threshold=30
+                    sleep_threshold=30,
                 )
 
                 if isinstance(r, raw.types.upload.File):
@@ -528,7 +553,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                                 if file_size != 0
                                 else offset_bytes,
                                 file_size,
-                                *progress_args
+                                *progress_args,
                             )
 
                             if inspect.iscoroutinefunction(progress):
@@ -541,16 +566,15 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 
                         r = await session.invoke(
                             raw.functions.upload.GetFile(
-                                location=location,
-                                offset=offset_bytes,
-                                limit=chunk_size
+                                location=location, offset=offset_bytes, limit=chunk_size
                             ),
-                            sleep_threshold=30
+                            sleep_threshold=30,
                         )
 
                 elif isinstance(r, raw.types.upload.FileCdnRedirect):
-
-                    cdn_session = await self.get_session(dc_id, is_cdn=True, temporary=True)
+                    cdn_session = await self.get_session(
+                        dc_id, is_cdn=True, temporary=True
+                    )
 
                     try:
                         while True:
@@ -558,7 +582,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                                 raw.functions.upload.GetCdnFile(
                                     file_token=r.file_token,
                                     offset=offset_bytes,
-                                    limit=chunk_size
+                                    limit=chunk_size,
                                 )
                             )
 
@@ -567,7 +591,7 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                                     await session.invoke(
                                         raw.functions.upload.ReuploadCdnFile(
                                             file_token=r.file_token,
-                                            request_token=r2.request_token
+                                            request_token=r2.request_token,
                                         )
                                     )
                                 except VolumeLocNotFound:
@@ -583,26 +607,32 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                                 aes.ctr256_decrypt,
                                 chunk,
                                 r.encryption_key,
-                                bytearray(r.encryption_iv[:-4] + (offset_bytes // 16).to_bytes(4, "big"))
+                                bytearray(
+                                    r.encryption_iv[:-4]
+                                    + (offset_bytes // 16).to_bytes(4, "big")
+                                ),
                             )
 
                             hashes = await session.invoke(
                                 raw.functions.upload.GetCdnFileHashes(
-                                    file_token=r.file_token,
-                                    offset=offset_bytes
+                                    file_token=r.file_token, offset=offset_bytes
                                 )
                             )
 
                             # https://core.telegram.org/cdn#verifying-files
                             def _check_all_hashes():
                                 for i, h in enumerate(hashes):
-                                    cdn_chunk = decrypted_chunk[h.limit * i: h.limit * (i + 1)]
+                                    cdn_chunk = decrypted_chunk[
+                                        h.limit * i : h.limit * (i + 1)
+                                    ]
                                     CDNFileHashMismatch.check(
                                         h.hash == sha256(cdn_chunk).digest(),
-                                        "h.hash == sha256(cdn_chunk).digest()"
+                                        "h.hash == sha256(cdn_chunk).digest()",
                                     )
 
-                            await self.loop.run_in_executor(self.executor, _check_all_hashes)
+                            await self.loop.run_in_executor(
+                                self.executor, _check_all_hashes
+                            )
 
                             yield decrypted_chunk
 
@@ -612,9 +642,11 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
                             if progress:
                                 func = functools.partial(
                                     progress,
-                                    min(offset_bytes, file_size) if file_size != 0 else offset_bytes,
+                                    min(offset_bytes, file_size)
+                                    if file_size != 0
+                                    else offset_bytes,
                                     file_size,
-                                    *progress_args
+                                    *progress_args,
                                 )
 
                                 if inspect.iscoroutinefunction(progress):
@@ -639,16 +671,16 @@ class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):
 
 
 async def get_chunk(
-        *,
-        client: pyrogram.Client,
-        chat_id: Union[int, str],
-        limit: int = 0,
-        offset: int = 0,
-        min_id: int = 0,
-        max_id: int = 0,
-        from_message_id: int = 0,
-        from_date: datetime = utils.zero_datetime(),
-        reverse: bool = False
+    *,
+    client: pyrogram.Client,
+    chat_id: Union[int, str],
+    limit: int = 0,
+    offset: int = 0,
+    min_id: int = 0,
+    max_id: int = 0,
+    from_message_id: int = 0,
+    from_date: datetime = utils.zero_datetime(),
+    reverse: bool = False,
 ):
     from_message_id = from_message_id or (1 if reverse else 0)
     messages = await utils.parse_messages(
@@ -683,12 +715,12 @@ class TelegramRestrictedMediaDownloaderSession(Session):
     RETRY_DELAY = 1
 
     async def invoke(
-            self,
-            query: TLObject,
-            retries: int = MAX_RETRIES,
-            timeout: float = WAIT_TIMEOUT,
-            sleep_threshold: float = SLEEP_THRESHOLD,
-            retry_delay: float = RETRY_DELAY
+        self,
+        query: TLObject,
+        retries: int = MAX_RETRIES,
+        timeout: float = WAIT_TIMEOUT,
+        sleep_threshold: float = SLEEP_THRESHOLD,
+        retry_delay: float = RETRY_DELAY,
     ):
         try:
             await asyncio.wait_for(self.is_started.wait(), self.WAIT_TIMEOUT)
@@ -696,14 +728,14 @@ class TelegramRestrictedMediaDownloaderSession(Session):
             pass
 
         if isinstance(
-                query, (raw.functions.InvokeWithoutUpdates, raw.functions.InvokeWithTakeout)
+            query, (raw.functions.InvokeWithoutUpdates, raw.functions.InvokeWithTakeout)
         ):
             inner_query = query.query
         else:
             inner_query = query
         reconnect_delay: int = 5
         max_reconnect_delay: int = 60
-        query_name = '.'.join(inner_query.QUALNAME.split('.')[1:])
+        query_name = ".".join(inner_query.QUALNAME.split(".")[1:])
         while True:
             for attempt in range(1, retries + 1):
                 try:
@@ -721,33 +753,35 @@ class TelegramRestrictedMediaDownloaderSession(Session):
                     )
                     console.log(
                         f'[{self.client.name}]请求频繁,"{query_name}"要求等待{amount}秒后继续运行。',
-                        style='#FF4689'
+                        style="#FF4689",
                     )
 
                     await asyncio.sleep(amount)
                 except (OSError, InternalServerError, ServiceUnavailable) as e:
                     log.info(
-                        '[%s] Retrying "%s" due to: %s', attempt, query_name, str(e) or repr(e)
+                        '[%s] Retrying "%s" due to: %s',
+                        attempt,
+                        query_name,
+                        str(e) or repr(e),
                     )
                     console.log(
                         f'[{attempt}/{retries}]由于"{str(e) or repr(e)}"导致无法调用"{query_name}",正在尝试重连。',
-                        style='#FF4689'
+                        style="#FF4689",
                     )
 
                     await asyncio.sleep(retry_delay)
 
             wait_time: int = min(reconnect_delay, max_reconnect_delay)
-            log.error(f'经{retries}次尝试后仍无法调用"{query_name}",请检查网络环境,等待{wait_time}秒后重新尝试。')
+            log.error(
+                f'经{retries}次尝试后仍无法调用"{query_name}",请检查网络环境,等待{wait_time}秒后重新尝试。'
+            )
             await asyncio.sleep(wait_time)
-            console.log(f'已等待{wait_time}秒,重新尝试重连。', style='#B1DB74')
+            console.log(f"已等待{wait_time}秒,重新尝试重连。", style="#B1DB74")
             if reconnect_delay < max_reconnect_delay:
                 reconnect_delay += 5
 
     async def send(
-            self,
-            data: TLObject,
-            wait_response: bool = True,
-            timeout: float = WAIT_TIMEOUT
+        self, data: TLObject, wait_response: bool = True, timeout: float = WAIT_TIMEOUT
     ):
         message = await self.msg_factory.create(data)
         msg_id = message.msg_id
@@ -755,7 +789,7 @@ class TelegramRestrictedMediaDownloaderSession(Session):
         if wait_response:
             self.results[msg_id] = Result()
 
-        log.debug('Sent: %s', message)
+        log.debug("Sent: %s", message)
 
         payload = await self.client.loop.run_in_executor(
             self.connection.protocol.crypto_executor,
@@ -764,7 +798,7 @@ class TelegramRestrictedMediaDownloaderSession(Session):
             self.salt,
             self.session_id,
             self.auth_key,
-            self.auth_key_id
+            self.auth_key_id,
         )
 
         try:
@@ -782,11 +816,15 @@ class TelegramRestrictedMediaDownloaderSession(Session):
             result = self.results.pop(msg_id).value
 
             if result is None:
-                raise TimeoutError('请求超时')
+                raise TimeoutError("请求超时")
 
             if isinstance(result, raw.types.RpcError):
                 if isinstance(
-                        data, (raw.functions.InvokeWithoutUpdates, raw.functions.InvokeWithTakeout)
+                    data,
+                    (
+                        raw.functions.InvokeWithoutUpdates,
+                        raw.functions.InvokeWithTakeout,
+                    ),
                 ):
                     data = data.query
 
@@ -797,12 +835,14 @@ class TelegramRestrictedMediaDownloaderSession(Session):
 
                 if e_code in (16, 17):
                     log.error(
-                        '%s: %s', BadMsgNotification.__name__, BadMsgNotification(e_code)
+                        "%s: %s",
+                        BadMsgNotification.__name__,
+                        BadMsgNotification(e_code),
                     )
                     raise BadMsgNotification(e_code)
 
                 log.warning(
-                    '%s: %s', BadMsgNotification.__name__, BadMsgNotification(e_code)
+                    "%s: %s", BadMsgNotification.__name__, BadMsgNotification(e_code)
                 )
             if isinstance(result, raw.types.BadServerSalt):
                 self.salt = result.new_server_salt

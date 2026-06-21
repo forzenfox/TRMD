@@ -26,7 +26,9 @@ class WebSocketLogHandler(logging.Handler):
         try:
             log_entry = {
                 "type": "log_entry",
-                "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+                "timestamp": datetime.fromtimestamp(
+                    record.created, tz=timezone.utc
+                ).isoformat(),
                 "payload": {
                     "level": record.levelname,
                     "level_no": record.levelno,
@@ -87,10 +89,12 @@ class LogSubscription:
             except asyncio.TimeoutError:
                 # 超时发送心跳
                 try:
-                    await self.websocket.send_json({
-                        "type": "log_heartbeat",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                    })
+                    await self.websocket.send_json(
+                        {
+                            "type": "log_heartbeat",
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                        }
+                    )
                 except Exception:
                     break
             except Exception:

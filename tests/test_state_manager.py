@@ -13,11 +13,12 @@
 import pytest
 from unittest.mock import MagicMock
 
-from module.state_manager import StateManager
+from module.bot.state_manager import StateManager
 from module.enums import DownloadType
 
 
 # ==================== Fixtures ====================
+
 
 @pytest.fixture
 def state():
@@ -33,6 +34,7 @@ def state_with_filter(state):
 
 
 # ==================== 监听状态管理测试 ====================
+
 
 class TestListenState:
     """监听状态管理测试。"""
@@ -83,6 +85,7 @@ class TestListenState:
 
 
 # ==================== 下载过滤器管理测试 ====================
+
 
 class TestDownloadFilter:
     """下载过滤器管理测试。"""
@@ -145,7 +148,9 @@ class TestDownloadFilter:
     def test_toggle_download_chat_comment_twice(self, state_with_filter):
         """重复切换应恢复原值。"""
         state_with_filter.toggle_download_chat_comment("channel_123")  # False -> True
-        result = state_with_filter.toggle_download_chat_comment("channel_123")  # True -> False
+        result = state_with_filter.toggle_download_chat_comment(
+            "channel_123"
+        )  # True -> False
         assert result is False
 
     def test_update_download_filter_nonexistent(self, state):
@@ -154,6 +159,7 @@ class TestDownloadFilter:
 
 
 # ==================== 关键词管理测试 ====================
+
 
 class TestKeywordManagement:
     """关键词管理测试。"""
@@ -213,6 +219,7 @@ class TestKeywordManagement:
 
 # ==================== 关键词输入模式测试 ====================
 
+
 class TestKeywordHandler:
     """关键词输入模式管理测试。"""
 
@@ -237,6 +244,7 @@ class TestKeywordHandler:
 
 
 # ==================== 媒体组管理测试 ====================
+
 
 class TestMediaGroup:
     """媒体组管理测试。"""
@@ -267,12 +275,15 @@ class TestMediaGroup:
 
 # ==================== 日期范围管理测试 ====================
 
+
 class TestDateRange:
     """日期范围管理测试。"""
 
     def test_set_download_date_start(self, state_with_filter):
         """应能设置起始日期。"""
-        state_with_filter.set_download_date("channel_123", "start", "2024-01-01 00:00:00")
+        state_with_filter.set_download_date(
+            "channel_123", "start", "2024-01-01 00:00:00"
+        )
         result = state_with_filter.get_download_date("channel_123", "start")
         assert result == "2024-01-01 00:00:00"
 

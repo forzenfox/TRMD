@@ -16,10 +16,10 @@ from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 
-from module.bot_commands import BotCommands
+from module.bot.commands import BotCommands
 from module.interaction_manager import InteractionManager
 from module.core.token_manager import TokenManager
-from module.core.config_manager import ConfigManager
+from module.config.config_manager import ConfigManager
 
 
 # ==================== Fixtures ====================

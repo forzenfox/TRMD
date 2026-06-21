@@ -12,8 +12,21 @@ from fastapi import APIRouter, Depends, Request, Query
 from module.api.dependencies import require_token, get_task_manager
 from module.api.responses import json_response, error_json_response
 from module.api.models.task import TaskCreate, TaskOut
-from module.api.exceptions import TaskNotFoundError, TaskSizeExceeded, TaskSizeWarning, InsufficientDiskSpace, TaskConflictError
-from module.core.task_manager import TaskManager, Task, TaskType, TaskStatus, InvalidStateTransition, TaskNotFoundError as CoreTaskNotFoundError
+from module.api.exceptions import (
+    TaskNotFoundError,
+    TaskSizeExceeded,
+    TaskSizeWarning,
+    InsufficientDiskSpace,
+    TaskConflictError,
+)
+from module.core.task_manager import (
+    TaskManager,
+    Task,
+    TaskType,
+    TaskStatus,
+    InvalidStateTransition,
+    TaskNotFoundError as CoreTaskNotFoundError,
+)
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
 
@@ -50,7 +63,9 @@ async def list_tasks(
         try:
             status_enum = TaskStatus(status_filter)
         except ValueError:
-            return error_json_response(code=400, message=f"无效的状态: {status_filter}", status_code=400)
+            return error_json_response(
+                code=400, message=f"无效的状态: {status_filter}", status_code=400
+            )
         tasks = await task_manager.list_tasks(status=status_enum)
     else:
         tasks = await task_manager.list_tasks()
@@ -60,11 +75,13 @@ async def list_tasks(
         try:
             type_enum = TaskType(task_type)
         except ValueError:
-            return error_json_response(code=400, message=f"无效的类型: {task_type}", status_code=400)
+            return error_json_response(
+                code=400, message=f"无效的类型: {task_type}", status_code=400
+            )
         tasks = [t for t in tasks if t.task_type == type_enum]
 
     total = len(tasks)
-    paginated_tasks = tasks[offset: offset + limit]
+    paginated_tasks = tasks[offset : offset + limit]
 
     data = {
         "items": [_task_to_out(t).model_dump() for t in paginated_tasks],
@@ -118,7 +135,9 @@ async def create_task(
     }
     task_type = type_map.get(body.task_type)
     if task_type is None:
-        return error_json_response(code=400, message=f"无效的任务类型: {body.task_type}", status_code=400)
+        return error_json_response(
+            code=400, message=f"无效的任务类型: {body.task_type}", status_code=400
+        )
 
     # 提取参数
     params = body.params
@@ -232,7 +251,11 @@ async def delete_task(
     if not task:
         raise TaskNotFoundError(task_id)
 
-    if task.status not in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+    if task.status not in (
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    ):
         raise TaskConflictError("只能删除已完成、失败或已取消的任务")
 
     # 从内存中删除

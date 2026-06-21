@@ -45,6 +45,7 @@ def create_app(
     # 挂载核心管理器到应用状态
     from module.core.token_manager import TokenManager
     from module.core.monitor import Monitor
+
     app.state.token_manager = token_manager or TokenManager()
     app.state.task_manager = task_manager
     app.state.file_manager = file_manager
@@ -64,7 +65,9 @@ def create_app(
     app.include_router(websocket_router)
 
     # 提供 WebUI 静态文件（如果存在）
-    web_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "module", "web")
+    web_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "module", "web"
+    )
     if os.path.isdir(web_dir):
         app.mount("/web", StaticFiles(directory=web_dir), name="web")
 

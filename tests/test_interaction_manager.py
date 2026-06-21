@@ -26,6 +26,7 @@ from module.interaction_manager import (
 
 # ==================== Fixtures ====================
 
+
 @pytest.fixture
 def manager():
     """提供基础 InteractionManager 实例（内存模式）。"""
@@ -40,6 +41,7 @@ def manager_with_save(tmp_path):
 
 
 # ==================== 交互状态数据模型测试 ====================
+
 
 class TestInteractionState:
     """InteractionState 数据模型测试。"""
@@ -110,6 +112,7 @@ class TestInteractionState:
 
 # ==================== BatchStep 枚举测试 ====================
 
+
 class TestBatchStep:
     """BatchStep 枚举测试。"""
 
@@ -123,7 +126,9 @@ class TestBatchStep:
         """next_step() 应返回下一步骤。"""
         assert BatchStep.next_step(BatchStep.SOURCE_CHANNEL) == BatchStep.TARGET_CHANNEL
         assert BatchStep.next_step(BatchStep.TARGET_CHANNEL) == BatchStep.MESSAGE_RANGE
-        assert BatchStep.next_step(BatchStep.MESSAGE_RANGE) == BatchStep.FILTER_CONDITION
+        assert (
+            BatchStep.next_step(BatchStep.MESSAGE_RANGE) == BatchStep.FILTER_CONDITION
+        )
         assert BatchStep.next_step(BatchStep.FILTER_CONDITION) == BatchStep.COMPLETE
 
     def test_next_step_from_complete(self):
@@ -140,7 +145,10 @@ class TestBatchStep:
     def test_is_valid_input(self):
         """is_valid_input() 应验证输入格式。"""
         # 源频道 - 需要是 t.me 链接
-        assert BatchStep.is_valid_input(BatchStep.SOURCE_CHANNEL, "https://t.me/test") is True
+        assert (
+            BatchStep.is_valid_input(BatchStep.SOURCE_CHANNEL, "https://t.me/test")
+            is True
+        )
         assert BatchStep.is_valid_input(BatchStep.SOURCE_CHANNEL, "invalid") is False
         # 消息范围 - 需要两个数字
         assert BatchStep.is_valid_input(BatchStep.MESSAGE_RANGE, "1 100") is True
@@ -151,6 +159,7 @@ class TestBatchStep:
 
 
 # ==================== InteractionManager 核心测试 ====================
+
 
 class TestInteractionManager:
     """InteractionManager 核心功能测试。"""
@@ -284,6 +293,7 @@ class TestInteractionManager:
 
 # ==================== 超时处理测试 ====================
 
+
 class TestTimeoutHandling:
     """超时处理相关测试。"""
 
@@ -320,6 +330,7 @@ class TestTimeoutHandling:
 
 
 # ==================== 持久化测试 ====================
+
 
 class TestStatePersistence:
     """状态持久化测试。"""
@@ -363,6 +374,7 @@ class TestStatePersistence:
 
 
 # ==================== StepResult 测试 ====================
+
 
 class TestStepResult:
     """StepResult 数据模型测试。"""

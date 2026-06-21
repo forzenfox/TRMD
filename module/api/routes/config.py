@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, Request
 
 from module.api.dependencies import require_token, get_config_manager
 from module.api.responses import json_response, error_json_response
-from module.api.models.config import ConfigOut, ConfigUpdate, ResourceLimits, ProxyConfig
+from module.api.models.config import (
+    ConfigOut,
+    ConfigUpdate,
+    ResourceLimits,
+    ProxyConfig,
+)
 
 router = APIRouter(prefix="/config", tags=["配置"])
 logger = logging.getLogger(__name__)
@@ -47,7 +52,8 @@ async def get_config(
         # 构建代理配置模型
         proxy_data = config.get("proxy", {})
         proxy_config = ProxyConfig(
-            enable_proxy=proxy_data.get("enable", False) or proxy_data.get("enable_proxy", False),
+            enable_proxy=proxy_data.get("enable", False)
+            or proxy_data.get("enable_proxy", False),
             scheme=proxy_data.get("scheme"),
             hostname=proxy_data.get("hostname"),
             port=proxy_data.get("port"),

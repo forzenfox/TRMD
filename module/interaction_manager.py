@@ -18,14 +18,15 @@ logger = logging.getLogger(__name__)
 
 # ==================== 数据模型 ====================
 
+
 class BatchStep(str, Enum):
     """批量操作收集步骤枚举。"""
 
-    SOURCE_CHANNEL = "source_channel"       # 源频道链接
-    TARGET_CHANNEL = "target_channel"       # 目标频道链接
-    MESSAGE_RANGE = "message_range"         # 消息范围
-    FILTER_CONDITION = "filter_condition"   # 过滤条件
-    COMPLETE = "complete"                   # 收集完成
+    SOURCE_CHANNEL = "source_channel"  # 源频道链接
+    TARGET_CHANNEL = "target_channel"  # 目标频道链接
+    MESSAGE_RANGE = "message_range"  # 消息范围
+    FILTER_CONDITION = "filter_condition"  # 过滤条件
+    COMPLETE = "complete"  # 收集完成
 
     @classmethod
     def next_step(cls, current: "BatchStep") -> "BatchStep":
@@ -87,10 +88,10 @@ class BatchStep(str, Enum):
 class StepResult:
     """步骤处理结果。"""
 
-    success: bool                           # 是否成功
-    current_step: BatchStep                 # 当前步骤
-    next_step: Optional[BatchStep] = None   # 下一步骤
-    message: str = ""                       # 提示消息
+    success: bool  # 是否成功
+    current_step: BatchStep  # 当前步骤
+    next_step: Optional[BatchStep] = None  # 下一步骤
+    message: str = ""  # 提示消息
     collected_data: dict = field(default_factory=dict)  # 已收集的数据
 
 
@@ -98,12 +99,12 @@ class StepResult:
 class InteractionState:
     """单个用户交互流程的运行时状态。"""
 
-    user_id: int                            # 用户 ID
-    command: str                            # 触发的命令（如 /batch）
+    user_id: int  # 用户 ID
+    command: str  # 触发的命令（如 /batch）
     current_step: BatchStep = BatchStep.SOURCE_CHANNEL  # 当前步骤
     collected_data: dict = field(default_factory=dict)  # 已收集的数据
-    created_at: float = 0.0                 # 创建时间戳
-    last_updated: float = 0.0               # 最后更新时间戳
+    created_at: float = 0.0  # 创建时间戳
+    last_updated: float = 0.0  # 最后更新时间戳
 
     def __post_init__(self):
         """初始化时间戳。"""
@@ -122,7 +123,9 @@ class InteractionState:
         return {
             "user_id": self.user_id,
             "command": self.command,
-            "current_step": self.current_step.value if isinstance(self.current_step, BatchStep) else self.current_step,
+            "current_step": self.current_step.value
+            if isinstance(self.current_step, BatchStep)
+            else self.current_step,
             "collected_data": self.collected_data,
             "created_at": self.created_at,
             "last_updated": self.last_updated,
@@ -152,6 +155,7 @@ class InteractionState:
 
 
 # ==================== InteractionManager ====================
+
 
 class InteractionManager:
     """用户交互流程状态管理器。
@@ -339,7 +343,9 @@ class InteractionManager:
         return StepResult(
             success=True,
             current_step=next_step,
-            next_step=BatchStep.next_step(next_step) if next_step != BatchStep.COMPLETE else None,
+            next_step=BatchStep.next_step(next_step)
+            if next_step != BatchStep.COMPLETE
+            else None,
             message=result_msg,
             collected_data=result_data if next_step == BatchStep.COMPLETE else {},
         )
@@ -383,8 +389,7 @@ class InteractionManager:
         :return: 清理的数量
         """
         expired_ids = [
-            uid for uid, state in self._active_flows.items()
-            if self._is_expired(state)
+            uid for uid, state in self._active_flows.items() if self._is_expired(state)
         ]
         for uid in expired_ids:
             del self._active_flows[uid]
@@ -404,10 +409,7 @@ class InteractionManager:
             return False
 
         try:
-            data = {
-                uid: state.to_dict()
-                for uid, state in self._active_flows.items()
-            }
+            data = {uid: state.to_dict() for uid, state in self._active_flows.items()}
             save_path = Path(self._state_file)
             save_path.parent.mkdir(parents=True, exist_ok=True)
             with open(save_path, "w", encoding="UTF-8") as f:
@@ -442,7 +444,11 @@ class InteractionManager:
                 if not self._is_expired(state):
                     self._active_flows[uid] = state
 
-            logger.info("交互状态已加载: file=%s, count=%d", self._state_file, len(self._active_flows))
+            logger.info(
+                "交互状态已加载: file=%s, count=%d",
+                self._state_file,
+                len(self._active_flows),
+            )
             return True
         except Exception as e:
             logger.error("交互状态加载失败: %s", e)

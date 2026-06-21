@@ -87,7 +87,11 @@ class MessageRangeRequest(BaseModel):
         Returns:
             消息 ID 列表
         """
-        if self.range_mode == "id_range" and self.min_id is not None and self.max_id is not None:
+        if (
+            self.range_mode == "id_range"
+            and self.min_id is not None
+            and self.max_id is not None
+        ):
             return list(range(self.min_id, self.max_id + 1))
 
         elif self.range_mode == "multiple_ids" and self.message_list:

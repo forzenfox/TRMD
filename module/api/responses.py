@@ -30,7 +30,9 @@ def error_response(code: int, message: str, data: Any = None) -> dict:
     return {"code": code, "message": message, "data": data}
 
 
-def json_response(data: Any = None, message: str = "success", status_code: int = 200) -> JSONResponse:
+def json_response(
+    data: Any = None, message: str = "success", status_code: int = 200
+) -> JSONResponse:
     """构造 FastAPI JSONResponse。
 
     :param data: 响应数据
@@ -44,7 +46,9 @@ def json_response(data: Any = None, message: str = "success", status_code: int =
     )
 
 
-def error_json_response(code: int, message: str, data: Any = None, status_code: int = 400) -> JSONResponse:
+def error_json_response(
+    code: int, message: str, data: Any = None, status_code: int = 400
+) -> JSONResponse:
     """构造错误 JSONResponse。
 
     :param code: 业务错误码

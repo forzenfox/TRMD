@@ -36,7 +36,9 @@ async def list_chats(
     if not client:
         # 降级：返回模拟数据
         chats = [
-            ChatOut(id="chat_1", title="示例频道 1", type="channel", username="example1"),
+            ChatOut(
+                id="chat_1", title="示例频道 1", type="channel", username="example1"
+            ),
             ChatOut(id="chat_2", title="示例频道 2", type="group", username=None),
         ]
         return json_response(data=[c.model_dump() for c in chats])
@@ -55,12 +57,14 @@ async def list_chats(
             elif dialog.chat.type.value == "private":
                 chat_type = "private"
 
-            chats.append(ChatOut(
-                id=str(dialog.chat.id),
-                title=dialog.chat.title or f"chat_{dialog.chat.id}",
-                type=chat_type,
-                username=getattr(dialog.chat, "username", None),
-            ))
+            chats.append(
+                ChatOut(
+                    id=str(dialog.chat.id),
+                    title=dialog.chat.title or f"chat_{dialog.chat.id}",
+                    type=chat_type,
+                    username=getattr(dialog.chat, "username", None),
+                )
+            )
         return json_response(data=[c.model_dump() for c in chats])
     except Exception as e:
         logger.error(f"获取频道列表失败: {e}")

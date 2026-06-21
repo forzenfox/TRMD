@@ -91,7 +91,8 @@ def config_manager():
 
     # save_config 执行真实验证逻辑
     def _save_config(config_data):
-        from module.core.config_manager import ConfigManager
+        from module.config.config_manager import ConfigManager
+
         cm = ConfigManager()
         is_valid, errors = cm.validate_config(config_data)
         if not is_valid:
@@ -614,6 +615,7 @@ class TestPydanticModels:
     def test_api_response_default(self):
         """测试 APIResponse 默认值。"""
         from module.api.models.common import APIResponse
+
         resp = APIResponse()
         assert resp.code == 0
         assert resp.message == "success"
@@ -622,6 +624,7 @@ class TestPydanticModels:
     def test_api_response_with_data(self):
         """测试带数据的 APIResponse。"""
         from module.api.models.common import APIResponse
+
         resp = APIResponse(data={"key": "value"}, message="custom")
         assert resp.code == 0
         assert resp.message == "custom"
@@ -630,6 +633,7 @@ class TestPydanticModels:
     def test_pagination_params_default(self):
         """测试分页参数默认值。"""
         from module.api.models.common import PaginationParams
+
         params = PaginationParams()
         assert params.limit == 20
         assert params.offset == 0
@@ -637,6 +641,7 @@ class TestPydanticModels:
     def test_task_create(self):
         """测试 TaskCreate 模型。"""
         from module.api.models.task import TaskCreate
+
         task = TaskCreate(task_type="download", params={"chat_id": "123"})
         assert task.task_type == "download"
         assert task.params["chat_id"] == "123"
@@ -644,6 +649,7 @@ class TestPydanticModels:
     def test_task_out(self):
         """测试 TaskOut 模型。"""
         from module.api.models.task import TaskOut
+
         out = TaskOut(
             id="task_001",
             task_type="download",
@@ -656,6 +662,7 @@ class TestPydanticModels:
     def test_chat_out(self):
         """测试 ChatOut 模型。"""
         from module.api.models.chat import ChatOut
+
         chat = ChatOut(id="1", title="Test", type="channel")
         assert chat.title == "Test"
         assert chat.type == "channel"
@@ -663,6 +670,7 @@ class TestPydanticModels:
     def test_file_info(self):
         """测试 FileInfo 模型。"""
         from module.api.models.file import FileInfo
+
         info = FileInfo(name="test.mp4", path="/tmp/test.mp4", type="file", size=1024)
         assert info.type == "file"
         assert info.size == 1024
@@ -670,6 +678,7 @@ class TestPydanticModels:
     def test_config_out(self):
         """测试 ConfigOut 模型。"""
         from module.api.models.config import ConfigOut
+
         config = ConfigOut(api_id="123")
         assert config.api_id == "123"
         assert config.resource_limits is not None
@@ -678,6 +687,7 @@ class TestPydanticModels:
     def test_message_estimate_out(self):
         """测试 MessageEstimateOut 模型。"""
         from module.api.models.chat import MessageEstimateOut
+
         estimate = MessageEstimateOut(
             message_count=100,
             total_size_bytes=1024,
@@ -691,6 +701,7 @@ class TestPydanticModels:
     def test_config_update(self):
         """测试 ConfigUpdate 模型。"""
         from module.api.models.config import ConfigUpdate
+
         update = ConfigUpdate(max_retry_count=5)
         assert update.max_retry_count == 5
         assert update.resource_limits is None
@@ -731,6 +742,7 @@ class TestResponseFormat:
     def test_success_response(self):
         """测试成功响应构造。"""
         from module.api.responses import success_response
+
         resp = success_response(data={"key": "value"})
         assert resp["code"] == 0
         assert resp["message"] == "success"
@@ -739,6 +751,7 @@ class TestResponseFormat:
     def test_error_response(self):
         """测试错误响应构造。"""
         from module.api.responses import error_response
+
         resp = error_response(code=1001, message="错误消息")
         assert resp["code"] == 1001
         assert resp["message"] == "错误消息"
@@ -747,6 +760,7 @@ class TestResponseFormat:
     def test_json_response(self):
         """测试 JSONResponse 构造。"""
         from module.api.responses import json_response
+
         resp = json_response(data={"test": True})
         assert resp.status_code == 200
         assert resp.body is not None
@@ -754,6 +768,7 @@ class TestResponseFormat:
     def test_error_json_response(self):
         """测试错误 JSONResponse 构造。"""
         from module.api.responses import error_json_response
+
         resp = error_json_response(code=500, message="内部错误", status_code=500)
         assert resp.status_code == 500
 
@@ -772,7 +787,9 @@ class TestDependencies:
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_require_token_from_query(self, token_manager, task_manager, config_manager):
+    async def test_require_token_from_query(
+        self, token_manager, task_manager, config_manager
+    ):
         """测试从 Query 参数获取 Token。"""
         app = create_app(
             token_manager=token_manager,
@@ -813,6 +830,7 @@ class TestWebSocketConnection:
     async def test_connection_manager_connect_disconnect(self):
         """测试连接管理器连接/断开。"""
         from module.api.websocket.connection import ConnectionManager
+
         manager = ConnectionManager()
         assert manager.get_connection_count() == 0
 
@@ -820,6 +838,7 @@ class TestWebSocketConnection:
     async def test_connection_manager_broadcast(self):
         """测试广播功能（无连接时不报错）。"""
         from module.api.websocket.connection import ConnectionManager
+
         manager = ConnectionManager()
         await manager.broadcast({"type": "test"})
 
@@ -827,6 +846,7 @@ class TestWebSocketConnection:
     async def test_connection_manager_send_to_nonexistent(self):
         """测试向不存在客户端发送返回 False。"""
         from module.api.websocket.connection import ConnectionManager
+
         manager = ConnectionManager()
         result = await manager.send_to("nonexistent", {"type": "test"})
         assert result is False
@@ -835,6 +855,7 @@ class TestWebSocketConnection:
     async def test_connection_manager_get_count(self):
         """测试获取连接数。"""
         from module.api.websocket.connection import ConnectionManager
+
         manager = ConnectionManager()
         assert manager.get_connection_count() == 0
 
@@ -848,12 +869,14 @@ class TestMiddleware:
     def test_security_headers_middleware(self):
         """测试安全头中间件初始化。"""
         from module.api.middleware import SecurityHeadersMiddleware
+
         assert SecurityHeadersMiddleware.SECURITY_HEADERS is not None
         assert "X-Content-Type-Options" in SecurityHeadersMiddleware.SECURITY_HEADERS
 
     def test_process_time_middleware(self):
         """测试响应时间中间件初始化。"""
         from module.api.middleware import ProcessTimeMiddleware
+
         assert ProcessTimeMiddleware.THRESHOLD_MS == 1000
 
 
@@ -892,6 +915,7 @@ class TestExceptionClasses:
     def test_task_not_found_exception(self):
         """测试 TaskNotFoundError。"""
         from module.api.exceptions import TaskNotFoundError
+
         exc = TaskNotFoundError("task_123")
         assert exc.code == 404
         assert exc.status_code == 404
@@ -899,6 +923,7 @@ class TestExceptionClasses:
     def test_task_size_exceeded_exception(self):
         """测试 TaskSizeExceeded。"""
         from module.api.exceptions import TaskSizeExceeded
+
         exc = TaskSizeExceeded("12 GB")
         assert exc.code == 1001
         assert "12 GB" in exc.message
@@ -906,6 +931,7 @@ class TestExceptionClasses:
     def test_task_size_warning_exception(self):
         """测试 TaskSizeWarning。"""
         from module.api.exceptions import TaskSizeWarning
+
         exc = TaskSizeWarning("7 GB")
         assert exc.code == 1002
         assert "7 GB" in exc.message
@@ -913,12 +939,14 @@ class TestExceptionClasses:
     def test_insufficient_disk_space_exception(self):
         """测试 InsufficientDiskSpace。"""
         from module.api.exceptions import InsufficientDiskSpace
+
         exc = InsufficientDiskSpace()
         assert exc.code == 1003
 
     def test_task_conflict_exception(self):
         """测试 TaskConflictError。"""
         from module.api.exceptions import TaskConflictError
+
         exc = TaskConflictError("自定义冲突消息")
         assert exc.code == 409
         assert exc.status_code == 409
@@ -926,6 +954,7 @@ class TestExceptionClasses:
     def test_chat_not_found_exception(self):
         """测试 ChatNotFoundError。"""
         from module.api.exceptions import ChatNotFoundError
+
         exc = ChatNotFoundError("chat_123")
         assert exc.code == 404
 
@@ -985,10 +1014,12 @@ class TestWebSocketPushFunctions:
     async def test_push_task_update(self):
         """测试 push_task_update 不报错。"""
         from module.api.websocket.router import push_task_update
+
         await push_task_update("task_1", "running", 50.0, "测试中")
 
     @pytest.mark.asyncio
     async def test_push_log(self):
         """测试 push_log 不报错。"""
         from module.api.websocket.router import push_log
+
         await push_log("INFO", "test_logger", "测试日志")

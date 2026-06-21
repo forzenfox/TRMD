@@ -11,9 +11,9 @@ from typing import Optional
 
 from module.core.task_manager import TaskManager, Task, TaskType, ItemStatus
 from module.core.file_manager import FileManager, FileInfo, UploadProgress
-from module.path_tool import safe_scan_directory_file
+from module.utils.path_tool import safe_scan_directory_file
 
-log = logging.getLogger('rich')
+log = logging.getLogger("rich")
 
 
 class TaskExecutor:
@@ -117,8 +117,10 @@ class TaskExecutor:
                     )
                 else:
                     await self._task_manager.update_item_status(
-                        task.task_id, item.item_id, ItemStatus.FAILED,
-                        "MESSAGE_NOT_FOUND"
+                        task.task_id,
+                        item.item_id,
+                        ItemStatus.FAILED,
+                        "MESSAGE_NOT_FOUND",
                     )
             except Exception as e:
                 await self._task_manager.update_item_status(
@@ -204,22 +206,24 @@ class TaskExecutor:
 
         item_index = 0
         for group in groups:
-            is_album = group.get('is_album', False)
-            files = group.get('files', [])
+            is_album = group.get("is_album", False)
+            files = group.get("files", [])
 
             # 创建子任务项
             for file_info in files:
                 item_id = f"{task.task_id}_file_{item_index}"
-                task.items.append(self._create_item(
-                    task, item_id,
-                    message_id=None,
-                    file_path=file_info.path
-                ))
+                task.items.append(
+                    self._create_item(
+                        task, item_id, message_id=None, file_path=file_info.path
+                    )
+                )
                 item_index += 1
 
             # 上传
             for file_info in files:
-                item_id = f"{task.task_id}_file_{item_index - files.index(file_info) - 1}"
+                item_id = (
+                    f"{task.task_id}_file_{item_index - files.index(file_info) - 1}"
+                )
 
                 await self._task_manager.update_item_status(
                     task.task_id, item_id, ItemStatus.RUNNING
@@ -236,15 +240,19 @@ class TaskExecutor:
                                 delete_after=task.delete_after_upload,
                             )
                             for i, res in enumerate(results):
-                                item_id = f"{task.task_id}_file_{item_index - len(files) + i}"
+                                item_id = (
+                                    f"{task.task_id}_file_{item_index - len(files) + i}"
+                                )
                                 if res.success:
                                     await self._task_manager.update_item_status(
                                         task.task_id, item_id, ItemStatus.SUCCESS
                                     )
                                 else:
                                     await self._task_manager.update_item_status(
-                                        task.task_id, item_id, ItemStatus.FAILED,
-                                        res.error_msg or "UNKNOWN_ERROR"
+                                        task.task_id,
+                                        item_id,
+                                        ItemStatus.FAILED,
+                                        res.error_msg or "UNKNOWN_ERROR",
                                     )
                             continue
                         else:
@@ -263,8 +271,10 @@ class TaskExecutor:
                             )
                         else:
                             await self._task_manager.update_item_status(
-                                task.task_id, item_id, ItemStatus.FAILED,
-                                result.error_msg or "UNKNOWN_ERROR"
+                                task.task_id,
+                                item_id,
+                                ItemStatus.FAILED,
+                                result.error_msg or "UNKNOWN_ERROR",
                             )
                 except Exception as e:
                     await self._task_manager.update_item_status(
@@ -280,9 +290,7 @@ class TaskExecutor:
     ) -> None:
         """子任务进度回调。"""
         try:
-            await self._task_manager.update_item_status(
-                task_id, item_id, status, error
-            )
+            await self._task_manager.update_item_status(task_id, item_id, status, error)
         except Exception as e:
             log.error(f"更新子任务状态失败: {e}")
 
@@ -301,6 +309,7 @@ class TaskExecutor:
     ) -> object:
         """创建子任务项。"""
         from module.core.task_manager import TaskItem
+
         return TaskItem(
             item_id=item_id,
             message_id=message_id,

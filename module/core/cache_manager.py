@@ -31,9 +31,9 @@ CACHE_TYPE_MESSAGE_LIST = "message_list"
 CACHE_TYPE_MESSAGE_STATS = "message_stats"
 
 # TTL 配置（秒）
-TTL_CHAT_LIST = 3600       # 1 小时
-TTL_MESSAGE_LIST = 1800    # 30 分钟
-TTL_MESSAGE_STATS = 600    # 10 分钟
+TTL_CHAT_LIST = 3600  # 1 小时
+TTL_MESSAGE_LIST = 1800  # 30 分钟
+TTL_MESSAGE_STATS = 600  # 10 分钟
 
 # 容量控制
 DEFAULT_MAX_ENTRIES = 10000  # 默认最大缓存条目数
@@ -41,13 +41,14 @@ DEFAULT_MAX_ENTRIES = 10000  # 默认最大缓存条目数
 
 class CacheError(Exception):
     """缓存操作异常"""
+
     pass
 
 
 class CacheManager:
     """
     缓存管理器 - Bot 与 WebUI 共享（单用户）
-    
+
     使用 SQLite 存储缓存数据，支持三种缓存类型：
     - 频道列表（1 小时 TTL）
     - 消息列表（30 分钟 TTL）
@@ -72,13 +73,13 @@ class CacheManager:
         self.serializer = serializer
         self.MAX_ENTRIES = max_entries
         self._closed = False
-        
+
         # 单飞请求机制：{cache_key: asyncio.Future}
         self._in_flight: dict[str, asyncio.Future] = {}
-        
+
         # 初始化数据库
         self._init_db()
-        
+
         # 启动时清理过期数据
         self._cleanup_expired_on_start()
 
@@ -136,7 +137,7 @@ class CacheManager:
         """获取数据库连接的上下文管理器"""
         if self._closed:
             raise CacheError("数据库连接已关闭")
-        
+
         conn = sqlite3.connect(self.db_path)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -149,15 +150,17 @@ class CacheManager:
         finally:
             conn.close()
 
-    def _make_cache_key(self, prefix: str, chat_id: Optional[str] = None, params: Optional[dict] = None) -> str:
+    def _make_cache_key(
+        self, prefix: str, chat_id: Optional[str] = None, params: Optional[dict] = None
+    ) -> str:
         """
         生成缓存键
-        
+
         Args:
             prefix: 缓存类型前缀
             chat_id: 频道 ID（可选）
             params: 查询参数（可选）
-            
+
         Returns:
             缓存键字符串
         """
@@ -168,7 +171,7 @@ class CacheManager:
             if chat_id:
                 return f"{prefix}:{chat_id}:{param_hash}"
             return f"{prefix}:{param_hash}"
-        
+
         if chat_id:
             return f"{prefix}:{chat_id}"
         return prefix
@@ -211,7 +214,7 @@ class CacheManager:
     ) -> None:
         """
         写入或更新缓存条目
-        
+
         Args:
             conn: 数据库连接
             cache_key: 缓存键
@@ -224,14 +227,14 @@ class CacheManager:
         ttl = self._get_ttl(cache_type)
         expires_at = now + ttl
         payload = self._serialize(data)
-        
+
         conn.execute(
             """INSERT OR REPLACE INTO cache_entries 
                (cache_key, cache_type, chat_id, payload, expires_at, created_at, updated_at, version)
                VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
             (cache_key, cache_type, chat_id, payload, expires_at, now, now),
         )
-        
+
         # 更新参数索引
         if params:
             param_str = json.dumps(params, sort_keys=True, default=str)
@@ -241,7 +244,7 @@ class CacheManager:
                    VALUES (?, ?, ?)""",
                 (cache_key, param_hash, param_str),
             )
-        
+
         # 检查是否需要 LRU 淘汰
         cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
         count = cursor.fetchone()[0]
@@ -315,9 +318,7 @@ class CacheManager:
             force_refresh: 是否强制刷新缓存。
         """
         chat_id_str = str(chat_id)
-        cache_key = self._make_cache_key(
-            "messages", chat_id=chat_id_str, params=params
-        )
+        cache_key = self._make_cache_key("messages", chat_id=chat_id_str, params=params)
         return await self._get_or_fetch(
             cache_key=cache_key,
             cache_type=CACHE_TYPE_MESSAGE_LIST,
@@ -373,9 +374,7 @@ class CacheManager:
             - sample_count: int（抽样消息数）
         """
         chat_id_str = str(chat_id)
-        cache_key = self._make_cache_key(
-            "estimate", chat_id=chat_id_str, params=params
-        )
+        cache_key = self._make_cache_key("estimate", chat_id=chat_id_str, params=params)
         return await self._get_or_fetch(
             cache_key=cache_key,
             cache_type=CACHE_TYPE_MESSAGE_STATS,
@@ -436,17 +435,17 @@ class CacheManager:
             # 总数
             cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
             total_entries = cursor.fetchone()[0]
-            
+
             # 各类型计数
             cursor = conn.execute(
                 "SELECT cache_type, COUNT(*) FROM cache_entries GROUP BY cache_type"
             )
             type_counts = dict(cursor.fetchall())
-            
+
             # 总大小（估算 payload 大小）
             cursor = conn.execute("SELECT SUM(length(payload)) FROM cache_entries")
             total_size = cursor.fetchone()[0] or 0
-            
+
             # 最早/最近过期时间
             cursor = conn.execute(
                 "SELECT MIN(expires_at), MAX(expires_at) FROM cache_entries"
@@ -454,7 +453,7 @@ class CacheManager:
             row = cursor.fetchone()
             earliest_expire = row[0]
             latest_expire = row[1]
-            
+
             return {
                 "total_entries": total_entries,
                 "chat_list_count": type_counts.get(CACHE_TYPE_CHAT_LIST, 0),
@@ -488,7 +487,7 @@ class CacheManager:
     ) -> Any:
         """
         通用的缓存获取/刷新逻辑
-        
+
         流程：
         1. 检查是否已关闭
         2. 如果 force_refresh=True，跳过缓存
@@ -499,9 +498,9 @@ class CacheManager:
         # 检查连接是否已关闭
         if self._closed:
             raise CacheError("数据库连接已关闭")
-        
+
         now = int(time.time())
-        
+
         # 强制刷新：跳过缓存
         if force_refresh:
             logger.info(f"强制刷新缓存: {cache_key}")
@@ -512,7 +511,7 @@ class CacheManager:
                 fetcher=fetcher,
                 params=params,
             )
-        
+
         # 尝试读取缓存
         try:
             data = await self._read_cache(cache_key, now)
@@ -524,10 +523,12 @@ class CacheManager:
             # 删除损坏的条目
             try:
                 with self._get_connection() as conn:
-                    conn.execute("DELETE FROM cache_entries WHERE cache_key = ?", (cache_key,))
+                    conn.execute(
+                        "DELETE FROM cache_entries WHERE cache_key = ?", (cache_key,)
+                    )
             except Exception:
                 pass
-        
+
         # 缓存未命中或过期，使用单飞机制
         logger.debug(f"缓存未命中: {cache_key}")
         return await self._execute_and_cache(
@@ -541,11 +542,11 @@ class CacheManager:
     async def _read_cache(self, cache_key: str, now: int) -> Optional[Any]:
         """
         从缓存读取数据
-        
+
         Args:
             cache_key: 缓存键
             now: 当前时间戳
-            
+
         Returns:
             反序列化后的数据，如果缓存不存在或已过期则返回 None
         """
@@ -555,12 +556,12 @@ class CacheManager:
                 (cache_key,),
             )
             row = cursor.fetchone()
-            
+
             if row is None:
                 return None
-            
+
             payload, expires_at = row
-            
+
             # 检查是否过期
             if expires_at <= now:
                 # 删除过期条目
@@ -570,7 +571,7 @@ class CacheManager:
                 )
                 logger.debug(f"缓存已过期: {cache_key}")
                 return None
-            
+
             # 反序列化
             try:
                 return self._deserialize(payload)
@@ -587,14 +588,14 @@ class CacheManager:
     ) -> Any:
         """
         执行 fetcher 并写入缓存，使用单飞机制避免并发重复调用
-        
+
         Args:
             cache_key: 缓存键
             cache_type: 缓存类型
             chat_id: 频道 ID
             fetcher: 异步可调用对象
             params: 查询参数
-            
+
         Returns:
             fetcher 返回的数据
         """
@@ -602,16 +603,16 @@ class CacheManager:
         if cache_key in self._in_flight:
             logger.debug(f"等待正在进行的请求: {cache_key}")
             return await self._in_flight[cache_key]
-        
+
         # 创建 Future
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._in_flight[cache_key] = future
-        
+
         try:
             # 执行 fetcher
             data = await fetcher()
-            
+
             # 写入缓存
             try:
                 with self._get_connection() as conn:
@@ -626,19 +627,19 @@ class CacheManager:
             except Exception as e:
                 logger.warning(f"写入缓存失败: {e}")
                 # 缓存写入失败不影响返回数据
-            
+
             # 完成 Future
             if not future.done():
                 future.set_result(data)
             return data
-            
+
         except Exception as e:
             # fetcher 失败，不写入缓存
             logger.error(f"fetcher 执行失败: {e}")
             if not future.done():
                 future.set_exception(e)
             raise
-            
+
         finally:
             # 清理状态
             self._in_flight.pop(cache_key, None)

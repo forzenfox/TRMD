@@ -64,19 +64,25 @@ async def list_files(
             )
             items = []
             for f in files:
-                items.append(FileInfo(
-                    name=f.name,
-                    path=f.path,
-                    type="directory" if f.is_directory else "file",
-                    size=f.size if not f.is_directory else 0,
-                    modified_at=datetime.fromtimestamp(f.modified_time).isoformat(),
-                    telegram_type=f.telegram_type,
-                ))
+                items.append(
+                    FileInfo(
+                        name=f.name,
+                        path=f.path,
+                        type="directory" if f.is_directory else "file",
+                        size=f.size if not f.is_directory else 0,
+                        modified_at=datetime.fromtimestamp(f.modified_time).isoformat(),
+                        telegram_type=f.telegram_type,
+                    )
+                )
             # 按类型和名称排序
             items.sort(key=lambda x: (x.type == "file", x.name.lower()))
-            return json_response(data={"path": target_path, "items": [i.model_dump() for i in items]})
+            return json_response(
+                data={"path": target_path, "items": [i.model_dump() for i in items]}
+            )
         except (PermissionError, FileNotFoundError, NotADirectoryError) as e:
-            return json_response(data={"path": target_path, "items": [], "error": str(e)})
+            return json_response(
+                data={"path": target_path, "items": [], "error": str(e)}
+            )
 
     # 降级方案：原生 os.scandir
     items = []
@@ -86,21 +92,29 @@ async def list_files(
                 try:
                     stat = entry.stat()
                     if entry.is_dir():
-                        items.append(FileInfo(
-                            name=entry.name,
-                            path=entry.path,
-                            type="directory",
-                            size=0,
-                            modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        ))
+                        items.append(
+                            FileInfo(
+                                name=entry.name,
+                                path=entry.path,
+                                type="directory",
+                                size=0,
+                                modified_at=datetime.fromtimestamp(
+                                    stat.st_mtime
+                                ).isoformat(),
+                            )
+                        )
                     else:
-                        items.append(FileInfo(
-                            name=entry.name,
-                            path=entry.path,
-                            type="file",
-                            size=stat.st_size,
-                            modified_at=datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        ))
+                        items.append(
+                            FileInfo(
+                                name=entry.name,
+                                path=entry.path,
+                                type="file",
+                                size=stat.st_size,
+                                modified_at=datetime.fromtimestamp(
+                                    stat.st_mtime
+                                ).isoformat(),
+                            )
+                        )
                 except (PermissionError, OSError):
                     continue
     except PermissionError:
@@ -109,7 +123,9 @@ async def list_files(
     # 按名称排序
     items.sort(key=lambda x: (x.type == "file", x.name.lower()))
 
-    return json_response(data={"path": target_path, "items": [i.model_dump() for i in items]})
+    return json_response(
+        data={"path": target_path, "items": [i.model_dump() for i in items]}
+    )
 
 
 @router.get("/info")
@@ -133,28 +149,34 @@ async def get_file_info(
     if file_manager:
         try:
             info = await file_manager.get_file_info(abs_path)
-            return json_response(data={
-                "name": info.name,
-                "path": info.path,
-                "type": "directory" if info.is_directory else "file",
-                "size": info.size,
-                "mime_type": info.mime_type,
-                "extension": info.extension,
-                "modified_at": datetime.fromtimestamp(info.modified_time).isoformat(),
-                "telegram_type": info.telegram_type,
-            })
+            return json_response(
+                data={
+                    "name": info.name,
+                    "path": info.path,
+                    "type": "directory" if info.is_directory else "file",
+                    "size": info.size,
+                    "mime_type": info.mime_type,
+                    "extension": info.extension,
+                    "modified_at": datetime.fromtimestamp(
+                        info.modified_time
+                    ).isoformat(),
+                    "telegram_type": info.telegram_type,
+                }
+            )
         except Exception as e:
             return json_response(data=None, error=str(e))
 
     # 降级方案
     stat = os.stat(abs_path)
-    return json_response(data={
-        "name": os.path.basename(abs_path),
-        "path": abs_path,
-        "type": "directory" if os.path.isdir(abs_path) else "file",
-        "size": stat.st_size if os.path.isfile(abs_path) else 0,
-        "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-    })
+    return json_response(
+        data={
+            "name": os.path.basename(abs_path),
+            "path": abs_path,
+            "type": "directory" if os.path.isdir(abs_path) else "file",
+            "size": stat.st_size if os.path.isfile(abs_path) else 0,
+            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        }
+    )
 
 
 @router.post("/upload")
@@ -193,11 +215,13 @@ async def upload_files(
                     fi = await file_manager.get_file_info(fp)
                     file_infos.append(fi)
                 except Exception as e:
-                    results.append({
-                        "file_path": fp,
-                        "success": False,
-                        "error": str(e),
-                    })
+                    results.append(
+                        {
+                            "file_path": fp,
+                            "success": False,
+                            "error": str(e),
+                        }
+                    )
 
             if file_infos:
                 upload_results = await file_manager.upload_media_group(
@@ -206,12 +230,16 @@ async def upload_files(
                     delete_after=body.delete_after,
                 )
                 for res in upload_results:
-                    results.append({
-                        "file_path": res.file_path,
-                        "success": res.success,
-                        "message_id": getattr(res.message, "id", None) if res.message else None,
-                        "error": res.error_msg,
-                    })
+                    results.append(
+                        {
+                            "file_path": res.file_path,
+                            "success": res.success,
+                            "message_id": getattr(res.message, "id", None)
+                            if res.message
+                            else None,
+                            "error": res.error_msg,
+                        }
+                    )
         else:
             # 单文件上传
             for fp in body.file_paths:
@@ -221,21 +249,27 @@ async def upload_files(
                     delete_after=body.delete_after,
                     caption=body.caption,
                 )
-                results.append({
-                    "file_path": res.file_path,
-                    "success": res.success,
-                    "message_id": getattr(res.message, "id", None) if res.message else None,
-                    "error": res.error_msg,
-                    "deleted": res.deleted,
-                })
+                results.append(
+                    {
+                        "file_path": res.file_path,
+                        "success": res.success,
+                        "message_id": getattr(res.message, "id", None)
+                        if res.message
+                        else None,
+                        "error": res.error_msg,
+                        "deleted": res.deleted,
+                    }
+                )
 
         success_count = sum(1 for r in results if r.get("success"))
-        return json_response(data={
-            "total": len(results),
-            "success": success_count,
-            "failed": len(results) - success_count,
-            "results": results,
-        })
+        return json_response(
+            data={
+                "total": len(results),
+                "success": success_count,
+                "failed": len(results) - success_count,
+                "results": results,
+            }
+        )
 
     except Exception as e:
         return error_json_response("上传失败", str(e))

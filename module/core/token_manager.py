@@ -75,7 +75,9 @@ class TokenManager:
         );
     """
 
-    _INDEX_EXPIRES_AT = "CREATE INDEX IF NOT EXISTS idx_tokens_expires_at ON tokens(expires_at);"
+    _INDEX_EXPIRES_AT = (
+        "CREATE INDEX IF NOT EXISTS idx_tokens_expires_at ON tokens(expires_at);"
+    )
     _INDEX_REVOKED = "CREATE INDEX IF NOT EXISTS idx_tokens_revoked ON tokens(revoked);"
 
     def __init__(
@@ -369,7 +371,9 @@ class TokenManager:
                     self._store.pop(token, None)
                     count += 1
 
-        logger.info("清理过期 Token: 删除 %d 条记录 (max_age=%dh)", count, max_age_hours)
+        logger.info(
+            "清理过期 Token: 删除 %d 条记录 (max_age=%dh)", count, max_age_hours
+        )
         return count
 
     def _cleanup_expired_sqlite(self, cutoff_ts: float) -> int:

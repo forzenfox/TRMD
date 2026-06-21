@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Literal, Callable, Awaitable
 
 from module import log
-from module.path_tool import safe_delete
+from module.utils.path_tool import safe_delete
 
 # ============================================================
 # 常量定义
@@ -17,13 +17,14 @@ from module.path_tool import safe_delete
 
 class FileManagerConstants:
     """FileManager 模块常量。"""
+
     MAX_MEDIA_GROUP_SIZE: int = 10
     DEFAULT_MEMORY_LIMIT_MB: int = 512
     DEFAULT_DELETE_AFTER_UPLOAD: bool = False
     FORWARD_DELETE_AFTER_UPLOAD: bool = True
 
-    SUPPORTED_ALBUM_TYPES: set = {'photo', 'video', 'audio'}
-    UNSUPPORTED_ALBUM_TYPES: set = {'document', 'sticker', 'animation'}
+    SUPPORTED_ALBUM_TYPES: set = {"photo", "video", "audio"}
+    UNSUPPORTED_ALBUM_TYPES: set = {"document", "sticker", "animation"}
 
 
 # ============================================================
@@ -34,52 +35,65 @@ class FileManagerConstants:
 @dataclass
 class FileInfo:
     """描述一个本地文件或目录的元数据。"""
-    path: str                              # 绝对路径
-    name: str                              # 文件/目录名
-    is_directory: bool                     # 是否为目录
-    size: int                              # 文件大小（字节），目录为 0
-    mime_type: str | None                  # MIME 类型，目录为 None
-    extension: str | None                  # 扩展名（小写，不含点），目录为 None
-    modified_time: float                   # 最后修改时间戳
-    sha256: str | None = None              # 文件 SHA256（上传前按需计算）
-    is_selected: bool = False              # 是否被用户/WebUI 选中
-    telegram_type: Literal[
-        'photo', 'video', 'audio', 'voice',
-        'document', 'animation', 'sticker', 'unsupported'
-    ] | None = None                        # 按 Telegram 语义分类
+
+    path: str  # 绝对路径
+    name: str  # 文件/目录名
+    is_directory: bool  # 是否为目录
+    size: int  # 文件大小（字节），目录为 0
+    mime_type: str | None  # MIME 类型，目录为 None
+    extension: str | None  # 扩展名（小写，不含点），目录为 None
+    modified_time: float  # 最后修改时间戳
+    sha256: str | None = None  # 文件 SHA256（上传前按需计算）
+    is_selected: bool = False  # 是否被用户/WebUI 选中
+    telegram_type: (
+        Literal[
+            "photo",
+            "video",
+            "audio",
+            "voice",
+            "document",
+            "animation",
+            "sticker",
+            "unsupported",
+        ]
+        | None
+    ) = None  # 按 Telegram 语义分类
 
 
 @dataclass
 class UploadResult:
     """描述一次上传任务的最终结果。"""
-    success: bool                          # 是否成功
-    file_path: str | None = None           # 本地文件路径
-    message: object | None = None          # Pyrogram 返回的 Message 对象（成功时）
-    error_code: str | None = None          # 错误码（失败时）
-    error_msg: str | None = None           # 可读错误信息
-    deleted: bool = False                  # 本地文件是否已清理
-    file_unique_id: str | None = None      # 文件唯一标识（成功时从 Pyrogram Message 提取）
+
+    success: bool  # 是否成功
+    file_path: str | None = None  # 本地文件路径
+    message: object | None = None  # Pyrogram 返回的 Message 对象（成功时）
+    error_code: str | None = None  # 错误码（失败时）
+    error_msg: str | None = None  # 可读错误信息
+    deleted: bool = False  # 本地文件是否已清理
+    file_unique_id: str | None = None  # 文件唯一标识（成功时从 Pyrogram Message 提取）
 
 
 @dataclass
 class MediaGroupConfig:
     """媒体组上传配置。"""
-    max_group_size: int = 10               # 每组最大文件数，默认且最大为 10
-    sort_by: str = 'name'                  # 排序字段：name / time / size / none
-    sort_order: str = 'asc'                # 排序方向：asc / desc
-    send_as_album: bool = True             # 是否尝试以媒体组发送
-    fallback_to_single: bool = True        # 媒体组失败时是否降级为单文件发送
+
+    max_group_size: int = 10  # 每组最大文件数，默认且最大为 10
+    sort_by: str = "name"  # 排序字段：name / time / size / none
+    sort_order: str = "asc"  # 排序方向：asc / desc
+    send_as_album: bool = True  # 是否尝试以媒体组发送
+    fallback_to_single: bool = True  # 媒体组失败时是否降级为单文件发送
 
 
 @dataclass
 class UploadProgress:
     """上传进度回调数据结构。"""
-    task_id: str                           # 任务/文件唯一标识
-    file_path: str                         # 当前文件路径
-    current: int                           # 当前已上传字节
-    total: int                             # 文件总字节
-    percentage: float                      # 上传百分比
-    status: str                            # pending / uploading / success / failed
+
+    task_id: str  # 任务/文件唯一标识
+    file_path: str  # 当前文件路径
+    current: int  # 当前已上传字节
+    total: int  # 文件总字节
+    percentage: float  # 上传百分比
+    status: str  # pending / uploading / success / failed
 
 
 # ============================================================
@@ -89,6 +103,7 @@ class UploadProgress:
 
 class FileManagerError(Exception):
     """FileManager 基础异常类。"""
+
     def __init__(self, code: str, message: str, file_path: str | None = None):
         self.code = code
         self.message = message
@@ -98,16 +113,19 @@ class FileManagerError(Exception):
 
 class FileNotFound(FileManagerError):
     """文件不存在异常。"""
+
     pass
 
 
 class UploadSizeLimit(FileManagerError):
     """上传大小超限异常。"""
+
     pass
 
 
 class MediaGroupInvalid(FileManagerError):
     """媒体组无效异常。"""
+
     pass
 
 
@@ -121,9 +139,9 @@ class FileManager:
 
     # Windows 系统关键目录黑名单。
     _SYSTEM_PATH_BLACKLIST = (
-        'C:\\Windows',
-        'C:\\Program Files',
-        'C:\\Program Files (x86)',
+        "C:\\Windows",
+        "C:\\Program Files",
+        "C:\\Program Files (x86)",
     )
 
     def __init__(
@@ -147,16 +165,20 @@ class FileManager:
         self.repository_manager = None  # 可选的 RepositoryManager，由外部设置
 
         # 读取配置。
-        resource_limits = config.get('resource_limits', {})
-        self._memory_limit_mb = resource_limits.get('memory_limit_mb', FileManagerConstants.DEFAULT_MEMORY_LIMIT_MB)
+        resource_limits = config.get("resource_limits", {})
+        self._memory_limit_mb = resource_limits.get(
+            "memory_limit_mb", FileManagerConstants.DEFAULT_MEMORY_LIMIT_MB
+        )
 
-        upload_config = config.get('upload', {})
+        upload_config = config.get("upload", {})
         self._max_group_size = min(
-            upload_config.get('max_group_size', FileManagerConstants.MAX_MEDIA_GROUP_SIZE),
+            upload_config.get(
+                "max_group_size", FileManagerConstants.MAX_MEDIA_GROUP_SIZE
+            ),
             FileManagerConstants.MAX_MEDIA_GROUP_SIZE,
         )
         self._delete_after_upload = upload_config.get(
-            'delete_after_upload', FileManagerConstants.DEFAULT_DELETE_AFTER_UPLOAD
+            "delete_after_upload", FileManagerConstants.DEFAULT_DELETE_AFTER_UPLOAD
         )
 
     # ---------- 文件浏览与选择 ----------
@@ -172,9 +194,9 @@ class FileManager:
 
         # 路径校验。
         if not os.path.exists(abs_path):
-            raise FileNotFoundError(f'路径不存在: {abs_path}')
+            raise FileNotFoundError(f"路径不存在: {abs_path}")
         if not os.path.isdir(abs_path):
-            raise NotADirectoryError(f'路径不是目录: {abs_path}')
+            raise NotADirectoryError(f"路径不是目录: {abs_path}")
 
         # 系统关键目录黑名单检查。
         self._check_system_path(abs_path)
@@ -199,12 +221,18 @@ class FileManager:
                         continue
 
                     if entry.is_dir():
-                        info = self._build_dir_info(entry.path, entry.name, entry.stat().st_mtime)
+                        info = self._build_dir_info(
+                            entry.path, entry.name, entry.stat().st_mtime
+                        )
                         result.append(info)
                         if recursive:
-                            self._scan_directory(entry.path, recursive, include_hidden, result)
+                            self._scan_directory(
+                                entry.path, recursive, include_hidden, result
+                            )
                     elif entry.is_file():
-                        info = self._build_file_info(entry.path, entry.name, entry.stat())
+                        info = self._build_file_info(
+                            entry.path, entry.name, entry.stat()
+                        )
                         result.append(info)
         except PermissionError as e:
             log.warning(f'权限不足，无法扫描目录 "{directory}": {e}')
@@ -214,12 +242,14 @@ class FileManager:
         abs_path = os.path.abspath(os.path.normpath(path))
 
         if not os.path.exists(abs_path):
-            raise FileNotFoundError(f'路径不存在: {abs_path}')
+            raise FileNotFoundError(f"路径不存在: {abs_path}")
 
         stat = os.stat(abs_path)
 
         if os.path.isdir(abs_path):
-            return self._build_dir_info(abs_path, os.path.basename(abs_path), stat.st_mtime)
+            return self._build_dir_info(
+                abs_path, os.path.basename(abs_path), stat.st_mtime
+            )
         else:
             return self._build_file_info(abs_path, os.path.basename(abs_path), stat)
 
@@ -241,14 +271,19 @@ class FileManager:
         result: list[FileInfo] = []
         for abs_path in unique_paths:
             if not os.path.exists(abs_path):
-                log.warning(f'路径不存在，已跳过: {abs_path}')
+                log.warning(f"路径不存在，已跳过: {abs_path}")
                 continue
 
             try:
                 if os.path.isdir(abs_path):
                     # 目录递归收集其下所有非隐藏文件。
                     dir_files: list[FileInfo] = []
-                    self._scan_directory(abs_path, recursive=False, include_hidden=False, result=dir_files)
+                    self._scan_directory(
+                        abs_path,
+                        recursive=False,
+                        include_hidden=False,
+                        result=dir_files,
+                    )
                     # 只取文件，不取子目录。
                     files_only = [f for f in dir_files if not f.is_directory]
                     result.extend(files_only)
@@ -258,13 +293,17 @@ class FileManager:
                     )
                     result.append(info)
             except PermissionError as e:
-                log.warning(f'权限不足，已跳过: {abs_path}, 原因: {e}')
+                log.warning(f"权限不足，已跳过: {abs_path}, 原因: {e}")
                 continue
 
         # 按扩展名过滤。
         if allowed_extensions:
             allowed_lower = {ext.lower() for ext in allowed_extensions}
-            result = [f for f in result if f.extension and f'.{f.extension}'.lower() in allowed_lower]
+            result = [
+                f
+                for f in result
+                if f.extension and f".{f.extension}".lower() in allowed_lower
+            ]
 
         return result
 
@@ -313,15 +352,15 @@ class FileManager:
         # 媒体组文件按 max_size 切块。
         if config.send_as_album and album_compatible:
             for i in range(0, len(album_compatible), max_size):
-                chunk = album_compatible[i:i + max_size]
-                groups.append({'is_album': True, 'files': chunk})
+                chunk = album_compatible[i : i + max_size]
+                groups.append({"is_album": True, "files": chunk})
         else:
             # 如果不以媒体组发送，全部走单文件。
             single_only.extend(album_compatible)
 
         # 不支持的文件走单文件。
         for f in single_only:
-            groups.append({'is_album': False, 'files': [f]})
+            groups.append({"is_album": False, "files": [f]})
 
         return groups
 
@@ -406,39 +445,43 @@ class FileManager:
         self._check_system_path(abs_path)
 
         # 获取文件类型
-        file_info = self._build_file_info(abs_path, os.path.basename(abs_path), os.stat(abs_path))
-        telegram_type = file_info.telegram_type or 'document'
+        file_info = self._build_file_info(
+            abs_path, os.path.basename(abs_path), os.stat(abs_path)
+        )
+        telegram_type = file_info.telegram_type or "document"
 
         # 构建进度回调
         task_id = hashlib.md5(abs_path.encode()).hexdigest()[:12]
 
         async def _progress(current, total):
-            await self._progress_wrapper(task_id, abs_path, current, total, progress_callback)
+            await self._progress_wrapper(
+                task_id, abs_path, current, total, progress_callback
+            )
 
         # 根据类型调用不同的发送方法
         try:
-            if telegram_type == 'photo':
+            if telegram_type == "photo":
                 message = await self._client.send_photo(
                     chat_id=chat_id,
                     photo=abs_path,
                     caption=caption,
                     progress=_progress,
                 )
-            elif telegram_type == 'video':
+            elif telegram_type == "video":
                 message = await self._client.send_video(
                     chat_id=chat_id,
                     video=abs_path,
                     caption=caption,
                     progress=_progress,
                 )
-            elif telegram_type == 'audio':
+            elif telegram_type == "audio":
                 message = await self._client.send_audio(
                     chat_id=chat_id,
                     audio=abs_path,
                     caption=caption,
                     progress=_progress,
                 )
-            elif telegram_type == 'animation':
+            elif telegram_type == "animation":
                 message = await self._client.send_animation(
                     chat_id=chat_id,
                     animation=abs_path,
@@ -544,11 +587,11 @@ class FileManager:
 
         media_list = []
         for fi in file_infos:
-            if fi.telegram_type == 'photo':
+            if fi.telegram_type == "photo":
                 media_list.append(InputMediaPhoto(media=fi.path))
-            elif fi.telegram_type == 'video':
+            elif fi.telegram_type == "video":
                 media_list.append(InputMediaVideo(media=fi.path))
-            elif fi.telegram_type == 'audio':
+            elif fi.telegram_type == "audio":
                 media_list.append(InputMediaAudio(media=fi.path))
             else:
                 # 不支持的类型，降级处理
@@ -653,7 +696,7 @@ class FileManager:
             if res.file_path and os.path.exists(res.file_path):
                 res.deleted = await self.delete_local_file(res.file_path)
                 if not res.deleted:
-                    log.warning(f'上传后清理失败: {res.file_path}')
+                    log.warning(f"上传后清理失败: {res.file_path}")
         return results
 
     # ---------- 上传进度回调 ----------
@@ -673,7 +716,7 @@ class FileManager:
             current=current,
             total=total,
             percentage=round(current / total * 100, 2) if total else 0,
-            status='uploading',
+            status="uploading",
         )
 
         if callback:
@@ -695,10 +738,10 @@ class FileManager:
         Returns:
             file_unique_id 字符串，未找到时返回 None
         """
-        for attr in ('photo', 'video', 'document', 'audio', 'animation'):
+        for attr in ("photo", "video", "document", "audio", "animation"):
             media = getattr(message, attr, None)
             if media:
-                return getattr(media, 'file_unique_id', None)
+                return getattr(media, "file_unique_id", None)
         return None
 
     def _check_system_path(self, path: str) -> None:
@@ -707,30 +750,33 @@ class FileManager:
         normalized = abs_path.lower()
         for blacklist_path in self._SYSTEM_PATH_BLACKLIST:
             if normalized.startswith(blacklist_path.lower()):
-                raise PermissionError(f'禁止操作系统关键目录: {abs_path}')
+                raise PermissionError(f"禁止操作系统关键目录: {abs_path}")
 
     @staticmethod
     def _is_hidden(name: str) -> bool:
         """判断文件或目录是否为隐藏。
         Windows 下通过 ctypes 检查文件属性，Linux/macOS 下检查是否以 '.' 开头。
         """
-        if os.name == 'nt':
+        if os.name == "nt":
             # Windows: 使用 ctypes 检查 FILE_ATTRIBUTE_HIDDEN (0x2) 和 FILE_ATTRIBUTE_SYSTEM (0x4)。
             import ctypes
+
             try:
                 attrs = ctypes.windll.kernel32.GetFileAttributesW(name)
                 if attrs == -1:
-                    return name.startswith('.')
+                    return name.startswith(".")
                 return bool(attrs & 0x6)  # HIDDEN | SYSTEM
             except Exception:
-                return name.startswith('.')
+                return name.startswith(".")
         else:
             # Linux/macOS: 以 '.' 开头的文件视为隐藏。
-            return name.startswith('.')
+            return name.startswith(".")
 
-    def _build_file_info(self, path: str, name: str, stat_result: os.stat_result) -> FileInfo:
+    def _build_file_info(
+        self, path: str, name: str, stat_result: os.stat_result
+    ) -> FileInfo:
         """构建文件的 FileInfo。"""
-        ext = os.path.splitext(name)[1].lstrip('.').lower() if '.' in name else None
+        ext = os.path.splitext(name)[1].lstrip(".").lower() if "." in name else None
         mime_type = self._guess_mime_type(name)
         telegram_type = self._classify_telegram_type(name, mime_type)
 
@@ -767,39 +813,48 @@ class FileManager:
     @staticmethod
     def _classify_telegram_type(name: str, mime_type: str | None) -> str | None:
         """根据文件名和 MIME 类型推导 Telegram 类型。"""
-        ext = os.path.splitext(name)[1].lower() if '.' in name else ''
+        ext = os.path.splitext(name)[1].lower() if "." in name else ""
 
         # 图片类型。
-        if mime_type and mime_type.startswith('image/'):
-            if ext == '.gif':
-                return 'animation'
-            return 'photo'
+        if mime_type and mime_type.startswith("image/"):
+            if ext == ".gif":
+                return "animation"
+            return "photo"
 
         # 视频类型。
-        if mime_type and mime_type.startswith('video/'):
-            return 'video'
+        if mime_type and mime_type.startswith("video/"):
+            return "video"
 
         # 音频类型。
-        if mime_type and mime_type.startswith('audio/'):
-            return 'audio'
+        if mime_type and mime_type.startswith("audio/"):
+            return "audio"
 
         # 基于扩展名二次判断。
-        photo_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.avif', '.heic', '.heif'}
-        video_exts = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm'}
-        audio_exts = {'.mp3', '.flac', '.ogg', '.m4a', '.aac', '.opus', '.wav'}
-        animation_exts = {'.gif'}
-        sticker_exts = {'.tgs', '.webm'}  # 动态贴纸。
+        photo_exts = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".webp",
+            ".avif",
+            ".heic",
+            ".heif",
+        }
+        video_exts = {".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm"}
+        audio_exts = {".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus", ".wav"}
+        animation_exts = {".gif"}
+        sticker_exts = {".tgs", ".webm"}  # 动态贴纸。
 
         if ext in animation_exts:
-            return 'animation'
+            return "animation"
         if ext in photo_exts:
-            return 'photo'
+            return "photo"
         if ext in video_exts:
-            return 'video'
+            return "video"
         if ext in audio_exts:
-            return 'audio'
+            return "audio"
         if ext in sticker_exts:
-            return 'sticker'
+            return "sticker"
 
         # 其他均视为 document。
-        return 'document'
+        return "document"

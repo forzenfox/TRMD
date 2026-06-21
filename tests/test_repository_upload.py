@@ -16,6 +16,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 import sys
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from module.core.file_manager import (
@@ -71,13 +72,17 @@ def config_manager_disabled():
 @pytest.fixture
 def repository_manager(repo_db, config_manager_enabled):
     """提供仓库模式启用的 RepositoryManager 实例。"""
-    return RepositoryManager(repository_db=repo_db, config_manager=config_manager_enabled)
+    return RepositoryManager(
+        repository_db=repo_db, config_manager=config_manager_enabled
+    )
 
 
 @pytest.fixture
 def repository_manager_disabled(repo_db, config_manager_disabled):
     """提供仓库模式禁用的 RepositoryManager 实例。"""
-    return RepositoryManager(repository_db=repo_db, config_manager=config_manager_disabled)
+    return RepositoryManager(
+        repository_db=repo_db, config_manager=config_manager_disabled
+    )
 
 
 @pytest.fixture
@@ -91,12 +96,12 @@ def mock_client():
 def default_config():
     """默认配置字典。"""
     return {
-        'resource_limits': {
-            'memory_limit_mb': 512,
+        "resource_limits": {
+            "memory_limit_mb": 512,
         },
-        'upload': {
-            'max_group_size': 10,
-            'delete_after_upload': False,
+        "upload": {
+            "max_group_size": 10,
+            "delete_after_upload": False,
         },
     }
 
@@ -107,7 +112,9 @@ def file_manager(mock_client, default_config):
     return FileManager(config=default_config, client=mock_client)
 
 
-def _make_mock_message(file_unique_id="uid_test_001", chat_id=-1001234567890, message_id=42):
+def _make_mock_message(
+    file_unique_id="uid_test_001", chat_id=-1001234567890, message_id=42
+):
     """创建模拟的 Pyrogram Message 对象。"""
     message = MagicMock()
     message.id = message_id
@@ -127,7 +134,9 @@ def _make_mock_message(file_unique_id="uid_test_001", chat_id=-1001234567890, me
     return message
 
 
-def _make_mock_photo_message(file_unique_id="uid_photo_001", chat_id=-1001234567890, message_id=43):
+def _make_mock_photo_message(
+    file_unique_id="uid_photo_001", chat_id=-1001234567890, message_id=43
+):
     """创建模拟的 Pyrogram Photo Message 对象。"""
     message = MagicMock()
     message.id = message_id
@@ -157,7 +166,7 @@ class TestUploadResultFileUniqueId:
     def test_upload_result_has_file_unique_id_field(self):
         """UploadResult 应包含 file_unique_id 字段，默认为 None。"""
         result = UploadResult(success=True, file_path="/tmp/test.jpg")
-        assert hasattr(result, 'file_unique_id')
+        assert hasattr(result, "file_unique_id")
         assert result.file_unique_id is None
 
     def test_upload_result_with_file_unique_id(self):
@@ -200,7 +209,9 @@ class TestFileManagerRepositoryIntegration:
         assert result.file_unique_id == "uid_photo_001"
 
     @pytest.mark.asyncio
-    async def test_upload_document_includes_file_unique_id(self, file_manager, tmp_path):
+    async def test_upload_document_includes_file_unique_id(
+        self, file_manager, tmp_path
+    ):
         """FM-REPO-02: 上传文档后 UploadResult 应包含 file_unique_id。"""
         test_file = tmp_path / "test.pdf"
         test_file.write_bytes(b"fake pdf data")
@@ -227,11 +238,13 @@ class TestFileManagerRepositoryIntegration:
         assert result.file_unique_id is None
 
     @pytest.mark.asyncio
-    async def test_file_manager_repository_manager_attribute(self, file_manager, repository_manager):
+    async def test_file_manager_repository_manager_attribute(
+        self, file_manager, repository_manager
+    ):
         """FM-REPO-04: FileManager 应支持设置 repository_manager 属性。"""
-        assert hasattr(file_manager, 'repository_manager')
+        assert hasattr(file_manager, "repository_manager")
         fm = FileManager(
-            config={'resource_limits': {'memory_limit_mb': 512}, 'upload': {}},
+            config={"resource_limits": {"memory_limit_mb": 512}, "upload": {}},
             client=AsyncMock(),
         )
         assert fm.repository_manager is None
@@ -356,7 +369,7 @@ class TestRepositoryManagerBackwardCompat:
     async def test_file_manager_no_repository_manager(self, tmp_path):
         """BC-01: FileManager 无 repository_manager 时正常工作。"""
         fm = FileManager(
-            config={'resource_limits': {'memory_limit_mb': 512}, 'upload': {}},
+            config={"resource_limits": {"memory_limit_mb": 512}, "upload": {}},
             client=AsyncMock(),
         )
         assert fm.repository_manager is None
@@ -371,7 +384,9 @@ class TestRepositoryManagerBackwardCompat:
         assert result.success is True
 
     @pytest.mark.asyncio
-    async def test_file_manager_repository_disabled(self, file_manager, repository_manager_disabled, tmp_path):
+    async def test_file_manager_repository_disabled(
+        self, file_manager, repository_manager_disabled, tmp_path
+    ):
         """BC-02: 仓库模式禁用时 FileManager 正常工作，无仓库副作用。"""
         file_manager.repository_manager = repository_manager_disabled
         test_file = tmp_path / "test_disabled.jpg"
@@ -393,7 +408,9 @@ class TestUploaderRepositoryIntegration:
     """验证 TelegramUploader 与 RepositoryManager 的集成。"""
 
     @pytest.mark.asyncio
-    async def test_repository_manager_on_upload_success_called(self, repository_manager):
+    async def test_repository_manager_on_upload_success_called(
+        self, repository_manager
+    ):
         """UP-REPO-02: on_upload_success 应正确写入仓库记录。"""
         mock_message = _make_mock_message(
             file_unique_id="uid_callback_test",
@@ -433,7 +450,9 @@ class TestUploaderRepositoryIntegration:
         assert result.file_type == "photo"
 
     @pytest.mark.asyncio
-    async def test_repository_manager_on_upload_success_no_media(self, repository_manager):
+    async def test_repository_manager_on_upload_success_no_media(
+        self, repository_manager
+    ):
         """UP-REPO-04: on_upload_success 对无媒体消息应安全跳过。"""
         mock_message = MagicMock()
         mock_message.id = 502
@@ -466,7 +485,9 @@ class TestDownloaderRepositoryIntegration:
         """DL-REPO-01: 仓库模式启用时 should_use_repository 返回 True。"""
         assert repository_manager.should_use_repository() is True
 
-    def test_repository_manager_should_not_use_when_disabled(self, repository_manager_disabled):
+    def test_repository_manager_should_not_use_when_disabled(
+        self, repository_manager_disabled
+    ):
         """DL-REPO-02: 仓库模式禁用时 should_use_repository 返回 False。"""
         assert repository_manager_disabled.should_use_repository() is False
 
@@ -475,7 +496,9 @@ class TestDownloaderRepositoryIntegration:
         chat_id = repository_manager.get_repository_chat_id()
         assert chat_id == "-1001234567890"
 
-    def test_repository_manager_get_chat_id_when_disabled(self, repository_manager_disabled):
+    def test_repository_manager_get_chat_id_when_disabled(
+        self, repository_manager_disabled
+    ):
         """DL-REPO-04: 仓库模式禁用时 get_repository_chat_id 返回 None。"""
         chat_id = repository_manager_disabled.get_repository_chat_id()
         assert chat_id is None
@@ -513,7 +536,9 @@ class TestDistributeIntegration:
         mock_client.copy_message.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_distribute_to_target_fallback_on_copy_failure(self, repository_manager, repo_db):
+    async def test_distribute_to_target_fallback_on_copy_failure(
+        self, repository_manager, repo_db
+    ):
         """DIST-02: copy_message 失败时降级为 file_id_send。"""
         mock_message = _make_mock_message(
             file_unique_id="uid_dist_fallback",
@@ -544,7 +569,9 @@ class TestDistributeIntegration:
         assert result == 701
 
     @pytest.mark.asyncio
-    async def test_distribute_to_target_returns_none_when_all_fail(self, repository_manager, repo_db):
+    async def test_distribute_to_target_returns_none_when_all_fail(
+        self, repository_manager, repo_db
+    ):
         """DIST-03: 所有分发方式都失败时返回 None。"""
         mock_message = _make_mock_message(
             file_unique_id="uid_dist_all_fail",

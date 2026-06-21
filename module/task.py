@@ -16,17 +16,13 @@ import pyrogram
 
 from module import console, log
 from module.language import _t
-from module.stdio import MetaData
+from module.utils.stdio import MetaData
 from module.parser import PARSE_ARGS
-from module.path_tool import (
+from module.utils.path_tool import (
     safe_delete,
     calc_sha256,
 )
-from module.enums import (
-    DownloadStatus,
-    UploadStatus,
-    KeyWord
-)
+from module.enums import DownloadStatus, UploadStatus, KeyWord
 
 
 class DownloadTask:
@@ -34,47 +30,54 @@ class DownloadTask:
     COMPLETE_LINK: set = set()
 
     def __init__(
-            self,
-            link: str,
-            link_type: Union[str, None],
-            member_num: int,
-            complete_num: int,
-            file_name: set,
-            error_msg: dict
+        self,
+        link: str,
+        link_type: Union[str, None],
+        member_num: int,
+        complete_num: int,
+        file_name: set,
+        error_msg: dict,
     ):
         DownloadTask.LINK_INFO[link] = {
-            'link_type': link_type,
-            'member_num': member_num,
-            'complete_num': complete_num,
-            'file_name': file_name,
-            'error_msg': error_msg
+            "link_type": link_type,
+            "member_num": member_num,
+            "complete_num": complete_num,
+            "file_name": file_name,
+            "error_msg": error_msg,
         }
 
     def on_create_task(func):
         @wraps(func)
         async def wrapper(self, *args, **kwargs):
-            message_ids = kwargs.get('message_ids')
+            message_ids = kwargs.get("message_ids")
             link = message_ids
             if isinstance(message_ids, pyrogram.types.Message):
                 link = message_ids.link if message_ids.link else message_ids.id
-            DownloadTask(link=link, link_type=None, member_num=0, complete_num=0, file_name=set(), error_msg={})
+            DownloadTask(
+                link=link,
+                link_type=None,
+                member_num=0,
+                complete_num=0,
+                file_name=set(),
+                error_msg={},
+            )
             res: dict = await func(self, *args, **kwargs)
             chat_id, link_type, member_num, status, e_code = res.values()
             if status == DownloadStatus.FAILURE:
-                DownloadTask.set(link=link, key='error_msg', value=e_code)
-                reason: str = e_code.get('error_msg')
+                DownloadTask.set(link=link, key="error_msg", value=e_code)
+                reason: str = e_code.get("error_msg")
                 if reason:
                     log.error(
-                        f'{_t(KeyWord.DOWNLOAD_TASK)}'
+                        f"{_t(KeyWord.DOWNLOAD_TASK)}"
                         f'{_t(KeyWord.LINK)}:"{link}"{reason},'
                         f'{_t(KeyWord.REASON)}:"{e_code.get("all_member")}",'
-                        f'{_t(KeyWord.STATUS)}:{_t(DownloadStatus.FAILURE)}。'
+                        f"{_t(KeyWord.STATUS)}:{_t(DownloadStatus.FAILURE)}。"
                     )
                 else:
                     log.warning(
-                        f'{_t(KeyWord.DOWNLOAD_TASK)}'
+                        f"{_t(KeyWord.DOWNLOAD_TASK)}"
                         f'{_t(KeyWord.LINK)}:"{link}"{e_code.get("all_member")},'
-                        f'{_t(KeyWord.STATUS)}:{_t(DownloadStatus.FAILURE)}。'
+                        f"{_t(KeyWord.STATUS)}:{_t(DownloadStatus.FAILURE)}。"
                     )
             elif status == DownloadStatus.DOWNLOADING:
                 pass
@@ -94,16 +97,16 @@ class DownloadTask:
                 compare_link: str = i[0]
                 info: dict = i[1]
                 if compare_link == link:
-                    info['complete_num'] = len(info.get('file_name'))
-            all_num: int = DownloadTask.get(link=link, key='member_num')
-            complete_num: int = DownloadTask.get(link=link, key='complete_num')
+                    info["complete_num"] = len(info.get("file_name"))
+            all_num: int = DownloadTask.get(link=link, key="member_num")
+            complete_num: int = DownloadTask.get(link=link, key="complete_num")
             if all_num == complete_num:
                 console.log(
-                    f'{_t(KeyWord.DOWNLOAD_TASK)}'
+                    f"{_t(KeyWord.DOWNLOAD_TASK)}"
                     f'{_t(KeyWord.LINK)}:"{link}",'
-                    f'{_t(KeyWord.STATUS)}:{_t(DownloadStatus.SUCCESS)}。'
+                    f"{_t(KeyWord.STATUS)}:{_t(DownloadStatus.SUCCESS)}。"
                 )
-                DownloadTask.LINK_INFO.get(link)['error_msg'] = {}
+                DownloadTask.LINK_INFO.get(link)["error_msg"] = {}
                 DownloadTask.COMPLETE_LINK.add(link)
                 asyncio.create_task(self.done_notice(f'"{link}"下载完成。'))
             return res
@@ -112,7 +115,7 @@ class DownloadTask:
 
     @staticmethod
     def add_file_name(link, file_name):
-        DownloadTask.LINK_INFO.get(link).get('file_name').add(file_name)
+        DownloadTask.LINK_INFO.get(link).get("file_name").add(file_name)
 
     @staticmethod
     def get(link: str, key: str) -> Union[str, int, set, dict, None]:
@@ -124,31 +127,35 @@ class DownloadTask:
 
     @staticmethod
     def set_error(link: str, value, key: Union[str, None] = None):
-        DownloadTask.LINK_INFO.get(link).get('error_msg')[key if key else 'all_member'] = value
+        DownloadTask.LINK_INFO.get(link).get("error_msg")[
+            key if key else "all_member"
+        ] = value
 
 
 class UploadTask:
-    DIRECTORY_NAME: str = PARSE_ARGS.temp or os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), 'temp')
+    DIRECTORY_NAME: str = PARSE_ARGS.temp or os.path.join(
+        os.path.dirname(os.path.abspath(sys.argv[0])), "temp"
+    )
     PART_SIZE: int = 512 * 1024
     TASKS: set = set()
     TASK_COUNTER: int = 0
     NOTIFY: Optional[Callable] = None
 
     def __init__(
-            self,
-            chat_id: Union[str, int, None],
-            file_path: str,
-            file_id: int,
-            file_size: int,
-            file_part: Union[list],
-            status: Union[UploadStatus, str],
-            error_msg: Union[str, None] = None,
-            with_delete: bool = False,
-            media_group: Optional[asyncio.Task] = None,
-            message_id: Optional[int] = None,
-            send_as_media_group: bool = False,
-            source_chat_id: Optional[int] = None,
-            source_message_id: Optional[int] = None
+        self,
+        chat_id: Union[str, int, None],
+        file_path: str,
+        file_id: int,
+        file_size: int,
+        file_part: Union[list],
+        status: Union[UploadStatus, str],
+        error_msg: Union[str, None] = None,
+        with_delete: bool = False,
+        media_group: Optional[asyncio.Task] = None,
+        message_id: Optional[int] = None,
+        send_as_media_group: bool = False,
+        source_chat_id: Optional[int] = None,
+        source_message_id: Optional[int] = None,
     ):
         UploadTask.TASKS.add(self)
         UploadTask.TASK_COUNTER += 1
@@ -168,62 +175,67 @@ class UploadTask:
         self.source_chat_id: Optional[int] = source_chat_id
         self.source_message_id: Optional[int] = source_message_id
         self.sha256: str = calc_sha256(file_path=self.file_path)
-        self.prompt: str = ''
+        self.prompt: str = ""
 
     def __setattr__(self, name, value):
-        if name.startswith('_'):
+        if name.startswith("_"):
             super().__setattr__(name, value)
         else:
             if hasattr(self, name):
                 old_value = getattr(self, name)
                 if old_value != value:
                     super().__setattr__(name, value)
-                    if name == 'status':
+                    if name == "status":
                         if value == UploadStatus.PENDING:
                             pass
                         elif value == UploadStatus.UPLOADING:
                             console.log(
-                                f'{_t(KeyWord.UPLOAD_TASK)}'
+                                f"{_t(KeyWord.UPLOAD_TASK)}"
                                 f'{_t(KeyWord.CHANNEL)}:"{self.chat_id}",'
                                 f'{_t(KeyWord.FILE)}:"{self.file_path}",'
-                                f'{_t(KeyWord.SIZE)}:{MetaData.suitable_units_display(self.file_size)},'
-                                f'{_t(KeyWord.STATUS)}:{_t(UploadStatus.UPLOADING)}。'
+                                f"{_t(KeyWord.SIZE)}:{MetaData.suitable_units_display(self.file_size)},"
+                                f"{_t(KeyWord.STATUS)}:{_t(UploadStatus.UPLOADING)}。"
                             )
                         elif value == UploadStatus.SUCCESS:
-                            more = ''
+                            more = ""
                             if self.send_as_media_group:
-                                more += f'(等待所有媒体上传完成以媒体组发送)'
+                                more += f"(等待所有媒体上传完成以媒体组发送)"
                             if self.with_delete:
-                                more += '(本地文件已删除)'
+                                more += "(本地文件已删除)"
                             console.log(
-                                f'{_t(KeyWord.UPLOAD_TASK)}'
+                                f"{_t(KeyWord.UPLOAD_TASK)}"
                                 f'{_t(KeyWord.CHANNEL)}:"{self.chat_id}",'
                                 f'{_t(KeyWord.FILE)}:"{self.file_path}",'
-                                f'{_t(KeyWord.SIZE)}:{MetaData.suitable_units_display(self.file_size)},'
-                                f'{_t(KeyWord.STATUS)}:{_t(UploadStatus.SUCCESS)}{more}。',
+                                f"{_t(KeyWord.SIZE)}:{MetaData.suitable_units_display(self.file_size)},"
+                                f"{_t(KeyWord.STATUS)}:{_t(UploadStatus.SUCCESS)}{more}。",
                             )
-                            self.notice(f'"{self.file_path}" ⬆️ "{self.chat_id}"上传完成。\n{more}')
+                            self.notice(
+                                f'"{self.file_path}" ⬆️ "{self.chat_id}"上传完成。\n{more}'
+                            )
                         elif value == UploadStatus.SENT:
                             pass
                         elif value == UploadStatus.FAILURE:
                             log.error(
-                                f'{_t(KeyWord.UPLOAD_TASK)}'
+                                f"{_t(KeyWord.UPLOAD_TASK)}"
                                 f'{_t(KeyWord.CHANNEL)}:"{self.chat_id}",'
                                 f'{_t(KeyWord.FILE)}:"{self.file_path}",'
-                                f'{_t(KeyWord.SIZE)}:{MetaData.suitable_units_display(self.file_size)},'
+                                f"{_t(KeyWord.SIZE)}:{MetaData.suitable_units_display(self.file_size)},"
                                 f'{_t(KeyWord.REASON)}:"{self.error_msg}",'
-                                f'{_t(KeyWord.STATUS)}:{_t(str(value))}。'
+                                f"{_t(KeyWord.STATUS)}:{_t(str(value))}。"
                             )
-                            self.notice(f'"{self.file_path}" ⬆️ "{self.chat_id}"上传失败。')
-                    elif name == 'chat_id':
+                            self.notice(
+                                f'"{self.file_path}" ⬆️ "{self.chat_id}"上传失败。'
+                            )
+                    elif name == "chat_id":
                         if value:
                             self.upload_manager_path: str = os.path.join(
-                                UploadTask.DIRECTORY_NAME,
-                                f'{self.sha256}.json'
+                                UploadTask.DIRECTORY_NAME, f"{self.sha256}.json"
                             )
-                        os.makedirs(os.path.dirname(self.upload_manager_path), exist_ok=True)
+                        os.makedirs(
+                            os.path.dirname(self.upload_manager_path), exist_ok=True
+                        )
                         self.load_json()
-                    elif name == 'prompt':
+                    elif name == "prompt":
                         self.notice(self.prompt)
 
             else:
@@ -241,11 +253,7 @@ class UploadTask:
 
     def notice(self, message: str):
         if isinstance(self.NOTIFY, Callable):
-            asyncio.create_task(
-                self.NOTIFY(
-                    message
-                )
-            )
+            asyncio.create_task(self.NOTIFY(message))
 
     @property
     def complete_task(self) -> int:
@@ -256,35 +264,37 @@ class UploadTask:
         return len(complete)
 
     def save_json(self):
-        with open(file=self.upload_manager_path, mode='w', encoding='UTF-8') as f:
+        with open(file=self.upload_manager_path, mode="w", encoding="UTF-8") as f:
             json.dump(
                 obj={
-                    'file_id': self.file_id,
-                    'file_size': self.file_size,
-                    'file_part': self.file_part,
-                    'file_total_parts': self.file_total_parts
+                    "file_id": self.file_id,
+                    "file_size": self.file_size,
+                    "file_part": self.file_part,
+                    "file_total_parts": self.file_total_parts,
                 },
                 fp=f,
                 ensure_ascii=False,
-                indent=4
+                indent=4,
             )
 
     def load_json(self):
         if not os.path.exists(self.upload_manager_path):
             self.save_json()
             return
-        with open(file=self.upload_manager_path, mode='r', encoding='UTF-8') as f:
+        with open(file=self.upload_manager_path, mode="r", encoding="UTF-8") as f:
             _json: dict = {}
             try:
                 _json = json.load(f)
             except Exception as e:
-                log.info(f'UploadManager的json内容可能为空,即将重新生成,{_t(KeyWord.REASON)}:"{e}"')
+                log.info(
+                    f'UploadManager的json内容可能为空,即将重新生成,{_t(KeyWord.REASON)}:"{e}"'
+                )
                 safe_delete(self.upload_manager_path)
                 self.save_json()
-        self.file_id = _json.get('file_id', self.file_id)
-        self.file_size = _json.get('file_size', self.file_size)
-        self.file_part = _json.get('file_part', self.file_part)
-        self.file_total_parts = _json.get('file_total_parts', self.file_total_parts)
+        self.file_id = _json.get("file_id", self.file_id)
+        self.file_size = _json.get("file_size", self.file_size)
+        self.file_part = _json.get("file_part", self.file_part)
+        self.file_total_parts = _json.get("file_total_parts", self.file_total_parts)
 
     def update_file_part(self, file_part: int):
         if file_part not in self.file_part and file_part < self.file_total_parts:
@@ -295,7 +305,10 @@ class UploadTask:
     def has_pending_media_group_tasks() -> bool:
         """检查是否还有IDLE或UPLOADING状态且属于媒体组的任务。"""
         for task in UploadTask.TASKS:
-            if task.status in (UploadStatus.PENDING, UploadStatus.UPLOADING) and task.is_media_group:
+            if (
+                task.status in (UploadStatus.PENDING, UploadStatus.UPLOADING)
+                and task.is_media_group
+            ):
                 return True
         return False
 
@@ -323,19 +336,25 @@ class UploadTask:
         """获取缺失的分片索引。"""
         valid_parts = []
         for part in self.file_part:
-            if isinstance(part, int) and 0 <= part < self.file_total_parts and part not in valid_parts:
+            if (
+                isinstance(part, int)
+                and 0 <= part < self.file_total_parts
+                and part not in valid_parts
+            ):
                 valid_parts.append(part)
             else:
-                log.info(f'过滤无效分片索引:{part}(有效范围:0-{self.file_total_parts - 1})。')
+                log.info(
+                    f"过滤无效分片索引:{part}(有效范围:0-{self.file_total_parts - 1})。"
+                )
 
         if len(valid_parts) != len(self.file_part):
             self.file_part = valid_parts
             self.save_json()
-            log.info(f'清理后的分片索引:{valid_parts}。')
+            log.info(f"清理后的分片索引:{valid_parts}。")
 
         all_parts = set(range(self.file_total_parts))
         uploaded_parts = set(valid_parts)
         missing_parts = sorted(list(all_parts - uploaded_parts))
 
-        log.info(f'总需分片:{all_parts},已上传:{uploaded_parts},缺失:{missing_parts}。')
+        log.info(f"总需分片:{all_parts},已上传:{uploaded_parts},缺失:{missing_parts}。")
         return missing_parts
