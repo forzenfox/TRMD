@@ -2783,40 +2783,6 @@ class TelegramRestrictedMediaDownloader(Bot):
             log.warning(f"仓库模式初始化失败，将使用普通模式: {e}")
             self.repository_manager = None
 
-    def __process_links(self, link: Union[str, list]) -> Union[set, None]:
-        """将链接(文本格式或链接)处理成集合。"""
-        start_content: str = "https://t.me/"
-        links: set = set()
-        if isinstance(link, str):
-            if link.endswith(".txt") and os.path.isfile(link):
-                with open(file=link, mode="r", encoding="UTF-8") as _:
-                    _links: list = [content.strip() for content in _.readlines()]
-                for i in _links:
-                    if i.startswith(start_content):
-                        links.add(i)
-                        self.bot_task_link.add(i)
-                    elif i == "" or "#":
-                        continue
-                    else:
-                        log.warning(
-                            f'"{i}"是一个非法链接,{_t(KeyWord.STATUS)}:{_t(DownloadStatus.SKIP)}。'
-                        )
-            elif link.startswith(start_content):
-                links.add(link)
-        elif isinstance(link, list):
-            for i in link:
-                _link: Union[set, None] = self.__process_links(link=i)
-                if _link is not None:
-                    links.update(_link)
-        if links:
-            return links
-        elif not self.app.bot_token:
-            console.log("🔗 没有找到有效链接,程序已退出。", style="#FF4689")
-            sys.exit(1)
-        else:
-            console.log("🔗 没有找到有效链接。", style="#FF4689")
-            return None
-
     def __retry_call(self, notice, _future):
         self.queue.task_done()
         console.log(notice, style="#FF4689")
@@ -2856,14 +2822,6 @@ class TelegramRestrictedMediaDownloader(Bot):
                     )
         self.is_running = True
         self.running_log.add(self.is_running)
-        links: Union[set, None] = self.__process_links(link=self.app.links)
-        # 将初始任务添加到队列中。
-        [
-            await self.loop.create_task(
-                self.create_download_task(message_ids=link, retry=None)
-            )
-            for link in sorted(links)
-        ] if links else None
         # 处理队列中的任务与机器人事件。
         while not self.queue.empty() or self.is_bot_running:
             result = await self.queue.get()

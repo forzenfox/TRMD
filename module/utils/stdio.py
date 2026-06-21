@@ -36,7 +36,6 @@ from module.enums import (
     UploadStatus,
     KeyWord,
     GradientColor,
-    ProcessConfig,
     Banner,
 )
 
@@ -70,6 +69,15 @@ class StatisticalTable:
             self.failure_animation,
             self.failure_video_note,
         ) = set(), set(), set(), set(), set(), set(), set()
+
+    @staticmethod
+    def get_dtype(download_dtype: list) -> dict:
+        """获取所需下载文件的类型。"""
+        meta: dict = {}
+        support_dtype: list = [_ for _ in DownloadType()]
+        for dtype in download_dtype:
+            meta[dtype] = True if dtype in support_dtype else False
+        return meta
 
     def print_count_table(
         self,
@@ -481,57 +489,37 @@ class StatisticalTable:
         except Exception as e:
             log.error(f'打印代理配置表时出错,{_t(KeyWord.REASON)}:"{e}"')
         try:
-            # 展示链接内容表格。
-            with open(file=app.links, mode="r", encoding="UTF-8") as _:
-                res: list = [
-                    content.strip() for content in _.readlines() if content.strip()
-                ]
-            if res:
-                format_res: list = []
-                for i in enumerate(res, start=1):
-                    format_res.append(list(i))
-                link_table = PanelTable(
-                    title="链接内容", header=("编号", "链接"), data=format_res
-                )
-                link_table.print_meta()
-        except FileNotFoundError:
-            log.warning("无法读取媒体链接文件,可能已被删除。")
-        except (PermissionError, AttributeError) as e:  # v1.1.3 用户错误填写路径提示。
-            log.error(f'读取"{app.links}"时出错,{_t(KeyWord.REASON)}:"{e}"')
-        except Exception as e:
-            log.error(f'打印链接内容统计表时出错,{_t(KeyWord.REASON)}:"{e}"')
-        try:
             _dtype: list = (
                 app.download_type.copy()
             )  # 浅拷贝赋值给_dtype,避免传入函数后改变原数据。
             data: list = [
                 [
                     _t(DownloadType.VIDEO),
-                    ProcessConfig.get_dtype(_dtype).get("video", False),
+                    StatisticalTable.get_dtype(_dtype).get("video", False),
                 ],
                 [
                     _t(DownloadType.PHOTO),
-                    ProcessConfig.get_dtype(_dtype).get("photo", False),
+                    StatisticalTable.get_dtype(_dtype).get("photo", False),
                 ],
                 [
                     _t(DownloadType.DOCUMENT),
-                    ProcessConfig.get_dtype(_dtype).get("document", False),
+                    StatisticalTable.get_dtype(_dtype).get("document", False),
                 ],
                 [
                     _t(DownloadType.AUDIO),
-                    ProcessConfig.get_dtype(_dtype).get("audio", False),
+                    StatisticalTable.get_dtype(_dtype).get("audio", False),
                 ],
                 [
                     _t(DownloadType.VOICE),
-                    ProcessConfig.get_dtype(_dtype).get("voice", False),
+                    StatisticalTable.get_dtype(_dtype).get("voice", False),
                 ],
                 [
                     _t(DownloadType.ANIMATION),
-                    ProcessConfig.get_dtype(_dtype).get("animation", False),
+                    StatisticalTable.get_dtype(_dtype).get("animation", False),
                 ],
                 [
                     _t(DownloadType.VIDEO_NOTE),
-                    ProcessConfig.get_dtype(_dtype).get("video_note", False),
+                    StatisticalTable.get_dtype(_dtype).get("video_note", False),
                 ],
             ]
             download_type_table = PanelTable(

@@ -26,7 +26,7 @@ from module import (
 from module.language import _t
 from module.parser import PARSE_ARGS
 from module.utils.path_tool import gen_backup_config, safe_scan_directory_file
-from module.enums import KeyWord, GetStdioParams, ProcessConfig
+from module.enums import KeyWord
 
 
 class BaseConfig:
@@ -54,11 +54,11 @@ class BaseConfig:
             target.pop(key)
             console.log(log_message.format(key))
 
-    def process_nesting(self, param_name: Union[str, dict], config):
-        param_template = self.TEMPLATE.get(param_name)
+    def process_nesting(self, param_name: Union[str, dict], config, template=None):
+        param_template = (template or self.TEMPLATE).get(param_name)
         param_length = len(param_template)
         if param_name in config:
-            param_template = self.TEMPLATE.get(param_name)
+            param_template = (template or self.TEMPLATE).get(param_name)
             param_config = config.get(param_name)
             if not isinstance(param_config, dict) or (
                 isinstance(param_config, dict) and len(param_config) != param_length
@@ -153,7 +153,6 @@ class UserConfig(BaseConfig):
             "password": None,
         },
         "task": {
-            "links": None,
             "save_directory": None,  # v1.3.0 将配置文件中save_path的参数名修改为save_directory。
             "temp_directory": None,
             "session_directory": None,
@@ -203,7 +202,6 @@ class UserConfig(BaseConfig):
             "username": None,
             "password": None,
         },
-        "links": None,
         "save_directory": None,
         "temp_directory": None,
         "max_tasks": {"download": None, "upload": None},
@@ -273,7 +271,6 @@ class UserConfig(BaseConfig):
         self.get_last_history_record()
         self.is_change_account: bool = True
         self.re_config: bool = False
-        self.config_guide()
         self.config: dict = self.load_config()  # v1.3.0 修复重复询问重新配置文件。
         # 从分组结构中读取属性
         credential: dict = self.config.get("credential", {})
@@ -283,7 +280,6 @@ class UserConfig(BaseConfig):
         task: dict = self.config.get("task", {})
         self.download_type: list = task.get("download_type")
         self.is_shutdown: bool = task.get("is_shutdown")
-        self.links: str = task.get("links")
         self.max_download_task: int = (task.get("max_tasks") or {"download": 3}).get(
             "download"
         )
@@ -416,14 +412,16 @@ class UserConfig(BaseConfig):
         # task 分组（含嵌套子分组）
         self.process_nesting(param_name="task", config=config)
         if "task" in config and isinstance(config["task"], dict):
-            self.process_nesting(param_name="max_tasks", config=config["task"])
-            self.process_nesting(param_name="max_retries", config=config["task"])
+            task_template = UserConfig.TEMPLATE.get("task", {})
+            self.process_nesting(param_name="max_tasks", config=config["task"], template=task_template)
+            self.process_nesting(param_name="max_retries", config=config["task"], template=task_template)
         # preference 分组（含嵌套子分组）
         self.process_nesting(param_name="preference", config=config)
         if "preference" in config and isinstance(config["preference"], dict):
-            self.process_nesting(param_name="forward_type", config=config["preference"])
-            self.process_nesting(param_name="upload", config=config["preference"])
-            self.process_nesting(param_name="export_table", config=config["preference"])
+            pref_template = UserConfig.TEMPLATE.get("preference", {})
+            self.process_nesting(param_name="forward_type", config=config["preference"], template=pref_template)
+            self.process_nesting(param_name="upload", config=config["preference"], template=pref_template)
+            self.process_nesting(param_name="export_table", config=config["preference"], template=pref_template)
         # log 分组
         self.process_nesting(param_name="log", config=config)
         # repository 分组
@@ -496,272 +494,6 @@ class UserConfig(BaseConfig):
             console.log(f'原来的配置文件已备份至"{backup_path}"', style="#B1DB74")
         else:
             console.log("配置文件与模板文件完全一致,无需备份。")
-
-    def config_guide(self) -> None:
-        """引导用户以交互式的方式修改、保存配置文件。"""
-        exit_flag: bool = False
-        pre_load_config: dict = self.load_config()
-        gsp = GetStdioParams()
-        # v1.1.0 更替api_id和api_hash位置,与telegram申请的api位置对应以免输错。
-        try:
-            if not self.modified and pre_load_config != UserConfig.TEMPLATE:
-                re_config: bool = (
-                    False
-                    if PARSE_ARGS.quiet
-                    else gsp.get_is_re_config().get("is_re_config")
-                )
-                if re_config:
-                    self.re_config = re_config
-                    # 缓存原有的session_directory，防止重新配置时丢失。
-                    origin_session_directory = pre_load_config.get("task", {}).get(
-                        "session_directory"
-                    )
-                    pre_load_config: dict = copy.deepcopy(UserConfig.TEMPLATE)
-                    self.backup_config(
-                        backup_config=pre_load_config, error_config=False, force=True
-                    )
-                    self.get_last_history_record()  # 更新到上次填写的记录。
-                    if not PARSE_ARGS.session:
-                        self.is_change_account = gsp.get_is_change_account(
-                            valid_format="y|n"
-                        ).get("is_change_account")
-                        if self.is_change_account:
-                            pre_load_config["task"]["session_directory"] = (
-                                gsp.get_session_directory().get("session_directory")
-                            )
-                        else:
-                            pre_load_config["task"]["session_directory"] = (
-                                origin_session_directory
-                            )
-            _credential: dict = pre_load_config.get("credential", {})
-            _task: dict = pre_load_config.get("task", {})
-            _api_id: Union[str, None] = _credential.get("api_id")
-            _api_hash: Union[str, None] = _credential.get("api_hash")
-            _bot_token: Union[str, None] = _credential.get("bot_token")
-            _links: Union[str, None] = _task.get("links")
-            _save_directory: Union[str, None] = _task.get("save_directory")
-            _max_download_task: Union[int, None] = (
-                _task.get("max_tasks") or {"download": 3}
-            ).get("download")
-            _max_download_retries: Union[int, None] = (
-                _task.get("max_retries") or {"download": 5}
-            ).get("download")
-            _download_type: Union[list, None] = _task.get("download_type")
-            _is_shutdown: Union[bool, None] = _task.get("is_shutdown")
-            _proxy_config: dict = pre_load_config.get("proxy", {})
-            _enable_proxy: Union[str, bool] = _proxy_config.get("enable_proxy", False)
-            _proxy_scheme: Union[str, bool] = _proxy_config.get("scheme", False)
-            _proxy_hostname: Union[str, bool] = _proxy_config.get("hostname", False)
-            _proxy_port: Union[str, bool] = _proxy_config.get("port", False)
-            _proxy_username: Union[str, bool] = _proxy_config.get("username", False)
-            _proxy_password: Union[str, bool] = _proxy_config.get("password", False)
-            proxy_record: dict = self.last_record.get("proxy", {})  # proxy的历史记录。
-            # 历史记录可能是旧版扁平结构，需要兼容
-            _last_credential: dict = self.last_record.get("credential", {})
-            _last_task: dict = self.last_record.get("task", {})
-            enable_bot: bool = False  # 是否打开机器人。
-            if any(
-                [
-                    not _api_id,
-                    not _api_hash,
-                    not _save_directory,
-                    not _max_download_task,
-                    not _download_type,
-                ]
-            ):
-                console.print("「注意」直接回车代表使用上次的记录。", style="#B1DB74")
-            if (
-                self.is_change_account
-                or _api_id is None
-                or _api_hash is None
-                or self.re_config
-            ):
-                if not _api_id:
-                    api_id, record_flag = gsp.get_api_id(
-                        last_record=_last_credential.get("api_id")
-                        or self.last_record.get("api_id")
-                    ).values()
-                    if record_flag:
-                        self.record_flag = record_flag
-                        _credential["api_id"] = api_id
-                if not _api_hash:
-                    api_hash, record_flag = gsp.get_api_hash(
-                        last_record=_last_credential.get("api_hash")
-                        or self.last_record.get("api_hash"),
-                        valid_length=32,
-                    ).values()
-                    if record_flag:
-                        self.record_flag = record_flag
-                        _credential["api_hash"] = api_hash
-            if not _bot_token and self.re_config:
-                enable_bot: bool = gsp.get_enable_bot(valid_format="y|n").get(
-                    "enable_bot"
-                )
-                if enable_bot:
-                    bot_token, record_flag = gsp.get_bot_token(
-                        last_record=_last_credential.get("bot_token")
-                        or self.last_record.get("bot_token"),
-                        valid_format=":",
-                    ).values()
-                    if record_flag:
-                        self.record_flag = record_flag
-                        _credential["bot_token"] = bot_token
-            if not _links or not _bot_token and self.re_config:
-                links, record_flag = gsp.get_links(
-                    last_record=_last_task.get("links")
-                    or self.last_record.get("links"),
-                    valid_format=".txt",
-                    enable_bot=True if enable_bot else False,
-                ).values()
-                if record_flag:
-                    self.record_flag = record_flag
-                    _task["links"] = links
-            if not _save_directory or self.re_config:
-                save_directory, record_flag = gsp.get_save_directory(
-                    last_record=_last_task.get("save_directory")
-                    or self.last_record.get("save_directory")
-                ).values()
-                if record_flag:
-                    self.record_flag = record_flag
-                    _task["save_directory"] = save_directory
-            if not _max_download_task or self.re_config:
-                max_download_task, record_flag = gsp.get_max_download_task(
-                    last_record=(
-                        _last_task.get("max_tasks")
-                        or self.last_record.get("max_tasks")
-                        or {"download": 3}
-                    ).get("download")
-                ).values()
-                if record_flag:
-                    self.record_flag = record_flag
-                    _task.get("max_tasks", {})["download"] = max_download_task
-            if not _max_download_retries or self.re_config:
-                max_retry_count, record_flag = gsp.get_max_retry_count(
-                    last_record=(
-                        _last_task.get("max_retries")
-                        or self.last_record.get("max_retries")
-                        or {"download": 5}
-                    ).get("download")
-                ).values()
-                if record_flag:
-                    self.record_flag = record_flag
-                    _task.get("max_retries", {})["download"] = max_retry_count
-            if not _download_type or self.re_config:
-                download_type, record_flag = gsp.get_download_type(
-                    last_record=_last_task.get("download_type")
-                    or self.last_record.get("download_type")
-                ).values()
-                if record_flag:
-                    self.record_flag = record_flag
-                    _task["download_type"] = download_type
-            if _is_shutdown is None or self.re_config:
-                is_shutdown, _is_shutdown_record_flag = gsp.get_is_shutdown(
-                    last_record=_last_task.get("is_shutdown")
-                    or self.last_record.get("is_shutdown"),
-                    valid_format="y|n",
-                ).values()
-                if _is_shutdown_record_flag:
-                    self.record_flag = True
-                    _task["is_shutdown"] = is_shutdown
-            # 是否开启代理
-            if not _enable_proxy and self.re_config:
-                valid_format: str = "y|n"
-                is_enable_proxy, is_ep_record_flag = gsp.get_enable_proxy(
-                    last_record=proxy_record.get("enable_proxy", False),
-                    valid_format=valid_format,
-                ).values()
-                if is_ep_record_flag:
-                    self.record_flag = True
-                    _proxy_config["enable_proxy"] = is_enable_proxy
-            # 如果需要使用代理。
-            # 如果上面配置的enable_proxy为True或本来配置文件中的enable_proxy就为True。
-            if _proxy_config.get("enable_proxy") is True or _enable_proxy is True:
-                if ProcessConfig.is_proxy_input(proxy_config=_proxy_config):
-                    if not _proxy_scheme:
-                        scheme, record_flag = gsp.get_scheme(
-                            last_record=proxy_record.get("scheme"),
-                            valid_format=["http", "socks4", "socks5"],
-                        ).values()
-                        if record_flag:
-                            self.record_flag = True
-                            _proxy_config["scheme"] = scheme
-                    if not _proxy_hostname:
-                        hostname, record_flag = gsp.get_hostname(
-                            proxy_config=_proxy_config,
-                            last_record=proxy_record.get("hostname"),
-                            valid_format="x.x.x.x",
-                        ).values()
-                        if record_flag:
-                            self.record_flag = True
-                            _proxy_config["hostname"] = hostname
-                    if not _proxy_port:
-                        port, record_flag = gsp.get_port(
-                            proxy_config=_proxy_config,
-                            last_record=proxy_record.get("port"),
-                            valid_format="0~65535",
-                        ).values()
-                        if record_flag:
-                            self.record_flag = True
-                            _proxy_config["port"] = port
-                    if not all([_proxy_username, _proxy_password]):
-                        username, password, record_flag = (
-                            gsp.get_proxy_authentication().values()
-                        )
-                        if record_flag:
-                            self.record_flag = True
-                            _proxy_config["username"] = username
-                            _proxy_config["password"] = password
-        except KeyboardInterrupt:
-            n: bool = True
-            try:
-                if self.record_flag:
-                    print("\n")
-                    if gsp.get_is_ki_save_config().get("is_ki_save_config"):
-                        self.save_config(pre_load_config)
-                        console.log("配置已保存!")
-                    else:
-                        console.log("不保存当前填写参数。")
-                else:
-                    raise SystemExit(0)
-            except KeyboardInterrupt:
-                n: bool = False
-                print("\n")
-                console.log("不保存当前填写参数(用户手动终止配置参数)。")
-            finally:
-                if n:
-                    print("\n")
-                    console.log("用户手动终止配置参数。")
-                self.ctrl_c()
-                exit_flag: bool = True
-        if exit_flag:
-            raise SystemExit(0)
-        # 更新 task 分组中的 max_tasks 和 max_retries
-        _task_max_tasks = _task.get("max_tasks") or {}
-        _task_max_tasks["upload"] = _task_max_tasks.get("upload", 3) or 3
-        _task["max_tasks"] = _task_max_tasks
-        _task_max_retries = _task.get("max_retries") or {}
-        _task_max_retries["upload"] = _task_max_retries.get("upload", 3) or 3
-        _task["max_retries"] = _task_max_retries
-        if not PARSE_ARGS.session:
-            _session_directory = (
-                _task.get("session_directory", UserConfig.WORK_DIRECTORY)
-                or UserConfig.WORK_DIRECTORY
-            )
-            _task["session_directory"] = _session_directory
-        else:
-            _task["session_directory"] = PARSE_ARGS.session
-
-        if not PARSE_ARGS.temp:
-            _temp_directory = (
-                _task.get("temp_directory", UserConfig.TEMP_DIRECTORY)
-                or UserConfig.TEMP_DIRECTORY
-            )
-            _task["temp_directory"] = _temp_directory
-        else:
-            _task["temp_directory"] = PARSE_ARGS.temp
-        self.save_config(
-            pre_load_config
-        )  # v1.3.0 修复不保存配置文件时,配置文件仍然保存的问题。
 
     def save_config(self, config: dict) -> None:
         """保存配置文件。"""

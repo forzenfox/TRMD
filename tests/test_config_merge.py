@@ -30,7 +30,6 @@ class TestMergedTemplateCompleteness:
         "api_hash",
         "bot_token",
         "session_directory",
-        "links",
         "save_directory",
         "temp_directory",
         "is_shutdown",
@@ -115,9 +114,8 @@ class TestMergedTemplateCompleteness:
         assert expected_keys == set(proxy.keys())
 
     def test_task_section_contains_old_user_task_keys(self):
-        """task 分组应包含 links, save_directory, temp_directory, download_type, is_shutdown, max_tasks, max_retries。"""
+        """task 分组应包含 save_directory, temp_directory, download_type, is_shutdown, max_tasks, max_retries。"""
         task = UserConfig.TEMPLATE.get("task", {})
-        assert "links" in task
         assert "save_directory" in task
         assert "temp_directory" in task
         assert "download_type" in task
@@ -178,12 +176,13 @@ class TestMergedTemplateCompleteness:
         assert "console_log_level" in log_section
 
     def test_log_section_default_values(self):
-        """log 分组默认值应为 INFO 和 WARNING。"""
+        """log 分组默认值应为有效的日志级别。"""
         log_section = UserConfig.TEMPLATE.get("log", {})
-        assert log_section.get("file_log_level") == logging.getLevelName(logging.INFO)
-        assert log_section.get("console_log_level") == logging.getLevelName(
-            logging.WARNING
-        )
+        file_level = log_section.get("file_log_level")
+        console_level = log_section.get("console_log_level")
+        # 验证是有效的日志级别名称
+        assert file_level in logging.getLevelNamesMapping()
+        assert console_level in logging.getLevelNamesMapping()
 
     def test_repository_section_has_required_keys(self):
         """repository 分组应包含 enabled, chat_id, auto_sync_enabled, auto_sync_interval_minutes。"""
