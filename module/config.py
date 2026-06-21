@@ -3,13 +3,14 @@
 # Software:PyCharm
 # Time:2025/2/25 1:32
 # File:config.py
+import copy
 import os
 import sys
 import logging
 import datetime
 import subprocess
 
-from typing import Union
+from typing import Union, Optional
 
 from module import (
     yaml,
@@ -138,6 +139,71 @@ class UserConfig(BaseConfig):
     FILE_NAME: str = 'config.yaml'  # 配置文件名。
     PATH: str = os.path.join(DIRECTORY_NAME, FILE_NAME)
     TEMPLATE: dict = {
+        'credential': {
+            'api_id': None,
+            'api_hash': None,
+            'bot_token': None,
+        },
+        'proxy': {
+            'enable_proxy': None,
+            'scheme': None,
+            'hostname': None,
+            'port': None,
+            'username': None,
+            'password': None
+        },
+        'task': {
+            'links': None,
+            'save_directory': None,  # v1.3.0 将配置文件中save_path的参数名修改为save_directory。
+            'temp_directory': None,
+            'session_directory': None,
+            'download_type': None,
+            'is_shutdown': None,
+            'max_tasks': {
+                'download': None,
+                'upload': None
+            },
+            'max_retries': {
+                'download': None,
+                'upload': None
+            }
+        },
+        'preference': {
+            'notice': True,
+            'is_shutdown': False,
+            'forward_type': {
+                'video': True,
+                'photo': True,
+                'audio': True,
+                'document': True,
+                'voice': True,
+                'text': True,
+                'animation': True,
+                'video_note': True
+            },
+            'upload': {
+                'download_upload': True,
+                'delete': False
+            },
+            'export_table': {
+                'link': False,
+                'count': False,
+                'upload': False
+            }
+        },
+        'log': {
+            'file_log_level': logging.getLevelName(FILE_LOG_LEVEL),
+            'console_log_level': logging.getLevelName(CONSOLE_LOG_LEVEL),
+        },
+        'repository': {
+            'enabled': True,
+            'chat_id': '',
+            'auto_sync_enabled': False,
+            'auto_sync_interval_minutes': 60,
+        }
+    }
+    # 旧版扁平 TEMPLATE，用于向后兼容和历史配置迁移。
+    LEGACY_FLAT_TEMPLATE: dict = {
         'api_id': None,
         'api_hash': None,
         'bot_token': None,
@@ -151,7 +217,7 @@ class UserConfig(BaseConfig):
             'password': None
         },
         'links': None,
-        'save_directory': None,  # v1.3.0 将配置文件中save_path的参数名修改为save_directory。
+        'save_directory': None,
         'temp_directory': None,
         'max_tasks': {
             'download': None,
@@ -168,6 +234,38 @@ class UserConfig(BaseConfig):
     BACKUP_DIRECTORY: str = 'ConfigBackup'
     ABSOLUTE_BACKUP_DIRECTORY: str = os.path.join(DIRECTORY_NAME, BACKUP_DIRECTORY)
     WORK_DIRECTORY: str = os.path.join(os.getcwd(), 'sessions')
+
+    @staticmethod
+    def _migrate_legacy_config(config: dict) -> dict:
+        """将旧版扁平配置迁移为分组结构。
+
+        检测到旧版扁平键（如 api_id 在顶层）时，自动迁移到分组结构。
+        """
+        if config is None:
+            return UserConfig.TEMPLATE.copy()
+        # 如果已经有分组结构，直接返回
+        if 'credential' in config and isinstance(config.get('credential'), dict):
+            return config
+        # 执行迁移：从扁平结构提取到分组
+        migrated = copy.deepcopy(UserConfig.TEMPLATE)
+        # credential
+        for key in ('api_id', 'api_hash', 'bot_token'):
+            if key in config:
+                migrated['credential'][key] = config[key]
+        # proxy
+        if 'proxy' in config and isinstance(config['proxy'], dict):
+            migrated['proxy'] = config['proxy']
+        # task
+        task_keys = ('links', 'save_directory', 'temp_directory', 'session_directory',
+                     'download_type', 'is_shutdown')
+        for key in task_keys:
+            if key in config:
+                migrated['task'][key] = config[key]
+        if 'max_tasks' in config and isinstance(config['max_tasks'], dict):
+            migrated['task']['max_tasks'] = config['max_tasks']
+        if 'max_retries' in config and isinstance(config['max_retries'], dict):
+            migrated['task']['max_retries'] = config['max_retries']
+        return migrated
 
     def __init__(self):
         super().__init__()
@@ -186,22 +284,25 @@ class UserConfig(BaseConfig):
         self.re_config: bool = False
         self.config_guide()
         self.config: dict = self.load_config()  # v1.3.0 修复重复询问重新配置文件。
-        self.api_hash = self.config.get('api_hash')
-        self.api_id = self.config.get('api_id')
-        self.bot_token = self.config.get('bot_token')
-        self.download_type: list = self.config.get('download_type')
-        self.is_shutdown: bool = self.config.get('is_shutdown')
-        self.links: str = self.config.get('links')
-        self.max_download_task: int = self.config.get('max_tasks', {'download': 3}).get('download')
-        self.max_download_retries: int = self.config.get('max_retries', {'download': 5}).get('download')
-        self.max_upload_task: int = (self.config.get('max_tasks') or {}).get('upload', 3) or 3
-        self.max_upload_retries: int = (self.config.get('max_retries') or {}).get('upload', 3) or 3
+        # 从分组结构中读取属性
+        credential: dict = self.config.get('credential', {})
+        self.api_hash = credential.get('api_hash')
+        self.api_id = credential.get('api_id')
+        self.bot_token = credential.get('bot_token')
+        task: dict = self.config.get('task', {})
+        self.download_type: list = task.get('download_type')
+        self.is_shutdown: bool = task.get('is_shutdown')
+        self.links: str = task.get('links')
+        self.max_download_task: int = (task.get('max_tasks') or {'download': 3}).get('download')
+        self.max_download_retries: int = (task.get('max_retries') or {'download': 5}).get('download')
+        self.max_upload_task: int = (task.get('max_tasks') or {}).get('upload', 3) or 3
+        self.max_upload_retries: int = (task.get('max_retries') or {}).get('upload', 3) or 3
         self.proxy: dict = self.config.get('proxy', {})
         self.enable_proxy: bool = self.proxy.get('enable_proxy', False)
-        self.save_directory: str = self.config.get('save_directory')
+        self.save_directory: str = task.get('save_directory')
         self.work_directory: str = PARSE_ARGS.session or (
-                self.config.get('session_directory') or UserConfig.WORK_DIRECTORY)
-        self.temp_directory: str = PARSE_ARGS.temp or (self.config.get('temp_directory') or UserConfig.TEMP_DIRECTORY)
+                task.get('session_directory') or UserConfig.WORK_DIRECTORY)
+        self.temp_directory: str = PARSE_ARGS.temp or (task.get('temp_directory') or UserConfig.TEMP_DIRECTORY)
 
     def get_last_history_record(self) -> None:
         """获取最近一次保存的历史配置文件。"""
@@ -290,7 +391,7 @@ class UserConfig(BaseConfig):
         if config is None:
             config = {}
 
-        # 处理父级参数。
+        # 处理父级参数（分组）。
         self.add_missing_keys(
             target=config,
             template=UserConfig.TEMPLATE,
@@ -298,9 +399,25 @@ class UserConfig(BaseConfig):
             history=history
         )
 
+        # 处理各分组内的嵌套参数
         self.process_nesting(param_name='proxy', config=config)
-        self.process_nesting(param_name='max_tasks', config=config)
-        self.process_nesting(param_name='max_retries', config=config)
+        # credential 分组（无嵌套子分组，只有扁平键）
+        self.process_nesting(param_name='credential', config=config)
+        # task 分组（含嵌套子分组）
+        self.process_nesting(param_name='task', config=config)
+        if 'task' in config and isinstance(config['task'], dict):
+            self.process_nesting(param_name='max_tasks', config=config['task'])
+            self.process_nesting(param_name='max_retries', config=config['task'])
+        # preference 分组（含嵌套子分组）
+        self.process_nesting(param_name='preference', config=config)
+        if 'preference' in config and isinstance(config['preference'], dict):
+            self.process_nesting(param_name='forward_type', config=config['preference'])
+            self.process_nesting(param_name='upload', config=config['preference'])
+            self.process_nesting(param_name='export_table', config=config['preference'])
+        # log 分组
+        self.process_nesting(param_name='log', config=config)
+        # repository 分组
+        self.process_nesting(param_name='repository', config=config)
 
         # 删除父级模板中没有的字段。
         self.remove_extra_keys(
@@ -314,7 +431,7 @@ class UserConfig(BaseConfig):
 
     def load_config(self) -> dict:
         """加载一次当前的配置文件,并附带合法性验证、缺失参数的检测以及各种异常时的处理措施。"""
-        config: dict = UserConfig.TEMPLATE.copy()
+        config: dict = copy.deepcopy(UserConfig.TEMPLATE)
         try:
             if not os.path.exists(self.config_path):
                 with open(file=self.config_path, mode='w', encoding='UTF-8') as f:
@@ -323,6 +440,8 @@ class UserConfig(BaseConfig):
                 self.re_config = True  # v1.3.4 修复配置文件不存在时,无法重新生成配置文件的问题。
             with open(self.config_path, 'r', encoding='UTF-8') as f:
                 config: dict = yaml.safe_load(f)  # v1.1.4 加入对每个字段的完整性检测。
+            # 迁移旧版扁平配置到分组结构
+            config = self._migrate_legacy_config(config)
             compare_config: dict = config.copy() if config else {}
             config: dict = self.__check_params(config) if compare_config else None
             if config != compare_config or config == UserConfig.TEMPLATE:  # v1.3.4 修复配置文件所有参数都为空时报错问题。
@@ -374,27 +493,29 @@ class UserConfig(BaseConfig):
                 if re_config:
                     self.re_config = re_config
                     # 缓存原有的session_directory，防止重新配置时丢失。
-                    origin_session_directory = pre_load_config.get('session_directory')
-                    pre_load_config: dict = UserConfig.TEMPLATE.copy()
+                    origin_session_directory = pre_load_config.get('task', {}).get('session_directory')
+                    pre_load_config: dict = copy.deepcopy(UserConfig.TEMPLATE)
                     self.backup_config(backup_config=pre_load_config, error_config=False, force=True)
                     self.get_last_history_record()  # 更新到上次填写的记录。
                     if not PARSE_ARGS.session:
                         self.is_change_account = gsp.get_is_change_account(valid_format='y|n').get(
                             'is_change_account')
                         if self.is_change_account:
-                            pre_load_config['session_directory'] = gsp.get_session_directory().get('session_directory')
+                            pre_load_config['task']['session_directory'] = gsp.get_session_directory().get('session_directory')
                         else:
-                            pre_load_config['session_directory'] = origin_session_directory
-            _api_id: Union[str, None] = pre_load_config.get('api_id')
-            _api_hash: Union[str, None] = pre_load_config.get('api_hash')
-            _bot_token: Union[str, None] = pre_load_config.get('bot_token')
-            _links: Union[str, None] = pre_load_config.get('links')
-            _save_directory: Union[str, None] = pre_load_config.get('save_directory')
-            _max_download_task: Union[int, None] = pre_load_config.get('max_tasks', {'download': 3}).get('download')
-            _max_download_retries: Union[int, None] = pre_load_config.get('max_retries', {'download': 5}).get(
+                            pre_load_config['task']['session_directory'] = origin_session_directory
+            _credential: dict = pre_load_config.get('credential', {})
+            _task: dict = pre_load_config.get('task', {})
+            _api_id: Union[str, None] = _credential.get('api_id')
+            _api_hash: Union[str, None] = _credential.get('api_hash')
+            _bot_token: Union[str, None] = _credential.get('bot_token')
+            _links: Union[str, None] = _task.get('links')
+            _save_directory: Union[str, None] = _task.get('save_directory')
+            _max_download_task: Union[int, None] = (_task.get('max_tasks') or {'download': 3}).get('download')
+            _max_download_retries: Union[int, None] = (_task.get('max_retries') or {'download': 5}).get(
                 'download')
-            _download_type: Union[list, None] = pre_load_config.get('download_type')
-            _is_shutdown: Union[bool, None] = pre_load_config.get('is_shutdown')
+            _download_type: Union[list, None] = _task.get('download_type')
+            _is_shutdown: Union[bool, None] = _task.get('is_shutdown')
             _proxy_config: dict = pre_load_config.get('proxy', {})
             _enable_proxy: Union[str, bool] = _proxy_config.get('enable_proxy', False)
             _proxy_scheme: Union[str, bool] = _proxy_config.get('scheme', False)
@@ -403,6 +524,9 @@ class UserConfig(BaseConfig):
             _proxy_username: Union[str, bool] = _proxy_config.get('username', False)
             _proxy_password: Union[str, bool] = _proxy_config.get('password', False)
             proxy_record: dict = self.last_record.get('proxy', {})  # proxy的历史记录。
+            # 历史记录可能是旧版扁平结构，需要兼容
+            _last_credential: dict = self.last_record.get('credential', {})
+            _last_task: dict = self.last_record.get('task', {})
             enable_bot: bool = False  # 是否打开机器人。
             if any([not _api_id, not _api_hash, not _save_directory, not _max_download_task, not _download_type]):
                 console.print('「注意」直接回车代表使用上次的记录。',
@@ -410,65 +534,65 @@ class UserConfig(BaseConfig):
             if self.is_change_account or _api_id is None or _api_hash is None or self.re_config:
                 if not _api_id:
                     api_id, record_flag = gsp.get_api_id(
-                        last_record=self.last_record.get('api_id')).values()
+                        last_record=_last_credential.get('api_id') or self.last_record.get('api_id')).values()
                     if record_flag:
                         self.record_flag = record_flag
-                        pre_load_config['api_id'] = api_id
+                        _credential['api_id'] = api_id
                 if not _api_hash:
                     api_hash, record_flag = gsp.get_api_hash(
-                        last_record=self.last_record.get('api_hash'),
+                        last_record=_last_credential.get('api_hash') or self.last_record.get('api_hash'),
                         valid_length=32).values()
                     if record_flag:
                         self.record_flag = record_flag
-                        pre_load_config['api_hash'] = api_hash
+                        _credential['api_hash'] = api_hash
             if not _bot_token and self.re_config:
                 enable_bot: bool = gsp.get_enable_bot(valid_format='y|n').get('enable_bot')
                 if enable_bot:
                     bot_token, record_flag = gsp.get_bot_token(
-                        last_record=self.last_record.get('bot_token'),
+                        last_record=_last_credential.get('bot_token') or self.last_record.get('bot_token'),
                         valid_format=':').values()
                     if record_flag:
                         self.record_flag = record_flag
-                        pre_load_config['bot_token'] = bot_token
+                        _credential['bot_token'] = bot_token
             if not _links or not _bot_token and self.re_config:
                 links, record_flag = gsp.get_links(
-                    last_record=self.last_record.get('links'),
+                    last_record=_last_task.get('links') or self.last_record.get('links'),
                     valid_format='.txt',
                     enable_bot=True if enable_bot else False).values()
                 if record_flag:
                     self.record_flag = record_flag
-                    pre_load_config['links'] = links
+                    _task['links'] = links
             if not _save_directory or self.re_config:
                 save_directory, record_flag = gsp.get_save_directory(
-                    last_record=self.last_record.get('save_directory')).values()
+                    last_record=_last_task.get('save_directory') or self.last_record.get('save_directory')).values()
                 if record_flag:
                     self.record_flag = record_flag
-                    pre_load_config['save_directory'] = save_directory
+                    _task['save_directory'] = save_directory
             if not _max_download_task or self.re_config:
                 max_download_task, record_flag = gsp.get_max_download_task(
-                    last_record=self.last_record.get('max_tasks', {'download': 3}).get('download')).values()
+                    last_record=(_last_task.get('max_tasks') or self.last_record.get('max_tasks') or {'download': 3}).get('download')).values()
                 if record_flag:
                     self.record_flag = record_flag
-                    pre_load_config.get('max_tasks')['download'] = max_download_task
+                    _task.get('max_tasks', {})['download'] = max_download_task
             if not _max_download_retries or self.re_config:
                 max_retry_count, record_flag = gsp.get_max_retry_count(
-                    last_record=self.last_record.get('max_retries', {'download': 5}).get('download')).values()
+                    last_record=(_last_task.get('max_retries') or self.last_record.get('max_retries') or {'download': 5}).get('download')).values()
                 if record_flag:
                     self.record_flag = record_flag
-                    pre_load_config.get('max_retries')['download'] = max_retry_count
+                    _task.get('max_retries', {})['download'] = max_retry_count
             if not _download_type or self.re_config:
                 download_type, record_flag = gsp.get_download_type(
-                    last_record=self.last_record.get('download_type')).values()
+                    last_record=_last_task.get('download_type') or self.last_record.get('download_type')).values()
                 if record_flag:
                     self.record_flag = record_flag
-                    pre_load_config['download_type'] = download_type
+                    _task['download_type'] = download_type
             if _is_shutdown is None or self.re_config:
                 is_shutdown, _is_shutdown_record_flag = gsp.get_is_shutdown(
-                    last_record=self.last_record.get('is_shutdown'),
+                    last_record=_last_task.get('is_shutdown') or self.last_record.get('is_shutdown'),
                     valid_format='y|n').values()
                 if _is_shutdown_record_flag:
                     self.record_flag = True
-                    pre_load_config['is_shutdown'] = is_shutdown
+                    _task['is_shutdown'] = is_shutdown
             # 是否开启代理
             if not _enable_proxy and self.re_config:
                 valid_format: str = 'y|n'
@@ -537,34 +661,28 @@ class UserConfig(BaseConfig):
                 exit_flag: bool = True
         if exit_flag:
             raise SystemExit(0)
-        pre_load_config.get(
-            'max_tasks',
-            {
-                'download': _max_download_task,
-                'upload': 3
-            }
-        )['upload'] = (pre_load_config.get('max_tasks') or {}).get('upload', 3) or 3
-        pre_load_config.get(
-            'max_retries',
-            {
-                'download': _max_download_retries,
-                'upload': 3}
-        )['upload'] = (pre_load_config.get('max_retries') or {}).get('upload', 3) or 3
+        # 更新 task 分组中的 max_tasks 和 max_retries
+        _task_max_tasks = _task.get('max_tasks') or {}
+        _task_max_tasks['upload'] = _task_max_tasks.get('upload', 3) or 3
+        _task['max_tasks'] = _task_max_tasks
+        _task_max_retries = _task.get('max_retries') or {}
+        _task_max_retries['upload'] = _task_max_retries.get('upload', 3) or 3
+        _task['max_retries'] = _task_max_retries
         if not PARSE_ARGS.session:
-            _session_directory = pre_load_config.get(
+            _session_directory = _task.get(
                 'session_directory',
                 UserConfig.WORK_DIRECTORY) or UserConfig.WORK_DIRECTORY
-            pre_load_config['session_directory'] = _session_directory
+            _task['session_directory'] = _session_directory
         else:
-            pre_load_config['session_directory'] = PARSE_ARGS.session
+            _task['session_directory'] = PARSE_ARGS.session
 
         if not PARSE_ARGS.temp:
-            _temp_directory = pre_load_config.get(
+            _temp_directory = _task.get(
                 'temp_directory',
                 UserConfig.TEMP_DIRECTORY) or UserConfig.TEMP_DIRECTORY
-            pre_load_config['temp_directory'] = _temp_directory
+            _task['temp_directory'] = _temp_directory
         else:
-            pre_load_config['temp_directory'] = PARSE_ARGS.temp
+            _task['temp_directory'] = PARSE_ARGS.temp
         self.save_config(pre_load_config)  # v1.3.0 修复不保存配置文件时,配置文件仍然保存的问题。
 
     def save_config(self, config: dict) -> None:
@@ -587,6 +705,12 @@ class UserConfig(BaseConfig):
 
 
 class GlobalConfig(BaseConfig):
+    """全局配置类（已废弃，保留向后兼容）。
+
+    所有配置已合并到 UserConfig 中。此类现在从 UserConfig 的
+    preference/log 分组读取原 GlobalConfig 的配置项。
+    """
+
     FILE_NAME: str = GLOBAL_CONFIG_NAME
     PATH: str = GLOBAL_CONFIG_PATH
     TEMPLATE: dict = {
@@ -616,12 +740,27 @@ class GlobalConfig(BaseConfig):
             }
     }
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, user_config: Optional['UserConfig'] = None):
+        """初始化 GlobalConfig。
+
+        Args:
+            user_config: UserConfig 实例。如果提供，则从 UserConfig 的
+                         preference/log 分组读取配置；否则回退到独立的
+                         .CONFIG.yaml 文件（向后兼容）。
+        """
+        self._user_config = user_config
         self.default_upload_nesting = self.TEMPLATE.get('upload')
         self.default_forward_type_nesting = self.TEMPLATE.get('forward_type')
-        self.load_config()
-        self.__check_params(self.config.copy())
+
+        if user_config is not None:
+            # 从合并后的 UserConfig 读取
+            self.config = self._build_config_from_user_config(user_config.config)
+        else:
+            # 向后兼容：从独立的 .CONFIG.yaml 读取
+            super().__init__()
+            self.load_config()
+            self.__check_params(self.config.copy())
+
         self.download_upload: bool = self.get_nesting_config(
             default_nesting=self.default_upload_nesting,
             param='upload',
@@ -634,11 +773,48 @@ class GlobalConfig(BaseConfig):
         )
         self.forward_type: dict = self.config.get('forward_type')
 
+    @staticmethod
+    def _build_config_from_user_config(user_config_dict: dict) -> dict:
+        """从 UserConfig 的分组结构构建兼容的扁平 GlobalConfig 字典。"""
+        preference: dict = user_config_dict.get('preference', {})
+        log_section: dict = user_config_dict.get('log', {})
+        result = {
+            'notice': preference.get('notice', True),
+            'file_log_level': log_section.get('file_log_level', logging.getLevelName(FILE_LOG_LEVEL)),
+            'console_log_level': log_section.get('console_log_level', logging.getLevelName(CONSOLE_LOG_LEVEL)),
+            'export_table': preference.get('export_table', {'link': False, 'count': False, 'upload': False}),
+            'upload': preference.get('upload', {'download_upload': True, 'delete': False}),
+            'forward_type': preference.get('forward_type', GlobalConfig.TEMPLATE.get('forward_type')),
+        }
+        return result
+
     def get_nesting_config(self, default_nesting, param, nesting_param):
         return self.config.get(param, default_nesting).get(nesting_param)
 
     def save_config(self, config: dict) -> None:
-        super().save_config(config)
+        """保存配置。
+
+        如果关联了 UserConfig，则同步保存到 UserConfig 的分组结构中；
+        否则保存到独立的 .CONFIG.yaml 文件（向后兼容）。
+        """
+        if self._user_config is not None:
+            # 同步回 UserConfig 的分组结构
+            user_config_dict = self._user_config.config
+            if 'preference' not in user_config_dict:
+                user_config_dict['preference'] = {}
+            user_config_dict['preference']['notice'] = config.get('notice', True)
+            user_config_dict['preference']['upload'] = config.get('upload', self.default_upload_nesting)
+            user_config_dict['preference']['forward_type'] = config.get('forward_type', self.default_forward_type_nesting)
+            user_config_dict['preference']['export_table'] = config.get('export_table', {'link': False, 'count': False, 'upload': False})
+            if 'log' not in user_config_dict:
+                user_config_dict['log'] = {}
+            user_config_dict['log']['file_log_level'] = config.get('file_log_level', logging.getLevelName(FILE_LOG_LEVEL))
+            user_config_dict['log']['console_log_level'] = config.get('console_log_level', logging.getLevelName(CONSOLE_LOG_LEVEL))
+            self._user_config.save_config(user_config_dict)
+        else:
+            super().save_config(config)
+
+        self.config = config
         self.download_upload = self.get_nesting_config(
             default_nesting=self.default_upload_nesting,
             param='upload',

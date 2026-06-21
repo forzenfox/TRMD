@@ -73,23 +73,31 @@ async def safe_delete_message(message: pyrogram.types.Message) -> bool:
         return False
 
 
-async def parse_link(client: pyrogram.Client, link: str) -> dict:
+async def parse_link(client: pyrogram.Client, link: str, original_link: str = None) -> dict:
     # https://github.com/tangyoha/telegram_media_downloader/blob/master/module/pyrogram_extension.py#L1092
     try:
-        link = extract_info_from_link(link)
-        if link.comment_id:
-            chat = await client.get_chat(link.group_id)
+        parsed = extract_info_from_link(original_link or link)
+        group_id = parsed.group_id
+
+        # For private channel invite links (starting with '+'), Pyrogram needs
+        # the full invite URL to resolve the chat.
+        chat_id_for_lookup = group_id
+        if isinstance(group_id, str) and group_id.startswith('+'):
+            chat_id_for_lookup = f'https://t.me/{group_id}'
+
+        if parsed.comment_id:
+            chat = await client.get_chat(chat_id_for_lookup)
             if chat:
                 return {
                     'chat_id': chat.linked_chat.id,
-                    'comment_id': link.comment_id,
-                    'topic_id': link.topic_id
+                    'comment_id': parsed.comment_id,
+                    'topic_id': parsed.topic_id
                 }
 
         return {
-            'chat_id': link.group_id,
-            'comment_id': link.post_id,
-            'topic_id': link.topic_id
+            'chat_id': group_id,
+            'comment_id': parsed.post_id,
+            'topic_id': parsed.topic_id
         }
     except Exception:
         raise ValueError('Invalid message link.')
@@ -241,7 +249,12 @@ async def get_chat_with_notify(
         bot_message: Optional[pyrogram.types.Message] = None
 ) -> Union[pyrogram.types.Chat, None]:
     try:
-        chat = await user_client.get_chat(chat_id)
+        # For private channel invite links (starting with '+'), Pyrogram needs
+        # the full invite URL to resolve the chat.
+        lookup_id = chat_id
+        if isinstance(chat_id, str) and chat_id.startswith('+'):
+            lookup_id = f'https://t.me/{chat_id}'
+        chat = await user_client.get_chat(lookup_id)
         return chat
     except Exception:
         if all([bot_client, bot_message]):

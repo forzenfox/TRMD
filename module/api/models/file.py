@@ -15,6 +15,7 @@ class FileInfo(BaseModel):
     type: Literal["file", "directory"]
     size: Optional[int] = None
     modified_at: Optional[str] = None
+    telegram_type: Optional[str] = None  # Telegram 语义分类
 
 
 class FileListOut(BaseModel):
@@ -22,3 +23,13 @@ class FileListOut(BaseModel):
 
     path: str
     items: list[FileInfo]
+
+
+class FileUploadRequest(BaseModel):
+    """文件上传请求体。"""
+
+    chat_id: int
+    file_paths: list[str]
+    caption: str = ""
+    delete_after: bool = False
+    as_media_group: bool = False

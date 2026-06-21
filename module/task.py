@@ -146,7 +146,9 @@ class UploadTask:
             with_delete: bool = False,
             media_group: Optional[asyncio.Task] = None,
             message_id: Optional[int] = None,
-            send_as_media_group: bool = False
+            send_as_media_group: bool = False,
+            source_chat_id: Optional[int] = None,
+            source_message_id: Optional[int] = None
     ):
         UploadTask.TASKS.add(self)
         UploadTask.TASK_COUNTER += 1
@@ -163,6 +165,8 @@ class UploadTask:
         self.__media_group: asyncio.Task = media_group
         self.message_id: Optional[int] = message_id
         self.send_as_media_group: bool = send_as_media_group
+        self.source_chat_id: Optional[int] = source_chat_id
+        self.source_message_id: Optional[int] = source_message_id
         self.sha256: str = calc_sha256(file_path=self.file_path)
         self.prompt: str = ''
 

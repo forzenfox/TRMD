@@ -32,11 +32,54 @@ def read_input_history(history_path: str, max_record_len: int, **kwargs) -> None
 
 def via_log_level(log_level: str, param_name: str, default_level: int = logging.INFO) -> bool:
     if log_level not in ['CRITICAL', 'FATAL', 'ERROR', 'WARN', 'WARNING', 'INFO', 'DEBUG', 'NOTSET']:
-        with open(file=GLOBAL_CONFIG_PATH, mode='w', encoding='UTF-8') as file:
-            global_config[param_name] = logging.getLevelName(default_level)
-            yaml.dump(global_config, file)
         return False
     return True
+
+
+def _load_log_levels_from_config():
+    """从 config.yaml 的 log 分组读取日志级别。
+
+    优先级：
+    1. 工作目录下的 config.yaml 的 log 分组
+    2. 旧的 %APPDATA%/TRMD/.CONFIG.yaml（向后兼容）
+    3. 默认值 INFO / WARNING
+    """
+    global FILE_LOG_LEVEL, CONSOLE_LOG_LEVEL
+
+    # 尝试从 config.yaml 的 log 分组读取
+    config_yaml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'config.yaml')
+    config_yaml_path = os.path.normpath(config_yaml_path)
+    if os.path.exists(config_yaml_path):
+        try:
+            with open(file=config_yaml_path, mode='r', encoding='UTF-8') as f:
+                config_data = yaml.safe_load(f)
+            if config_data and isinstance(config_data, dict):
+                log_section = config_data.get('log', {})
+                if isinstance(log_section, dict):
+                    file_log_level = log_section.get('file_log_level')
+                    console_log_level = log_section.get('console_log_level')
+                    if file_log_level and via_log_level(file_log_level, 'file_log_level', logging.INFO):
+                        FILE_LOG_LEVEL = logging.getLevelName(file_log_level)
+                    if console_log_level and via_log_level(console_log_level, 'console_log_level', logging.WARNING):
+                        CONSOLE_LOG_LEVEL = logging.getLevelName(console_log_level)
+                    return
+        except Exception:
+            pass
+
+    # 回退：从旧的 .CONFIG.yaml 读取（向后兼容）
+    if os.path.exists(GLOBAL_CONFIG_PATH):
+        try:
+            with open(file=GLOBAL_CONFIG_PATH, mode='r', encoding='UTF-8') as f:
+                global_config = yaml.safe_load(f)
+            if global_config and isinstance(global_config, dict):
+                file_log_level = global_config.get('file_log_level')
+                console_log_level = global_config.get('console_log_level')
+                if file_log_level and via_log_level(file_log_level, 'file_log_level', logging.INFO):
+                    FILE_LOG_LEVEL = logging.getLevelName(file_log_level)
+                if console_log_level and via_log_level(console_log_level, 'console_log_level', logging.WARNING):
+                    CONSOLE_LOG_LEVEL = logging.getLevelName(console_log_level)
+        except Exception:
+            pass
 
 
 class CustomDumper(yaml.Dumper):
@@ -87,14 +130,13 @@ if os.path.exists(GLOBAL_CONFIG_PATH):
     try:
         with open(file=GLOBAL_CONFIG_PATH, mode='r', encoding='UTF-8') as f:
             global_config = yaml.safe_load(f)
-        file_log_level: str = global_config.get('file_log_level')
-        console_log_level: str = global_config.get('console_log_level')
-        if via_log_level(log_level=file_log_level, param_name='file_log_level', default_level=logging.INFO):
-            FILE_LOG_LEVEL: int = logging.getLevelName(file_log_level)
-        if via_log_level(log_level=console_log_level, param_name='console_log_level', default_level=logging.WARNING):
-            CONSOLE_LOG_LEVEL: int = logging.getLevelName(console_log_level)
     except Exception:
-        pass
+        global_config = {}
+else:
+    global_config = {}
+
+# 从 config.yaml 或旧 .CONFIG.yaml 加载日志级别
+_load_log_levels_from_config()
 
 file_handler.setLevel(logging.getLevelName(FILE_LOG_LEVEL))
 

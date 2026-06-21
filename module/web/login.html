@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>登录 - Telegram Restricted Media Downloader</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Alpine.js CDN -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  
+  <!-- 自定义样式 -->
+  <link rel="stylesheet" href="css/style.css">
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#eff6ff',
+              100: '#dbeafe',
+              200: '#bfdbfe',
+              300: '#93c5fd',
+              400: '#60a5fa',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            },
+            slate: {
+              850: '#1e293b',
+              900: '#0f172a',
+              950: '#020617',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-900 min-h-screen flex items-center justify-center p-4">
+  <div 
+    x-data="loginForm()"
+    x-init="init()"
+    class="w-full max-w-md"
+  >
+    <!-- Logo 和标题 -->
+    <div class="text-center mb-8">
+      <div class="inline-flex items-center justify-center w-16 h-16 bg-primary-600 rounded-full mb-4">
+        <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m0-8v-2m0 6V8m0 0l4 4m-4-4l4-4"></path>
+        </svg>
+      </div>
+      <h1 class="text-2xl font-bold text-white">Telegram Restricted Media Downloader</h1>
+      <p class="text-slate-400 mt-2">请输入认证 Token 以继续</p>
+    </div>
+
+    <!-- 登录表单 -->
+    <div class="bg-slate-800 rounded-lg shadow-lg p-6 border border-slate-700">
+      <form @submit.prevent="handleLogin" class="space-y-4">
+        <!-- Token 输入 -->
+        <div>
+          <label for="token" class="block text-sm font-medium text-slate-300 mb-2">
+            认证 Token
+          </label>
+          <div class="relative">
+            <input
+              id="token"
+              type="password"
+              x-model="token"
+              placeholder="请输入 Token"
+              class="w-full px-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              required
+              autofocus
+            />
+            <button
+              type="button"
+              @click="showToken = !showToken"
+              class="absolute right-3 top-1/2 transform -translate-y-1/2 text-slate-400 hover:text-slate-300"
+            >
+              <svg x-show="!showToken" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+              </svg>
+              <svg x-show="showToken" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <!-- 错误提示 -->
+        <div x-show="error" x-transition class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg text-sm">
+          <div class="flex items-center">
+            <svg class="w-5 h-5 mr-2 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"></path>
+            </svg>
+            <span x-text="error"></span>
+          </div>
+        </div>
+
+        <!-- 登录按钮 -->
+        <button
+          type="submit"
+          :disabled="loading || !token"
+          class="w-full bg-primary-600 hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center"
+        >
+          <svg x-show="loading" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span x-text="loading ? '验证中...' : '登录'"></span>
+        </button>
+      </form>
+
+      <!-- 帮助信息 -->
+      <div class="mt-6 pt-6 border-t border-slate-700">
+        <h3 class="text-sm font-medium text-slate-300 mb-2">如何获取 Token？</h3>
+        <ol class="text-sm text-slate-400 space-y-1 list-decimal list-inside">
+          <li>打开 Telegram Bot 对话</li>
+          <li>发送 <code class="bg-slate-700 px-1 py-0.5 rounded text-xs">/web</code> 命令</li>
+          <li>复制生成的链接中的 Token</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- 页脚 -->
+    <div class="text-center mt-6 text-sm text-slate-500">
+      <p>Telegram Restricted Media Downloader WebUI</p>
+    </div>
+  </div>
+
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script>
+    /**
+     * 登录表单逻辑
+     */
+    function loginForm() {
+      return {
+        token: '',
+        showToken: false,
+        loading: false,
+        error: null,
+        redirectUrl: '/',
+
+        init() {
+          // 从 URL 获取重定向地址
+          const params = new URLSearchParams(window.location.search);
+          this.redirectUrl = params.get('redirect') || '/';
+          
+          // 如果 URL 中有 token，自动填充
+          const urlToken = params.get('token');
+          if (urlToken) {
+            this.token = urlToken;
+          }
+        },
+
+        async handleLogin() {
+          if (!this.token || this.loading) return;
+
+          this.loading = true;
+          this.error = null;
+
+          try {
+            // 设置 Token
+            api.setToken(this.token, true);
+
+            // 验证 Token
+            await api.getMe();
+
+            // 登录成功，跳转
+            window.location.href = this.redirectUrl;
+          } catch (error) {
+            this.error = error.message || 'Token 验证失败，请检查后重试';
+            api.clearToken();
+          } finally {
+            this.loading = false;
+          }
+        }
+      };
+    }
+  </script>
+</body>
+</html>

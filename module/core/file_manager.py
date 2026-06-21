@@ -58,6 +58,7 @@ class UploadResult:
     error_code: str | None = None          # 错误码（失败时）
     error_msg: str | None = None           # 可读错误信息
     deleted: bool = False                  # 本地文件是否已清理
+    file_unique_id: str | None = None      # 文件唯一标识（成功时从 Pyrogram Message 提取）
 
 
 @dataclass
@@ -143,6 +144,7 @@ class FileManager:
         self._config = config
         self._client = client
         self._progress_callback = progress_callback
+        self.repository_manager = None  # 可选的 RepositoryManager，由外部设置
 
         # 读取配置。
         resource_limits = config.get('resource_limits', {})
@@ -323,6 +325,292 @@ class FileManager:
 
         return groups
 
+    # ---------- 上传方法 ----------
+
+    async def upload(
+        self,
+        file_path: str,
+        chat_id: int,
+        progress_callback: Callable[[UploadProgress], Awaitable[None]] | None = None,
+        delete_after: bool = False,
+        caption: str = "",
+        source_chat_id: int | None = None,
+        source_message_id: int | None = None,
+    ) -> UploadResult:
+        """上传单个文件到 Telegram 频道/群组。
+
+        根据文件类型自动选择合适的发送方法：
+            - 图片：send_photo
+            - 视频：send_video
+            - 音频：send_audio
+            - 动画(GIF)：send_animation
+            - 其他：send_document
+
+        当仓库模式启用且提供了 source_chat_id/source_message_id 时：
+            - 如果上传目标是仓库频道，上传成功后调用 on_upload_success 写入仓库记录
+            - 如果上传目标不是仓库频道，先上传到仓库频道，再分发到目标频道
+
+        Args:
+            file_path: 本地文件绝对路径
+            chat_id: 目标频道/群组的 chat_id
+            progress_callback: 上传进度回调函数
+            delete_after: 上传成功后是否删除本地文件
+            caption: 文件说明文字
+            source_chat_id: 源频道 ID（仓库模式使用）
+            source_message_id: 源消息 ID（仓库模式使用）
+
+        Returns:
+            UploadResult: 上传结果
+        """
+        abs_path = os.path.abspath(os.path.normpath(file_path))
+
+        # 文件存在性检查
+        if not os.path.exists(abs_path):
+            return UploadResult(
+                success=False,
+                file_path=abs_path,
+                error_code="FILE_NOT_FOUND",
+                error_msg=f"文件不存在: {abs_path}",
+            )
+
+        # 文件大小检查
+        try:
+            file_size = os.path.getsize(abs_path)
+        except OSError as e:
+            return UploadResult(
+                success=False,
+                file_path=abs_path,
+                error_code="FILE_SIZE_ERROR",
+                error_msg=f"无法获取文件大小: {e}",
+            )
+
+        if file_size == 0:
+            return UploadResult(
+                success=False,
+                file_path=abs_path,
+                error_code="EMPTY_FILE",
+                error_msg="文件大小为0，无法上传",
+            )
+
+        # 上传大小限制检查
+        max_upload = self._memory_limit_mb * 1024 * 1024
+        if file_size > max_upload:
+            return UploadResult(
+                success=False,
+                file_path=abs_path,
+                error_code="SIZE_LIMIT_EXCEEDED",
+                error_msg=f"文件大小 {file_size} 超过限制 {max_upload} 字节",
+            )
+
+        # 安全检查
+        self._check_system_path(abs_path)
+
+        # 获取文件类型
+        file_info = self._build_file_info(abs_path, os.path.basename(abs_path), os.stat(abs_path))
+        telegram_type = file_info.telegram_type or 'document'
+
+        # 构建进度回调
+        task_id = hashlib.md5(abs_path.encode()).hexdigest()[:12]
+
+        async def _progress(current, total):
+            await self._progress_wrapper(task_id, abs_path, current, total, progress_callback)
+
+        # 根据类型调用不同的发送方法
+        try:
+            if telegram_type == 'photo':
+                message = await self._client.send_photo(
+                    chat_id=chat_id,
+                    photo=abs_path,
+                    caption=caption,
+                    progress=_progress,
+                )
+            elif telegram_type == 'video':
+                message = await self._client.send_video(
+                    chat_id=chat_id,
+                    video=abs_path,
+                    caption=caption,
+                    progress=_progress,
+                )
+            elif telegram_type == 'audio':
+                message = await self._client.send_audio(
+                    chat_id=chat_id,
+                    audio=abs_path,
+                    caption=caption,
+                    progress=_progress,
+                )
+            elif telegram_type == 'animation':
+                message = await self._client.send_animation(
+                    chat_id=chat_id,
+                    animation=abs_path,
+                    caption=caption,
+                    progress=_progress,
+                )
+            else:
+                # document 类型
+                message = await self._client.send_document(
+                    chat_id=chat_id,
+                    document=abs_path,
+                    caption=caption,
+                    progress=_progress,
+                )
+
+            result = UploadResult(
+                success=True,
+                file_path=abs_path,
+                message=message,
+                file_unique_id=self._extract_file_unique_id(message),
+            )
+
+            # 仓库模式：上传到仓库频道时写入仓库记录
+            if (
+                self.repository_manager is not None
+                and self.repository_manager.should_use_repository()
+                and source_chat_id is not None
+                and source_message_id is not None
+                and str(chat_id) == self.repository_manager.get_repository_chat_id()
+            ):
+                try:
+                    await self.repository_manager.on_upload_success(
+                        message=message,
+                        source_chat_id=source_chat_id,
+                        source_message_id=source_message_id,
+                    )
+                except Exception as e:
+                    log.warning(f"仓库记录写入失败: {e}")
+
+            # 上传后清理
+            if delete_after:
+                result.deleted = await self.delete_local_file(abs_path)
+                if not result.deleted:
+                    log.warning(f"上传后清理失败: {abs_path}")
+
+            return result
+
+        except Exception as e:
+            log.error(f"上传失败: {abs_path}, 原因: {e}")
+            return UploadResult(
+                success=False,
+                file_path=abs_path,
+                error_code="UPLOAD_FAILED",
+                error_msg=str(e),
+            )
+
+    async def upload_media_group(
+        self,
+        file_infos: list[FileInfo],
+        chat_id: int,
+        progress_callback: Callable[[UploadProgress], Awaitable[None]] | None = None,
+        delete_after: bool = False,
+        config: MediaGroupConfig | None = None,
+    ) -> list[UploadResult]:
+        """上传媒体组（多个文件组合为一个消息）。
+
+        支持的类型：photo, video, audio（需在同一个媒体组中）。
+
+        Args:
+            file_infos: 文件信息列表（必须是同一种媒体组兼容类型）
+            chat_id: 目标频道/群组的 chat_id
+            progress_callback: 上传进度回调函数
+            delete_after: 上传成功后是否删除本地文件
+            config: 媒体组配置
+
+        Returns:
+            list[UploadResult]: 上传结果列表
+        """
+        if not file_infos:
+            return []
+
+        if config is None:
+            config = MediaGroupConfig()
+
+        results: list[UploadResult] = []
+
+        # 检查所有文件是否为媒体组兼容类型
+        for fi in file_infos:
+            if fi.telegram_type not in FileManagerConstants.SUPPORTED_ALBUM_TYPES:
+                # 降级为单文件上传
+                log.warning(f"文件 {fi.path} 不支持媒体组，降级为单文件上传")
+                result = await self.upload(
+                    file_path=fi.path,
+                    chat_id=chat_id,
+                    progress_callback=progress_callback,
+                    delete_after=delete_after,
+                )
+                results.append(result)
+                return results
+
+        # 构建媒体组 InputMedia 列表
+        from pyrogram.types import InputMediaPhoto, InputMediaVideo, InputMediaAudio
+
+        media_list = []
+        for fi in file_infos:
+            if fi.telegram_type == 'photo':
+                media_list.append(InputMediaPhoto(media=fi.path))
+            elif fi.telegram_type == 'video':
+                media_list.append(InputMediaVideo(media=fi.path))
+            elif fi.telegram_type == 'audio':
+                media_list.append(InputMediaAudio(media=fi.path))
+            else:
+                # 不支持的类型，降级处理
+                log.warning(f"文件 {fi.path} 类型 {fi.telegram_type} 不支持媒体组")
+                continue
+
+        if not media_list:
+            return [
+                UploadResult(
+                    success=False,
+                    error_code="NO_VALID_MEDIA",
+                    error_msg="没有有效的媒体文件",
+                )
+            ]
+
+        # 发送媒体组
+        try:
+            messages = await self._client.send_media_group(
+                chat_id=chat_id,
+                media=media_list,
+            )
+
+            # 构建结果
+            for fi in file_infos:
+                result = UploadResult(
+                    success=True,
+                    file_path=fi.path,
+                    message=messages[0] if messages else None,
+                )
+
+                if delete_after:
+                    result.deleted = await self.delete_local_file(fi.path)
+                    if not result.deleted:
+                        log.warning(f"上传后清理失败: {fi.path}")
+
+                results.append(result)
+
+            return results
+
+        except Exception as e:
+            log.error(f"媒体组上传失败: {e}")
+            if config.fallback_to_single:
+                log.info("降级为单文件上传模式")
+                results = []
+                for fi in file_infos:
+                    result = await self.upload(
+                        file_path=fi.path,
+                        chat_id=chat_id,
+                        progress_callback=progress_callback,
+                        delete_after=delete_after,
+                    )
+                    results.append(result)
+                return results
+            else:
+                return [
+                    UploadResult(
+                        success=False,
+                        error_code="MEDIA_GROUP_FAILED",
+                        error_msg=str(e),
+                    )
+                ]
+
     async def _classify_files(
         self,
         file_infos: list[FileInfo],
@@ -394,6 +682,24 @@ class FileManager:
             await self._progress_callback(progress)
 
     # ---------- 内部工具方法 ----------
+
+    @staticmethod
+    def _extract_file_unique_id(message) -> str | None:
+        """从 Pyrogram Message 对象中提取 file_unique_id。
+
+        按优先级依次检查 photo/video/document/audio/animation 属性。
+
+        Args:
+            message: Pyrogram Message 对象
+
+        Returns:
+            file_unique_id 字符串，未找到时返回 None
+        """
+        for attr in ('photo', 'video', 'document', 'audio', 'animation'):
+            media = getattr(message, attr, None)
+            if media:
+                return getattr(media, 'file_unique_id', None)
+        return None
 
     def _check_system_path(self, path: str) -> None:
         """检查路径是否在系统关键目录黑名单中。"""

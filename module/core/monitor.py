@@ -1,0 +1,227 @@
+# coding=UTF-8
+"""Monitor - 监控模块
+
+提供系统资源监控、任务统计、资源状态查询功能。
+"""
+
+import logging
+import time
+
+log = logging.getLogger(__name__)
+
+
+class Monitor:
+    """监控模块 - 提供系统资源和任务统计。"""
+
+    def __init__(self):
+        self._start_time = time.time()
+
+    def get_system_stats(self) -> dict:
+        """获取系统资源统计。
+
+        返回 CPU、内存、磁盘使用率。
+
+        Returns:
+            {
+                "cpu_percent": float,
+                "memory": {"total": int, "available": int, "used": int, "percent": float},
+                "disk": {"total": int, "used": int, "free": int, "percent": float},
+                "uptime_seconds": float,
+            }
+        """
+        try:
+            import psutil
+
+            cpu_percent = psutil.cpu_percent(interval=0)
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage('/')
+
+            return {
+                "cpu_percent": cpu_percent,
+                "memory": {
+                    "total": memory.total,
+                    "available": memory.available,
+                    "used": memory.used,
+                    "percent": memory.percent,
+                },
+                "disk": {
+                    "total": disk.total,
+                    "used": disk.used,
+                    "free": disk.free,
+                    "percent": disk.percent,
+                },
+                "uptime_seconds": time.time() - self._start_time,
+            }
+        except ImportError:
+            log.warning("psutil 未安装，无法获取系统资源统计")
+            return {
+                "cpu_percent": 0,
+                "memory": {"total": 0, "available": 0, "used": 0, "percent": 0},
+                "disk": {"total": 0, "used": 0, "free": 0, "percent": 0},
+                "uptime_seconds": time.time() - self._start_time,
+                "error": "psutil not installed",
+            }
+        except Exception as e:
+            log.error(f"获取系统资源统计失败: {e}")
+            return {
+                "cpu_percent": 0,
+                "memory": {"total": 0, "available": 0, "used": 0, "percent": 0},
+                "disk": {"total": 0, "used": 0, "free": 0, "percent": 0},
+                "uptime_seconds": time.time() - self._start_time,
+                "error": str(e),
+            }
+
+    def get_task_stats(self, task_manager) -> dict:
+        """获取任务统计。
+
+        Args:
+            task_manager: TaskManager 实例
+
+        Returns:
+            {
+                "total": int,
+                "running": int,
+                "queued": int,
+                "pending": int,
+                "completed": int,
+                "failed": int,
+                "cancelled": int,
+            }
+        """
+        if task_manager is None:
+            return {
+                "total": 0,
+                "running": 0,
+                "queued": 0,
+                "pending": 0,
+                "completed": 0,
+                "failed": 0,
+                "cancelled": 0,
+            }
+
+        try:
+            tasks = task_manager.list_tasks()
+            stats = {
+                "total": len(tasks),
+                "running": 0,
+                "queued": 0,
+                "pending": 0,
+                "completed": 0,
+                "failed": 0,
+                "cancelled": 0,
+            }
+
+            for task in tasks:
+                status = task.status.value if hasattr(task.status, 'value') else str(task.status)
+                if status in stats:
+                    stats[status] += 1
+
+            return stats
+        except Exception as e:
+            log.error(f"获取任务统计失败: {e}")
+            return {
+                "total": 0,
+                "running": 0,
+                "queued": 0,
+                "pending": 0,
+                "completed": 0,
+                "failed": 0,
+                "cancelled": 0,
+                "error": str(e),
+            }
+
+    def get_resource_status(self, task_manager=None, file_manager=None, config_manager=None) -> dict:
+        """获取资源状态。
+
+        Args:
+            task_manager: TaskManager 实例
+            file_manager: FileManager 实例
+            config_manager: ConfigManager 实例
+
+        Returns:
+            {
+                "disk": {"total_gb": float, "used_gb": float, "free_gb": float, "percent": float},
+                "memory_limit_mb": int,
+                "task_size_warning_gb": float,
+                "task_size_max_gb": float,
+                "min_disk_space_gb": float,
+                "max_concurrent_tasks": int,
+                "current_running_tasks": int,
+                "disk_space_sufficient": bool,
+            }
+        """
+        result = {
+            "disk": {"total_gb": 0, "used_gb": 0, "free_gb": 0, "percent": 0},
+            "memory_limit_mb": 512,
+            "task_size_warning_gb": 5,
+            "task_size_max_gb": 10,
+            "min_disk_space_gb": 2,
+            "max_concurrent_tasks": 1,
+            "current_running_tasks": 0,
+            "disk_space_sufficient": True,
+        }
+
+        # 获取磁盘状态
+        try:
+            import psutil
+            import os
+
+            # 获取项目目录或使用根目录
+            path = os.getcwd()
+            disk = psutil.disk_usage(path)
+
+            result["disk"] = {
+                "total_gb": round(disk.total / (1024 ** 3), 2),
+                "used_gb": round(disk.used / (1024 ** 3), 2),
+                "free_gb": round(disk.free / (1024 ** 3), 2),
+                "percent": disk.percent,
+            }
+
+            # 获取配置中的磁盘空间阈值
+            min_disk_gb = 2
+            if config_manager:
+                min_disk_gb = config_manager.min_disk_space_gb
+
+            result["disk_space_sufficient"] = (disk.free / (1024 ** 3)) >= min_disk_gb
+
+        except ImportError:
+            result["disk_space_sufficient"] = True
+            log.warning("psutil 未安装，无法获取磁盘状态")
+        except Exception as e:
+            log.error(f"获取磁盘状态失败: {e}")
+            result["disk_space_sufficient"] = True
+
+        # 获取配置中的资源限制
+        if config_manager:
+            result["memory_limit_mb"] = config_manager.memory_limit_mb
+            result["task_size_warning_gb"] = config_manager.task_size_warning_gb
+            result["task_size_max_gb"] = config_manager.task_size_max_gb
+            result["min_disk_space_gb"] = config_manager.min_disk_space_gb
+            result["max_concurrent_tasks"] = config_manager.max_concurrent_tasks
+
+        # 获取当前运行中任务数
+        if task_manager:
+            try:
+                result["current_running_tasks"] = task_manager._get_running_count()
+            except Exception:
+                pass
+
+        return result
+
+    def get_monitor_stats(self, task_manager=None) -> dict:
+        """获取完整监控统计（系统资源 + 任务统计）。
+
+        Args:
+            task_manager: TaskManager 实例
+
+        Returns:
+            完整监控统计
+        """
+        system_stats = self.get_system_stats()
+        task_stats = self.get_task_stats(task_manager)
+
+        return {
+            "system": system_stats,
+            "tasks": task_stats,
+            "timestamp": time.time(),
+        }

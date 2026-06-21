@@ -75,7 +75,13 @@ def get_file_manager(request: Request):
 
 def get_config_manager(request: Request):
     """获取配置管理器实例。"""
-    return request.app.state.config_manager
+    cm = request.app.state.config_manager
+    if cm is None:
+        # 延迟导入，避免循环依赖
+        from module.core.config_manager import ConfigManager
+        cm = ConfigManager()
+        request.app.state.config_manager = cm
+    return cm
 
 
 def get_monitor(request: Request):

@@ -44,11 +44,12 @@ def create_app(
 
     # 挂载核心管理器到应用状态
     from module.core.token_manager import TokenManager
+    from module.core.monitor import Monitor
     app.state.token_manager = token_manager or TokenManager()
     app.state.task_manager = task_manager
     app.state.file_manager = file_manager
     app.state.config_manager = config_manager
-    app.state.monitor = monitor
+    app.state.monitor = monitor or Monitor()
 
     # 注册中间件
     setup_middleware(app)

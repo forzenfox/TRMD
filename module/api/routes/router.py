@@ -6,7 +6,7 @@
 
 from fastapi import APIRouter
 
-from module.api.routes import auth, tasks, chats, files, config
+from module.api.routes import auth, tasks, chats, files, config, monitor
 
 # 主 API 路由器
 api_router = APIRouter()
@@ -17,3 +17,4 @@ api_router.include_router(tasks.router)
 api_router.include_router(chats.router)
 api_router.include_router(files.router)
 api_router.include_router(config.router)
+api_router.include_router(monitor.router)

@@ -7,8 +7,7 @@ Mock TokenManager、TaskManager 等核心模块。
 
 import os
 import tempfile
-from datetime import datetime, timezone, timedelta
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -16,7 +15,7 @@ from httpx import AsyncClient, ASGITransport
 
 from module.api.app import create_app
 from module.core.token_manager import TokenManager
-from module.core.task_manager import TaskManager, TaskType, TaskStatus
+from module.core.task_manager import TaskManager, TaskType
 
 
 # ==================== 测试工具 ====================
@@ -64,7 +63,43 @@ def config_manager():
         },
     }
     mock.save_directory = tempfile.gettempdir()
-    mock.save_config = MagicMock()
+
+    # load_config 返回真实字典（而非 MagicMock）
+    def _load_config(mask_sensitive=True):
+        result = dict(mock.config)
+        result["resource_limits"] = {
+            "task_size_warning_gb": 5,
+            "task_size_max_gb": 10,
+            "min_disk_space_gb": 2,
+            "memory_limit_mb": 512,
+            "max_concurrent_tasks": 1,
+            "max_download_concurrency": 3,
+            "max_upload_concurrency": 1,
+            "max_forward_concurrency": 1,
+        }
+        result["upload"] = {
+            "delete_after_upload": False,
+            "max_group_size": 10,
+        }
+        if mask_sensitive:
+            result["api_id"] = "***"
+            result["api_hash"] = "***"
+            result["bot_token"] = "***"
+        return result
+
+    mock.load_config = _load_config
+
+    # save_config 执行真实验证逻辑
+    def _save_config(config_data):
+        from module.core.config_manager import ConfigManager
+        cm = ConfigManager()
+        is_valid, errors = cm.validate_config(config_data)
+        if not is_valid:
+            raise ValueError(f"配置验证失败: {', '.join(errors)}")
+        return True
+
+    mock.save_config = _save_config
+
     return mock
 
 
@@ -505,7 +540,10 @@ class TestConfigEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["code"] == 0
-        assert data["data"]["api_id"] == "12345"
+        # 敏感字段已脱敏
+        assert data["data"]["api_id"] == "***"
+        assert data["data"]["api_hash"] == "***"
+        assert data["data"]["bot_token"] == "***"
         assert "resource_limits" in data["data"]
         assert "proxy" in data["data"]
 

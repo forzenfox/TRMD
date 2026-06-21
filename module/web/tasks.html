@@ -1,0 +1,692 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>任务管理 - Telegram Restricted Media Downloader</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Alpine.js CDN -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  
+  <!-- 自定义样式 -->
+  <link rel="stylesheet" href="css/style.css">
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd',
+              400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8',
+              800: '#1e40af', 900: '#1e3a8a',
+            },
+            slate: {
+              850: '#1e293b', 900: '#0f172a', 950: '#020617',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-900 min-h-screen">
+  <div 
+    x-data="tasksPage()"
+    x-init="init()"
+    class="flex min-h-screen"
+  >
+    <!-- 移动端侧边栏遮罩 -->
+    <div 
+      x-show="mobileSidebarOpen" 
+      x-transition:enter="transition-opacity ease-linear duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition-opacity ease-linear duration-300"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="fixed inset-0 bg-black/50 z-40 lg:hidden"
+      @click="mobileSidebarOpen = false"
+    ></div>
+
+    <!-- 侧边栏 -->
+    <aside 
+      :class="mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'"
+      class="fixed inset-y-0 left-0 z-50 w-64 bg-slate-800 border-r border-slate-700 transform transition-transform duration-300 lg:translate-x-0 lg:static lg:inset-0"
+    >
+      <div class="flex items-center h-16 px-6 border-b border-slate-700">
+        <div class="flex items-center">
+          <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m0 0V7a3 3 0 013-3h4a3 3 0 013 3v4m-4 4l-4 4m0 0l-4-4m0-8v-2m0 6V8m0 0l4 4m-4-4l4-4"></path>
+            </svg>
+          </div>
+          <span class="ml-3 text-lg font-bold text-white">TRMD</span>
+        </div>
+      </div>
+
+      <nav class="mt-4 px-4 space-y-1">
+        <a href="index.html" class="sidebar-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+          </svg>
+          <span>Dashboard</span>
+        </a>
+        <a href="tasks.html" class="sidebar-link active">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path>
+          </svg>
+          <span>任务管理</span>
+        </a>
+        <a href="files.html" class="sidebar-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+          </svg>
+          <span>文件管理</span>
+        </a>
+        <a href="config.html" class="sidebar-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          </svg>
+          <span>系统配置</span>
+        </a>
+      </nav>
+
+      <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-700">
+        <div class="flex items-center">
+          <div class="w-8 h-8 bg-slate-600 rounded-full flex items-center justify-center">
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+            </svg>
+          </div>
+          <div class="ml-3 flex-1 min-w-0">
+            <p class="text-sm font-medium text-white truncate" x-text="userName"></p>
+            <p class="text-xs text-slate-400">在线</p>
+          </div>
+          <button @click="logout" class="text-slate-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <header class="h-16 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-4 lg:px-6">
+        <div class="flex items-center">
+          <button @click="mobileSidebarOpen = true" class="lg:hidden mr-4 text-slate-400 hover:text-white">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+          </button>
+          <h1 class="text-xl font-semibold text-white">任务管理</h1>
+        </div>
+        <div class="flex items-center space-x-3">
+          <button @click="taskManager.showCreateModal = true" class="btn btn-primary">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+            </svg>
+            <span>新建任务</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="flex-1 p-4 lg:p-6 overflow-y-auto">
+        <!-- 通知 -->
+        <div class="fixed top-4 right-4 z-50 space-y-2 max-w-sm">
+          <template x-for="(notification, index) in notifications" :key="index">
+            <div 
+              x-show="true"
+              x-transition:enter="transition ease-out duration-300"
+              x-transition:enter-start="opacity-0 translate-y-2"
+              x-transition:enter-end="opacity-100 translate-y-0"
+              x-transition:leave="transition ease-in duration-300"
+              x-transition:leave-start="opacity-100 translate-y-0"
+              x-transition:leave-end="opacity-0 translate-y-2"
+              :class="{
+                'bg-slate-800 border-l-4 border-blue-500': notification.type === 'info',
+                'bg-slate-800 border-l-4 border-green-500': notification.type === 'success',
+                'bg-slate-800 border-l-4 border-yellow-500': notification.type === 'warning',
+                'bg-slate-800 border-l-4 border-red-500': notification.type === 'error',
+              }"
+              class="p-4 rounded-lg shadow-lg"
+            >
+              <div class="flex items-start">
+                <div class="flex-1">
+                  <p class="text-sm text-white" x-text="notification.message"></p>
+                </div>
+                <button @click="notifications.splice(index, 1)" class="ml-3 text-slate-400 hover:text-white">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 状态筛选 -->
+        <div class="mb-6">
+          <div class="flex flex-wrap gap-2">
+            <button 
+              @click="taskManager.setFilter('all')"
+              :class="taskManager.filter === 'all' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              全部
+            </button>
+            <button 
+              @click="taskManager.setFilter('running')"
+              :class="taskManager.filter === 'running' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              执行中
+            </button>
+            <button 
+              @click="taskManager.setFilter('queued')"
+              :class="taskManager.filter === 'queued' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              排队中
+            </button>
+            <button 
+              @click="taskManager.setFilter('completed')"
+              :class="taskManager.filter === 'completed' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              已完成
+            </button>
+            <button 
+              @click="taskManager.setFilter('failed')"
+              :class="taskManager.filter === 'failed' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              失败
+            </button>
+            <button 
+              @click="taskManager.setFilter('cancelled')"
+              :class="taskManager.filter === 'cancelled' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              已取消
+            </button>
+          </div>
+        </div>
+
+        <!-- 加载状态 -->
+        <div x-show="taskManager.loading" class="flex items-center justify-center py-12">
+          <div class="spinner spinner-lg"></div>
+          <span class="ml-3 text-slate-400">加载任务列表...</span>
+        </div>
+
+        <!-- 任务列表 -->
+        <div x-show="!taskManager.loading" class="card">
+          <div x-show="taskManager.tasks.length === 0" class="py-8 text-center">
+            <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+            </svg>
+            <p class="text-slate-400 mt-2">暂无任务</p>
+          </div>
+
+          <div x-show="taskManager.tasks.length > 0" class="overflow-x-auto">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>名称</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>进度</th>
+                  <th>速度</th>
+                  <th>创建时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="task in taskManager.tasks" :key="task.id">
+                  <tr>
+                    <td class="font-mono text-sm" x-text="`#${task.id}`"></td>
+                    <td class="text-truncate max-w-[200px]" x-text="task.name" :title="task.name"></td>
+                    <td>
+                      <span x-text="taskManager.getTypeText(task.type)"></span>
+                    </td>
+                    <td>
+                      <span 
+                        class="badge" 
+                        :class="taskManager.getStatusBadgeClass(task.status)"
+                        x-text="taskManager.getStatusText(task.status)"
+                      ></span>
+                    </td>
+                    <td class="min-w-[140px]">
+                      <div class="flex items-center gap-2">
+                        <div class="progress-bar flex-1">
+                          <div 
+                            class="progress-bar-fill" 
+                            :style="`width: ${task.progress || 0}%`"
+                            :class="{
+                              'success': task.status === 'completed',
+                              'error': task.status === 'failed',
+                            }"
+                          ></div>
+                        </div>
+                        <span class="text-xs text-slate-400 w-10" x-text="`${task.progress || 0}%`"></span>
+                      </div>
+                    </td>
+                    <td class="text-sm text-slate-400" x-text="task.speed ? taskManager.formatSpeed(task.speed) : '-'"></td>
+                    <td class="text-sm text-slate-400" x-text="taskManager.formatTime(task.created_at)"></td>
+                    <td class="space-x-2">
+                      <button 
+                        x-show="task.status === 'pending' || task.status === 'failed'"
+                        @click="taskManager.startTask(task.id)"
+                        class="btn btn-sm btn-success"
+                      >
+                        启动
+                      </button>
+                      <button 
+                        x-show="task.status === 'running' || task.status === 'queued'"
+                        @click="taskManager.cancelTask(task.id)"
+                        class="btn btn-sm btn-warning"
+                      >
+                        取消
+                      </button>
+                      <button 
+                        x-show="task.status === 'failed'"
+                        @click="taskManager.retryTask(task.id)"
+                        class="btn btn-sm btn-primary"
+                      >
+                        重试
+                      </button>
+                      <button 
+                        @click="taskManager.viewTaskDetail(task)"
+                        class="btn btn-sm btn-secondary"
+                      >
+                        详情
+                      </button>
+                      <button 
+                        x-show="task.status === 'completed' || task.status === 'cancelled' || task.status === 'failed'"
+                        @click="taskManager.deleteTask(task.id)"
+                        class="btn btn-sm btn-error"
+                      >
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 分页 -->
+          <div x-show="taskManager.totalPages > 1" class="mt-4 flex items-center justify-between">
+            <p class="text-sm text-slate-400">
+              共 <span x-text="taskManager.totalTasks"></span> 个任务，第 <span x-text="taskManager.page"></span> / <span x-text="taskManager.totalPages"></span> 页
+            </p>
+            <div class="flex gap-2">
+              <button 
+                @click="taskManager.setPage(taskManager.page - 1)"
+                :disabled="taskManager.page <= 1"
+                class="btn btn-sm btn-secondary"
+              >
+                上一页
+              </button>
+              <button 
+                @click="taskManager.setPage(taskManager.page + 1)"
+                :disabled="taskManager.page >= taskManager.totalPages"
+                class="btn btn-sm btn-secondary"
+              >
+                下一页
+              </button>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- 任务详情抽屉 -->
+    <div 
+      x-show="taskManager.showDetailDrawer" 
+      x-transition:enter="transition ease-out duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-300"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="fixed inset-0 bg-black/50 z-50"
+      @click="taskManager.closeDetailDrawer()"
+    >
+      <div 
+        x-show="taskManager.showDetailDrawer"
+        x-transition:enter="transition ease-out duration-300"
+        x-transition:enter-start="translate-x-full"
+        x-transition:enter-end="translate-x-0"
+        x-transition:leave="transition ease-in duration-300"
+        x-transition:leave-start="translate-x-0"
+        x-transition:leave-end="translate-x-full"
+        class="absolute right-0 top-0 bottom-0 w-full max-w-lg bg-slate-800 border-l border-slate-700 overflow-y-auto"
+        @click.stop
+      >
+        <template x-if="taskManager.selectedTask">
+          <div>
+            <div class="drawer-header">
+              <h3 class="text-lg font-semibold text-white">任务详情</h3>
+              <button @click="taskManager.closeDetailDrawer()" class="text-slate-400 hover:text-white">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+              </button>
+            </div>
+            <div class="drawer-body space-y-4">
+              <div>
+                <p class="text-sm text-slate-400">任务名称</p>
+                <p class="text-white" x-text="taskManager.selectedTask.name"></p>
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <p class="text-sm text-slate-400">任务类型</p>
+                  <p class="text-white" x-text="taskManager.getTypeText(taskManager.selectedTask.type)"></p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-400">状态</p>
+                  <span 
+                    class="badge" 
+                    :class="taskManager.getStatusBadgeClass(taskManager.selectedTask.status)"
+                    x-text="taskManager.getStatusText(taskManager.selectedTask.status)"
+                  ></span>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm text-slate-400">进度</p>
+                <div class="flex items-center gap-2 mt-1">
+                  <div class="progress-bar flex-1">
+                    <div 
+                      class="progress-bar-fill" 
+                      :style="`width: ${taskManager.selectedTask.progress || 0}%`"
+                    ></div>
+                  </div>
+                  <span class="text-sm text-slate-400" x-text="`${taskManager.selectedTask.progress || 0}%`"></span>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <p class="text-sm text-slate-400">速度</p>
+                  <p class="text-white" x-text="taskManager.selectedTask.speed ? taskManager.formatSpeed(taskManager.selectedTask.speed) : '-'"></p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-400">预计剩余</p>
+                  <p class="text-white" x-text="taskManager.selectedTask.eta ? taskManager.formatETA(taskManager.selectedTask.eta) : '-'"></p>
+                </div>
+              </div>
+              <div>
+                <p class="text-sm text-slate-400">创建时间</p>
+                <p class="text-white" x-text="taskManager.formatTime(taskManager.selectedTask.created_at)"></p>
+              </div>
+              <div>
+                <p class="text-sm text-slate-400">最后更新</p>
+                <p class="text-white" x-text="taskManager.formatTime(taskManager.selectedTask.updated_at)"></p>
+              </div>
+              <div x-show="taskManager.selectedTask.message">
+                <p class="text-sm text-slate-400">消息</p>
+                <p class="text-white text-sm" x-text="taskManager.selectedTask.message"></p>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 创建任务弹窗 -->
+    <div 
+      x-show="taskManager.showCreateModal"
+      x-transition:enter="transition ease-out duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-300"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      @click="taskManager.closeCreateModal()"
+    >
+      <div 
+        x-show="taskManager.showCreateModal"
+        x-transition:enter="transition ease-out duration-300"
+        x-transition:enter-start="opacity-0 scale-95"
+        x-transition:enter-end="opacity-100 scale-100"
+        x-transition:leave="transition ease-in duration-300"
+        x-transition:leave-start="opacity-100 scale-100"
+        x-transition:leave-end="opacity-0 scale-95"
+        class="bg-slate-800 rounded-lg border border-slate-700 w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+        @click.stop
+      >
+        <div class="modal-header">
+          <h3 class="modal-title text-white">创建新任务</h3>
+          <button @click="taskManager.closeCreateModal()" class="text-slate-400 hover:text-white">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <form @submit.prevent="handleCreateTask" class="space-y-4">
+            <!-- 任务类型 -->
+            <div class="form-group">
+              <label class="form-label">任务类型</label>
+              <div class="flex gap-3">
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="taskManager.createForm.taskType" value="download" class="mr-2">
+                  <span>下载</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="taskManager.createForm.taskType" value="forward" class="mr-2">
+                  <span>转发</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="taskManager.createForm.taskType" value="upload" class="mr-2">
+                  <span>上传</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- 任务名称 -->
+            <div class="form-group">
+              <label class="form-label">任务名称（可选）</label>
+              <input 
+                type="text" 
+                x-model="taskManager.createForm.taskName"
+                class="form-input"
+                placeholder="留空将自动生成"
+              >
+            </div>
+
+            <!-- 源频道 -->
+            <div class="form-group" x-show="taskManager.createForm.taskType !== 'upload'">
+              <label class="form-label">源频道</label>
+              <input 
+                type="text" 
+                x-model="taskManager.createForm.sourceChat"
+                class="form-input"
+                placeholder="@username 或 https://t.me/xxx"
+                required
+              >
+            </div>
+
+            <!-- 目标频道 -->
+            <div class="form-group" x-show="taskManager.createForm.taskType !== 'download'">
+              <label class="form-label">目标频道</label>
+              <input 
+                type="text" 
+                x-model="taskManager.createForm.targetChat"
+                class="form-input"
+                placeholder="@username 或 https://t.me/xxx"
+                required
+              >
+            </div>
+
+            <!-- 消息范围模式 -->
+            <div class="form-group" x-show="taskManager.createForm.taskType !== 'upload'">
+              <label class="form-label">消息范围</label>
+              <div class="flex flex-wrap gap-3 mb-3">
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="id_range" class="mr-2">
+                  <span>ID 范围</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="date_range" class="mr-2">
+                  <span>日期范围</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="id_list" class="mr-2">
+                  <span>ID 列表</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="all" class="mr-2">
+                  <span>全部</span>
+                </label>
+              </div>
+
+              <!-- ID 范围 -->
+              <div x-show="taskManager.createForm.messageRangeMode === 'id_range'" class="flex gap-3">
+                <input 
+                  type="number" 
+                  x-model="taskManager.createForm.minId"
+                  class="form-input flex-1"
+                  placeholder="最小 ID"
+                  min="1"
+                >
+                <input 
+                  type="number" 
+                  x-model="taskManager.createForm.maxId"
+                  class="form-input flex-1"
+                  placeholder="最大 ID"
+                  min="1"
+                >
+              </div>
+
+              <!-- 日期范围 -->
+              <div x-show="taskManager.createForm.messageRangeMode === 'date_range'" class="flex gap-3">
+                <input type="date" x-model="taskManager.createForm.startDate" class="form-input flex-1">
+                <input type="date" x-model="taskManager.createForm.endDate" class="form-input flex-1">
+              </div>
+
+              <!-- ID 列表 -->
+              <div x-show="taskManager.createForm.messageRangeMode === 'id_list'">
+                <textarea 
+                  x-model="taskManager.createForm.rawItems"
+                  class="form-input form-textarea"
+                  placeholder="每行一个消息 ID 或链接"
+                  rows="4"
+                ></textarea>
+                <p class="text-xs text-slate-500 mt-1">
+                  已解析 <span x-text="taskManager.getParsedItemCount()"></span> 条
+                </p>
+              </div>
+
+              <!-- 全部消息 -->
+              <div x-show="taskManager.createForm.messageRangeMode === 'all'" class="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-sm text-yellow-300">
+                ⚠️ 将处理频道历史所有消息，可能耗时较长。
+              </div>
+            </div>
+
+            <!-- 类型过滤 -->
+            <div class="form-group" x-show="taskManager.createForm.taskType !== 'upload'">
+              <label class="form-label">类型过滤</label>
+              <div class="flex flex-wrap gap-3">
+                <template x-for="option in configManager.getDownloadTypeOptions()" :key="option.value">
+                  <label class="flex items-center cursor-pointer">
+                    <input 
+                      type="checkbox" 
+                      :value="option.value"
+                      @change="configManager.toggleDownloadType(option.value)"
+                      :checked="configManager.isDownloadTypeSelected(option.value)"
+                      class="mr-2"
+                    >
+                    <span x-text="option.icon + ' ' + option.label"></span>
+                  </label>
+                </template>
+              </div>
+            </div>
+
+            <!-- 错误提示 -->
+            <div x-show="createFormError" class="bg-red-900/30 border border-red-700 text-red-300 px-3 py-2 rounded text-sm">
+              <span x-text="createFormError"></span>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button @click="taskManager.closeCreateModal()" class="btn btn-secondary">
+            取消
+          </button>
+          <button @click="handleCreateTask()" class="btn btn-primary">
+            创建任务
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript 文件 -->
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/tasks.js"></script>
+  <script src="js/config.js"></script>
+  <script>
+    /**
+     * 任务页面逻辑
+     */
+    function tasksPage() {
+      return {
+        mobileSidebarOpen: false,
+        userName: '用户',
+        notifications: [],
+        createFormError: null,
+
+        async init() {
+          const authenticated = await authManager.ensureAuthenticated();
+          if (!authenticated) return;
+
+          this.userName = authManager.getDisplayName();
+          await taskManager.loadTasks(true);
+          
+          // 连接 WebSocket
+          taskManager.connectWebSocket();
+        },
+
+        async handleCreateTask() {
+          this.createFormError = null;
+          
+          // 验证表单
+          const errors = taskManager.validateCreateForm();
+          if (errors.length > 0) {
+            this.createFormError = errors.join('；');
+            return;
+          }
+
+          try {
+            await taskManager.createTask();
+            this.addNotification('success', '任务创建成功');
+          } catch (error) {
+            this.addNotification('error', `创建失败: ${error.message}`);
+          }
+        },
+
+        logout() {
+          authManager.logout();
+        },
+
+        addNotification(type, message) {
+          this.notifications.push({ type, message });
+          setTimeout(() => this.notifications.shift(), 5000);
+        },
+      };
+    }
+
+    // 全局通知函数
+    window.showNotification = function(type, message) {
+      const app = document.querySelector('[x-data]');
+      if (app && app.__x) {
+        app.__x.getUnobservedData().addNotification(type, message);
+      }
+    };
+  </script>
+</body>
+</html>

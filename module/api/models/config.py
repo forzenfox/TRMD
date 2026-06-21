@@ -40,6 +40,10 @@ class ConfigOut(BaseModel):
     proxy: ProxyConfig = Field(default_factory=ProxyConfig)
     download_type: list[str] = Field(default_factory=lambda: ["video", "photo"])
     max_retry_count: int = 3
+    save_directory: Optional[str] = None
+    temp_directory: Optional[str] = None
+    upload_delete_after: bool = False
+    upload_max_group_size: int = 10
 
 
 class ConfigUpdate(BaseModel):
@@ -49,3 +53,7 @@ class ConfigUpdate(BaseModel):
     proxy: Optional[ProxyConfig] = None
     download_type: Optional[list[str]] = None
     max_retry_count: Optional[int] = None
+    save_directory: Optional[str] = None
+    temp_directory: Optional[str] = None
+    upload_delete_after: Optional[bool] = None
+    upload_max_group_size: Optional[int] = None

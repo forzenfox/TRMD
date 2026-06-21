@@ -81,6 +81,19 @@ class TelegramRestrictedMediaDownloaderArgumentParser(ArgumentParser):
             choices=[MODE.ONCE, MODE.SESSION],
             help='设置运行模式'
         )
+        self.add_argument(
+            '-wo', '--web-only',
+            action='store_true',
+            default=False,
+            help='仅启动 WebUI，不启动 Telegram 客户端'
+        )
+        self.add_argument(
+            '-p', '--port',
+            type=int,
+            required=False,
+            default=None,
+            help='指定 WebUI 端口（与 --web PORT 兼容）'
+        )
 
     def print_help(self, file=None):
         console.print(

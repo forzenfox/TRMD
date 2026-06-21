@@ -74,8 +74,11 @@ async def websocket_tasks(websocket: WebSocket, token: str = Query(...)):
 async def websocket_monitor(websocket: WebSocket, token: str = Query(...)):
     """监控数据推送 WebSocket。
 
-    定期推送系统资源使用情况。
+    定期推送系统资源使用情况（CPU、内存、磁盘、任务统计）。
     """
+    import psutil
+    from module.core.task_manager import TaskManager
+
     client_id = f"monitor_{uuid.uuid4().hex[:8]}"
 
     token_manager: TokenManager = websocket.app.state.token_manager
@@ -85,17 +88,77 @@ async def websocket_monitor(websocket: WebSocket, token: str = Query(...)):
 
     await ws_manager.connect(websocket, client_id)
 
+    # 发送初始监控数据
+    try:
+        cpu_percent = psutil.cpu_percent(interval=1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+
+        # 获取任务统计
+        task_manager: TaskManager = getattr(websocket.app.state, "task_manager", None)
+        task_stats = {}
+        if task_manager:
+            tasks = task_manager.list_tasks()
+            task_stats = {
+                "total": len(tasks),
+                "running": sum(1 for t in tasks if t.status.value == "running"),
+                "pending": sum(1 for t in tasks if t.status.value == "pending"),
+                "completed": sum(1 for t in tasks if t.status.value == "completed"),
+                "failed": sum(1 for t in tasks if t.status.value == "failed"),
+            }
+
+        await websocket.send_json({
+            "type": "monitor_data",
+            "timestamp": _now_iso(),
+            "payload": {
+                "cpu_percent": cpu_percent,
+                "memory": {
+                    "total": memory.total,
+                    "available": memory.available,
+                    "used": memory.used,
+                    "percent": memory.percent,
+                },
+                "disk": {
+                    "total": disk.total,
+                    "used": disk.used,
+                    "free": disk.free,
+                    "percent": disk.percent,
+                },
+                "task_stats": task_stats,
+            },
+        })
+    except ImportError:
+        # psutil 未安装时返回基础信息
+        await websocket.send_json({
+            "type": "monitor_data",
+            "timestamp": _now_iso(),
+            "payload": {"error": "psutil not installed"},
+        })
+
     try:
         while True:
             data = await websocket.receive_json()
             msg_type = data.get("type", "")
             if msg_type == "ping":
                 await ws_manager.handle_heartbeat(client_id)
-                await websocket.send_json({
-                    "type": "pong",
-                    "timestamp": _now_iso(),
-                    "payload": {},
-                })
+                # 推送最新监控数据
+                try:
+                    cpu_percent = psutil.cpu_percent(interval=None)
+                    memory = psutil.virtual_memory()
+                    await websocket.send_json({
+                        "type": "monitor_data",
+                        "timestamp": _now_iso(),
+                        "payload": {
+                            "cpu_percent": cpu_percent,
+                            "memory_percent": memory.percent,
+                        },
+                    })
+                except ImportError:
+                    await websocket.send_json({
+                        "type": "pong",
+                        "timestamp": _now_iso(),
+                        "payload": {},
+                    })
     except WebSocketDisconnect:
         await ws_manager.disconnect(client_id)
     except Exception:
@@ -117,6 +180,34 @@ async def websocket_logs(websocket: WebSocket, token: str = Query(...)):
 
     await ws_manager.connect(websocket, client_id)
 
+    # 获取日志处理器和订阅级别
+    from module.api.websocket.log_handler import get_log_handler, LogSubscription
+    import logging
+
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+    }
+
+    log_handler = get_log_handler()
+    min_level = logging.INFO  # 默认 INFO 级别
+
+    # 创建日志订阅
+    subscription = LogSubscription(websocket, min_level=min_level)
+    log_handler.add_subscription(client_id, subscription)
+
+    # 发送连接成功消息
+    await websocket.send_json({
+        "type": "log_connected",
+        "timestamp": _now_iso(),
+        "payload": {"client_id": client_id, "min_level": "INFO"},
+    })
+
+    # 启动日志推送任务
+    log_task = asyncio.create_task(subscription.start())
+
     try:
         while True:
             data = await websocket.receive_json()
@@ -128,9 +219,24 @@ async def websocket_logs(websocket: WebSocket, token: str = Query(...)):
                     "timestamp": _now_iso(),
                     "payload": {},
                 })
+            elif msg_type == "set_level":
+                # 动态设置日志级别
+                new_level = data.get("level", "INFO")
+                if new_level in level_map:
+                    subscription.min_level = level_map[new_level]
+                    await websocket.send_json({
+                        "type": "level_changed",
+                        "timestamp": _now_iso(),
+                        "payload": {"level": new_level},
+                    })
     except WebSocketDisconnect:
-        await ws_manager.disconnect(client_id)
+        pass
     except Exception:
+        pass
+    finally:
+        subscription.stop()
+        log_task.cancel()
+        log_handler.remove_subscription(client_id)
         await ws_manager.disconnect(client_id)
 
 
