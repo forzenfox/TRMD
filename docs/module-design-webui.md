@@ -1,10 +1,11 @@
 # WebUI 模块级设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
-> **文档版本**: v1.0  
-> **创建日期**: 2026-06-18  
-> **作者**: SOLO  
-> **状态**: 草案  
+> **文档版本**: v1.1
+> **创建日期**: 2026-06-18
+> **更新日期**: 2026-06-21
+> **作者**: SOLO
+> **状态**: 草案
 > **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)
 
 ---
@@ -81,6 +82,9 @@ WebUI 模块**不**负责：
 │  ├────┤  │  │                                      │  │
 │  │ 📁 │  │  │                                      │  │
 │  │ Files    │  │                                      │  │
+│  ├────┤  │  │                                      │  │
+│  │ 🗃️ │  │  │                                      │  │
+│  │ Repository│ │                                      │  │
 │  ├────┤  │  └──────────────────────────────────────┘  │
 │  │ ⚙️ │  │                                              │
 │  │ Settings │  │                                              │
@@ -99,7 +103,8 @@ WebUI 模块**不**负责：
 | **Dashboard** | `/` | 系统概览、快速创建任务入口、最近任务、资源状态 |
 | **Tasks** | `/tasks` | 任务列表、创建任务弹窗/抽屉、任务详情抽屉、操作（开始/重试/取消/删除） |
 | **Files** | `/files` | 文件树浏览、多选、上传预览、媒体组配置 |
-| **Settings** | `/settings` | 基础配置、下载/上传配置、代理配置、通知配置、资源限制 |
+| **Repository** | `/repository` | 仓库文件列表、来源映射视图、分发历史、手动同步触发、分发表单 |
+| **Settings** | `/settings` | 基础配置、下载/上传配置、代理配置、通知配置、资源限制、仓库配置 |
 | **Monitor** | `/monitor` | 实时速度曲线、任务执行状态、系统资源、实时日志流 |
 
 ### 2.3 导航交互
@@ -161,6 +166,14 @@ Alpine.store('app', {
     tasks: [],
     logs: [],
 
+    // 仓库状态
+    repository: {
+        files: [],
+        sources: [],
+        distributions: [],
+        status: {},  // { enabled, chat_id, file_count, last_sync_time }
+    },
+
     // WebSocket 连接
     ws: {
         tasks: null,
@@ -182,6 +195,7 @@ Alpine.store('app', {
 | **Dashboard** | `quickTasks`、`recentTasks`、`stats`、`resourceStatus` |
 | **Tasks** | `taskList`、`filterStatus`、`selectedTask`、`createForm`、`messageRangeMode` |
 | **Files** | `currentPath`、`fileTree`、`selectedFiles`、`uploadQueue`、`mediaGroupSize` |
+| **Repository** | `repoFiles`、`sources`、`distributions`、`syncStatus`、`distributionForm` |
 | **Settings** | `config`、`originalConfig`、`activeTab`、`saving` |
 | **Monitor** | `realtimeStats`、`logFilter`、`logLevel`、`chartData` |
 
@@ -447,10 +461,13 @@ class WsConnection {
 |--------|--------|
 | **基础** | API ID、API Hash、Bot Token、工作目录 |
 | **下载** | 下载类型（图片/视频/文档/音频等）、下载并发数、重试次数 |
-| **上传** | 上传并发数、媒体组大小、默认发送方式 |
+| **上传** | 上传并发数、媒体组大小、默认发送方式、上传后删除本地文件（`preference.upload.delete`） |
 | **代理** | 启用代理开关、代理类型、地址、端口、认证 |
 | **通知** | 完成通知、错误通知开关 |
+| **仓库** | 启用仓库开关、仓库频道 Chat ID、自动同步开关、同步间隔 |
 | **资源限制** | `max_concurrent_tasks`、`task_size_warning_gb`、`task_size_max_gb` 等 |
+
+> **说明**：配置已合并为单一 `config.yaml`（原 `config.yaml` + `global_config.yaml` 已合并），所有配置项统一在一个文件中管理。
 
 **交互要点**:
 
@@ -460,7 +477,57 @@ class WsConnection {
 - 后端再次校验并返回详细错误，前端展示在对应字段下方。
 - 不保存时离开页面给出确认提示。
 
-### 5.5 Monitor 页面
+### 5.5 Repository 页面
+
+**路由**: `/repository`
+
+**功能定位**: 仓库模式管理，查看仓库文件索引、来源映射、分发历史，触发同步与分发操作。
+
+**布局**:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  仓库管理            状态: ● 已启用  Chat: -100xxx  文件: 234  │
+│                      最后同步: 2026-06-18 10:30:00  [手动同步] │
+├──────────────────────────────────────────────────────────────┤
+│  [文件列表]  [来源映射]  [分发历史]                            │
+├──────────────────────────────────────────────────────────────┤
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  文件列表视图:                                          │  │
+│  │  file_id  | 文件名        | 类型  | 大小   | 来源消息    │  │
+│  │  f001     | video_001.mp4 | video | 120 MB | #101       │  │
+│  │  f002     | image_002.jpg | photo | 3 MB   | #102       │  │
+│  │  ...                                                   │  │
+│  └────────────────────────────────────────────────────────┘  │
+├──────────────────────────────────────────────────────────────┤
+│  [+ 新建分发]                                                │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**状态显示**:
+
+| 字段 | 说明 |
+|------|------|
+| 启用状态 | 已启用（绿色）/ 已禁用（灰色），与 Settings 仓库标签页联动 |
+| Chat ID | 仓库频道 Chat ID |
+| 文件数量 | 仓库索引中的文件总数 |
+| 最后同步时间 | 上次自动/手动同步完成的时间 |
+
+**标签页**:
+
+| 标签页 | 内容 |
+|--------|------|
+| **文件列表** | 仓库索引中的所有文件，支持搜索与类型过滤 |
+| **来源映射** | 文件与源消息的映射关系视图 |
+| **分发历史** | 历次分发记录，含目标频道、分发方式、文件数、时间 |
+
+**交互要点**:
+
+- 仓库未启用时，页面显示引导提示，引导用户前往 Settings 启用仓库并配置 Chat ID。
+- 点击"手动同步"调用后端同步接口，按钮显示 loading 状态，完成后刷新文件列表与状态。
+- 点击"新建分发"弹出分发表单：选择目标频道、分发方式（copy_message / file_id_send / upload）、文件范围。
+
+### 5.6 Monitor 页面
 
 **路由**: `/monitor`
 
@@ -533,6 +600,9 @@ class WsConnection {
 | 目标频道 | text | 是 | 目标频道链接或 @username |
 | 消息范围 | 选择器 | 是 | 同上 |
 | 类型过滤 | checkbox | 否 | 同上 |
+| 分发方式 | select | 是 | `copy_message`（默认）/ `file_id_send` / `upload` |
+| 启用去重 | checkbox | 否 | 基于仓库文件索引跳过已分发文件 |
+| 去重状态 | 只读指示器 | 否 | 显示去重后实际传输数量（如"去重后 45 / 原始 120 条"） |
 | 上传后删除本地文件 | checkbox | 否 | 默认勾选 |
 
 ### 6.4 上传任务表单
@@ -638,6 +708,8 @@ class WsConnection {
 ### 8.1 阈值行为
 
 任务创建前，后端返回统计结果，前端根据结果展示不同提示：
+
+> **去重感知计数**：当转发任务启用去重时，资源保护阈值判断基于**去重后的实际传输量**，而非原始消息总数。前端在统计结果中同时展示原始消息数与去重后传输数，让用户明确实际资源消耗。
 
 | 任务总量 | 前端行为 |
 |---------|---------|
@@ -899,6 +971,7 @@ module/web/                      # WebUI 前端目录
 │   │       ├── dashboard.js
 │   │       ├── tasks.js
 │   │       ├── files.js
+│   │       ├── repository.js
 │   │       ├── settings.js
 │   │       └── monitor.js
 │   └── img/
@@ -920,6 +993,11 @@ module/web/                      # WebUI 前端目录
 | `download_type` | 下载/转发任务类型过滤 |
 | `max_download_task` | 下载并发数 |
 | `temp` | 临时目录与上传任务根目录 |
+| `repository.enabled` | 仓库启用开关，控制 Repository 页面可用性 |
+| `repository.chat_id` | 仓库频道 Chat ID |
+| `repository.auto_sync` | 自动同步开关 |
+| `repository.sync_interval` | 同步间隔（秒） |
+| `preference.upload.delete` | 上传后删除本地文件偏好 |
 
 ---
 

@@ -1,10 +1,11 @@
 # CacheManager 模块设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
-> **文档版本**: v1.0  
-> **创建日期**: 2026-06-18  
-> **作者**: SOLO  
-> **状态**: 草案  
+> **文档版本**: v1.1
+> **创建日期**: 2026-06-18
+> **更新日期**: 2026-06-21
+> **作者**: SOLO
+> **状态**: 已更新（新增仓库模式缓存设计）
 
 ---
 
@@ -54,6 +55,10 @@ CacheManager 是 Telegram_Restricted_Media_Downloader 项目中负责**缓存 Te
 | 频道/聊天列表（Chat List） | `client.get_dialogs()` / `iter_dialogs()` | 数十至数千条 | WebUI 选择源/目标频道、Bot `/status` 展示 |
 | 消息列表（Message List） | `client.get_chat_history()` / `iter_messages()` | 与查询范围成正比 | 精确分析消息范围、按日期/ID 筛选 |
 | 消息统计信息（Message Statistics） | 基于抽样或精确遍历计算 | 小（聚合结果） | 任务预览阶段的资源保护（5GB/10GB 阈值） |
+| 仓库文件列表（Repository Files） | `RepositoryDB` 查询 | 与仓库规模成正比 | 仓库模式下获取已下载文件列表 |
+| 源映射（Repository Sources） | `RepositoryDB` 查询 | 与映射数量成正比 | 仓库模式下查询文件与源频道的映射关系 |
+| 分发记录（File Distributions） | `RepositoryDB` 查询 | 与分发记录数成正比 | 仓库模式下查询文件分发/转发记录 |
+| 仓库状态（Repository Status） | `RepositoryDB` 查询 | 小（状态信息） | 仓库模式下查询仓库整体状态 |
 
 ### 2.2 TTL 策略
 
@@ -62,12 +67,20 @@ CacheManager 是 Telegram_Restricted_Media_Downloader 项目中负责**缓存 Te
 | 频道/聊天列表 | **1 小时** | 用户加入/退出频道频率低，1 小时足够降低 API 调用且不会过度延迟新频道可见性 |
 | 消息列表 | **30 分钟** | 消息内容相对稳定，但任务创建过程中可能新增消息，30 分钟兼顾实时性与 API 消耗 |
 | 消息统计信息 | **10 分钟** | 统计结果用于资源保护决策，需要比消息列表更及时地反映新增消息带来的大小变化 |
+| 仓库文件列表 | **30 分钟** | 仓库文件列表变更频率低（仅在下载任务完成后新增），30 分钟兼顾实时性与查询性能 |
+| 源映射 | **1 小时** | 源映射关系变更频率极低（仅在新增源频道时变化），1 小时 TTL 足够 |
+| 分发记录 | **10 分钟** | 分发记录在转发任务执行期间频繁变化，需要较短的 TTL 以及时反映最新分发状态 |
+| 仓库状态 | **5 分钟** | 仓库状态用于实时监控，需要最短的 TTL 以反映当前仓库运行状态 |
 
 ### 2.3 缓存键设计原则
 
 - **频道列表**：全局单用户，使用固定键 `chat_list`。
 - **消息列表**：键由 `chat_id` + 查询参数（范围类型、起止 ID/日期、媒体类型过滤等）生成，形式为 `messages:{chat_id}:{param_hash}`。
 - **消息统计**：键由 `chat_id` + 统计参数生成，形式为 `estimate:{chat_id}:{param_hash}`。
+- **仓库文件列表**：键由仓库标识 + 查询参数生成，形式为 `repository_files:{repo_id}:{param_hash}`。
+- **源映射**：键由仓库标识生成，形式为 `repository_sources:{repo_id}`。
+- **分发记录**：键由仓库标识 + 查询参数生成，形式为 `file_distributions:{repo_id}:{param_hash}`。
+- **仓库状态**：键由仓库标识生成，形式为 `repository_status:{repo_id}`。
 
 参数哈希采用稳定序列化（如按 key 排序后的 JSON）+ SHA-256 前 16 位，确保相同语义参数命中同一份缓存。
 
@@ -117,7 +130,29 @@ CREATE TABLE IF NOT EXISTS cache_params (
 
 > 说明：`cache_params` 可选。若项目追求极简，可将 `param_hash` 直接编码进 `cache_key`，不建辅助表。但建议保留，便于后续按 chat_id 或参数维度清理、诊断。
 
-### 3.3 索引设计
+### 3.3 数据库共存设计
+
+仓库模式引入的 `repository_files`、`repository_sources`、`file_distributions` 等业务数据表与缓存表 `cache_entries`、`cache_params` 共存于同一 SQLite 数据库文件 `trmd.db`。
+
+**共存原则：**
+
+- **业务数据表**（`repository_files`、`repository_sources`、`file_distributions`）由 `RepositoryDB` 模块管理，存储仓库的持久化业务数据，不属于缓存范畴。
+- **缓存表**（`cache_entries`、`cache_params`）由 `CacheManager` 管理，存储查询结果的缓存副本。
+- CacheManager 可缓存对仓库业务表的查询结果，以减少重复数据库查询开销。
+- 所有表共享同一数据库连接，使用 **WAL 模式**以支持并发读写。
+
+**表关系示意：**
+
+```
+trmd.db (WAL mode)
+├── cache_entries          ← CacheManager 管理（缓存层）
+├── cache_params           ← CacheManager 管理（缓存层）
+├── repository_files       ← RepositoryDB 管理（业务层）
+├── repository_sources     ← RepositoryDB 管理（业务层）
+└── file_distributions     ← RepositoryDB 管理（业务层）
+```
+
+### 3.4 索引设计
 
 ```sql
 -- 按类型与过期时间清理/查询
@@ -133,13 +168,17 @@ CREATE INDEX IF NOT EXISTS idx_cache_params_hash
     ON cache_params(param_hash);
 ```
 
-### 3.4 序列化格式
+### 3.5 序列化格式
 
 | 数据类型 | 推荐序列化方式 | 理由 |
 |---------|---------------|------|
 | 频道/聊天列表 | `msgpack` | Pyrogram `Chat`/`Dialog` 对象字段多，msgpack 体积小、反序列化快 |
 | 消息列表 | `msgpack` | 消息对象可能含媒体元数据，msgpack 优于 JSON |
 | 消息统计 | `json` 或 `msgpack` | 聚合结果结构简单，JSON 可读性更好 |
+| 仓库文件列表 | `json` 或 `pickle` | 文件元数据结构化程度高，JSON 可读性好 |
+| 源映射 | `json` | 映射关系结构简单，JSON 可读性优先 |
+| 分发记录 | `json` 或 `pickle` | 分发记录结构化程度高 |
+| 仓库状态 | `json` | 状态信息结构简单，JSON 可读性优先 |
 
 > 若项目中未引入 `msgpack`，可继续使用 Python 标准库 `pickle`。但需注意：**缓存数据仅在本地使用，不跨进程/网络传输**，pickle 可接受。为避免与项目现有依赖冲突，优先使用标准库 `pickle`，后续如引入 msgpack 可迁移。
 
@@ -242,6 +281,72 @@ class CacheManager:
         chat_id: Optional[int | str] = None,
     ) -> int:
         """删除消息统计缓存。若指定 chat_id，仅删除该频道相关缓存。"""
+
+    # ---------- 仓库模式缓存 ----------
+
+    async def get_repository_files(
+        self,
+        repo_id: int | str,
+        params: Optional[dict] = None,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """
+        获取仓库文件列表缓存。
+
+        优先读缓存，未命中或过期时从 RepositoryDB 查询。
+
+        Args:
+            repo_id: 仓库标识。
+            params: 查询参数（文件类型过滤、排序等），可选。
+            force_refresh: 是否强制刷新缓存。
+
+        Returns:
+            仓库文件列表（已反序列化为可安全使用的 dict 列表）。
+        """
+
+    async def get_repository_sources(
+        self,
+        repo_id: int | str,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """
+        获取仓库源映射缓存。
+
+        优先读缓存，未命中或过期时从 RepositoryDB 查询。
+
+        Args:
+            repo_id: 仓库标识。
+            force_refresh: 是否强制刷新缓存。
+
+        Returns:
+            源映射列表（文件与源频道的映射关系）。
+        """
+
+    async def get_file_distributions(
+        self,
+        repo_id: int | str,
+        params: Optional[dict] = None,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """
+        获取文件分发记录缓存。
+
+        优先读缓存，未命中或过期时从 RepositoryDB 查询。
+
+        Args:
+            repo_id: 仓库标识。
+            params: 查询参数（状态过滤、时间范围等），可选。
+            force_refresh: 是否强制刷新缓存。
+
+        Returns:
+            分发记录列表。
+        """
+
+    async def invalidate_repository_cache(
+        self,
+        repo_id: Optional[int | str] = None,
+    ) -> int:
+        """删除仓库相关缓存。若指定 repo_id，仅删除该仓库相关缓存；否则删除所有仓库缓存。"""
 
     # ---------- 通用操作 ----------
 
@@ -589,6 +694,7 @@ pytest tests/core/test_cache_manager.py -v --cov=module.core.cache_manager --cov
 | `module.core.task_manager` | 创建任务时调用 `get_message_stats` 进行资源保护判断 |
 | `module.core.file_manager` | 文件上传预览可能依赖消息统计 |
 | `module.client.TelegramRestrictedMediaDownloaderClient` | 实际执行 Telegram API 调用 |
+| `module.core.repository_db` | 仓库模式下 CacheManager 缓存其查询结果；CacheManager 依赖 RepositoryDB 进行缓存失效（当业务数据变更时清除对应缓存） |
 
 ### 11.2 外部依赖
 
@@ -612,14 +718,20 @@ pytest tests/core/test_cache_manager.py -v --cov=module.core.cache_manager --cov
          ▼
 ┌─────────────────┐
 │  CacheManager   │
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐ ┌──────────────┐
-│ SQLite │ │ TelegramClient│
-└────────┘ └──────────────┘
+└──┬─────┬────────┘
+   │     │
+   ▼     ▼
+┌──────┐ ┌──────────────┐
+│SQLite│ │ TelegramClient│
+└──┬───┘ └──────────────┘
+   │
+   ▼
+┌──────────────┐
+│ RepositoryDB │
+└──────────────┘
 ```
+
+> 说明：CacheManager 与 RepositoryDB 共享同一 SQLite 数据库（`trmd.db`），但 CacheManager 仅缓存 RepositoryDB 的查询结果，不直接操作仓库业务表。RepositoryDB 数据变更时通知 CacheManager 清除对应缓存。
 
 ---
 
@@ -652,6 +764,10 @@ pytest tests/core/test_cache_manager.py -v --cov=module.core.cache_manager --cov
 | `GET /api/chats` | `get_chat_list()` | 1 小时 |
 | `POST /api/chats/{chat_id}/messages/estimate` | `get_message_stats()` | 10 分钟 |
 | `POST /api/chats/{chat_id}/messages/analyze` | `get_message_list()` | 30 分钟 |
+| `GET /api/repository/{repo_id}/files` | `get_repository_files()` | 30 分钟 |
+| `GET /api/repository/{repo_id}/sources` | `get_repository_sources()` | 1 小时 |
+| `GET /api/repository/{repo_id}/distributions` | `get_file_distributions()` | 10 分钟 |
+| `GET /api/repository/{repo_id}/status` | — | 5 分钟（仓库状态直接查询，可选缓存） |
 
 ---
 
@@ -664,6 +780,8 @@ pytest tests/core/test_cache_manager.py -v --cov=module.core.cache_manager --cov
 | Single-Flight | 合并同一 key 的并发请求，只执行一次底层调用 |
 | Fetcher | 从 Telegram API 获取原始数据的可调用对象 |
 | Estimator | 执行抽样估算的可调用对象 |
+| RepositoryDB | 仓库模式数据库管理模块，管理 repository_files/repository_sources/file_distributions 等业务表 |
+| WAL | Write-Ahead Logging，SQLite 日志模式，支持并发读写 |
 
 ---
 

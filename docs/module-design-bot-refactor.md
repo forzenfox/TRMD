@@ -2,7 +2,7 @@
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
 > **模块名称**: Bot 端重构  
-> **文档版本**: v1.0  
+> **文档版本**: v1.1  
 > **创建日期**: 2026-06-18  
 > **状态**: 草稿  
 > **关联文档**: `docs/interaction-enhancement-design.md`
@@ -63,6 +63,7 @@
 | `/web` | 新增 | 生成带 Token 的 WebUI 访问链接 | 低 |
 | `/web_revoke` | 新增 | 撤销当前用户所有生效 Token | 低 |
 | `/batch` | 新增 | 进入简化批量操作模式 | 中 |
+| `/setup_repository` | 新增 | 设置仓库频道（配置存储频道） | 中 |
 | `/table` | 移除 | 原终端统计表入口，功能迁移至 WebUI | - |
 | `/download_chat` | 移除 | 复杂频道过滤表单迁移至 WebUI | - |
 | `/exit` | 保留 | 退出软件 | 低 |
@@ -82,6 +83,7 @@
 - `/web`：调用 `TokenManager.generate(user_id)` 生成 1 小时有效 Token，拼接 WebUI URL。
 - `/web_revoke`：调用 `TokenManager.revoke(user_id)` 使该用户所有 Token 失效。
 - `/batch`：启动 `InteractionManager` 的批量收集会话，进入简化批量模式。
+- `/setup_repository`：设置仓库频道，验证频道输入格式，解析频道 ID，检查 Bot 管理员权限，保存到配置。
 
 #### 2.2.3 移除命令
 
@@ -273,11 +275,152 @@ async def web(self, client, message):
 
 ---
 
-## 5. 复杂操作引导文案
+## 5. `/setup_repository` 命令详细设计
+
+### 5.1 设计定位
+
+`/setup_repository` 提供仓库频道的 Bot 端配置入口。用户通过该命令指定一个 Telegram 频道作为仓库频道，Bot 验证输入格式、解析频道 ID、检查管理员权限后，将 `chat_id` 写入配置。仓库模式启用后，下载的媒体文件将自动存储到该频道，实现去重和分发。
+
+### 5.2 触发条件
+
+- 命令：`/setup_repository <频道标识>` 或 `/setup_repository`（无参数时发送欢迎消息）
+- 权限：`filters.user(self.root)`，仅登录用户账户 ID 可触发。
+- 依赖：`ConfigManager` 实例已注入 `BotCommands`。
+
+### 5.3 处理流程
+
+```
+用户发送 /setup_repository <频道标识>
+  │
+  ▼
+Bot 通过 filters.user(self.root) 校验身份
+  │
+  ▼
+解析命令参数，无参数时发送欢迎消息和使用说明
+  │
+  ▼
+调用 validate_channel_input(channel_input) 验证输入格式
+  │
+  ├─ 无效 → 回复错误提示（支持的格式列表）
+  │
+  ▼
+调用 resolve_channel_id(client, channel_input) 解析为数字 chat_id
+  │
+  ├─ 解析失败 → 回复错误提示
+  │
+  ▼
+调用 _check_admin_permission(client, chat_id) 检查 Bot 管理员权限
+  │
+  ├─ 权限不足 → 回复权限不足提示
+  │
+  ▼
+调用 config_manager.set_repository_chat_id(chat_id) 保存配置
+  │
+  ├─ 保存失败 → 回复配置保存失败提示
+  │
+  ▼
+回复成功消息（含频道 ID）
+```
+
+### 5.4 频道输入验证与解析
+
+#### 5.4.1 支持的输入格式
+
+| 格式 | 示例 | 验证正则 | 返回类型 |
+|------|------|----------|----------|
+| 数字 ID | `-1001234567890` | `^-?\d+$` | `"numeric_id"` |
+| @用户名 | `@my_repo` | `^@[a-zA-Z]\w{3,30}$` | `"username"` |
+| t.me 链接 | `https://t.me/my_repo` | `^https?://t\.me/([a-zA-Z]\w{0,30})$` | `"t_me_link"` |
+| 邀请链接 | `https://t.me/+AbCdEf` | `^https?://t\.me/\+[A-Za-z0-9_-]+$` | `"invite_link"` |
+
+#### 5.4.2 验证方法
+
+```python
+def validate_channel_input(self, channel_input: str) -> Optional[str]:
+    """验证频道输入格式是否合法。
+
+    :param channel_input: 用户输入的频道标识
+    :return: 输入类型字符串或 None（无效输入）
+    """
+```
+
+#### 5.4.3 解析方法
+
+```python
+async def resolve_channel_id(self, client, channel_input: str) -> str:
+    """将用户输入的频道标识解析为数字 chat_id。
+
+    - 纯数字 ID 直接返回
+    - @username / t.me 链接 / 邀请链接通过 client.get_chat() 解析
+
+    :param client: Pyrogram 客户端
+    :param channel_input: 用户输入的频道标识
+    :return: 解析后的数字 chat_id 字符串
+    :raises Exception: 解析失败时抛出异常
+    """
+```
+
+#### 5.4.4 权限检查方法
+
+```python
+async def _check_admin_permission(self, client, chat_id: str) -> bool:
+    """检查 Bot 是否在指定频道中拥有管理员权限。
+
+    :param client: Pyrogram 客户端
+    :param chat_id: 频道 chat_id
+    :return: 是否为管理员
+    """
+```
+
+### 5.5 回复文案示例
+
+**无参数欢迎消息：**
+
+```text
+🗄️ 仓库频道设置
+
+仓库模式会将下载的媒体文件自动存储到指定频道，实现去重和分发功能。
+
+📋 请使用以下命令格式设置仓库频道：
+`/setup_repository <频道标识>`
+
+支持的频道标识格式：
+  • 频道 ID：`-1001234567890`
+  • 用户名：`@my_repo`
+  • 频道链接：`https://t.me/my_repo`
+  • 邀请链接：`https://t.me/+AbCdEf`
+
+⚠️ Bot 需要在目标频道拥有管理员权限
+```
+
+**设置成功：**
+
+```text
+✅ 仓库频道设置成功！
+
+📁 频道 ID：`-1001234567890`
+
+仓库模式已启用，下载的媒体文件将自动存储到该频道。
+你可以通过 WebUI 查看和管理仓库内容。
+```
+
+### 5.6 异常处理
+
+| 异常场景 | Bot 回复 |
+|----------|----------|
+| 无效的频道标识格式 | 回复错误提示，列出支持的格式 |
+| 频道解析失败（不存在/不可访问） | 回复错误提示，建议确认频道存在且 Bot 可访问 |
+| Bot 无管理员权限 | 回复权限不足提示，建议在频道设置中将 Bot 设为管理员 |
+| 配置保存失败 | 回复配置保存失败提示，建议检查配置文件权限 |
+| 无 `config_manager` 实例 | 跳过保存，记录警告日志 |
+
+---
+
+## 6. 复杂操作引导文案
 
 当用户触发已移除命令或试图在 Bot 中执行复杂操作时，统一返回引导文案，不做复杂表单。
 
-### 5.1 旧命令迁移提示
+### 6.1 旧命令迁移提示
 
 **`/download_chat`：**
 
@@ -307,7 +450,7 @@ WebUI 支持：
 获取访问地址: /web
 ```
 
-### 5.2 通用 WebUI 引导
+### 6.2 通用 WebUI 引导
 
 ```text
 🌐 该操作在 WebUI 中更便捷：
@@ -321,17 +464,18 @@ WebUI 支持：
 
 ---
 
-## 6. 与核心模块集成
+## 7. 与核心模块集成
 
-### 6.1 模块依赖图
+### 7.1 模块依赖图
 
 ```
-┌─────────────────────────────────────────────┐
-│              module/bot.py (Bot)            │
-├─────────────────────────────────────────────┤
-│  /start /help /download /forward /upload    │
-│  /status /web /web_revoke /batch            │
-└───────────┬─────────────────┬───────────────┘
+┌──────────────────────────────────────────────────┐
+│              module/bot.py (Bot)                  │
+├──────────────────────────────────────────────────┤
+│  /start /help /download /forward /upload         │
+│  /status /web /web_revoke /batch                 │
+│  /setup_repository /cancel                       │
+└───────────┬─────────────────┬────────────────────┘
             │                 │
     filters.user(self.root)   │
             │                 │
@@ -342,13 +486,14 @@ WebUI 支持：
 └──────────────────┘  └──────────────────┘
             │                 │
             ▼                 ▼
-┌──────────────────────────────────────────┐
-│ TaskManager / FileManager / ConfigManager │
-│          (核心业务逻辑层)                 │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────┐
+│ TaskManager / FileManager / ConfigManager         │
+│ RepositoryManager / RepositoryDB                  │
+│          (核心业务逻辑层)                          │
+└──────────────────────────────────────────────────┘
 ```
 
-### 6.2 Bot 类属性扩展
+### 7.2 Bot 类属性扩展
 
 在现有 `Bot.__init__` 基础上新增：
 
@@ -357,9 +502,21 @@ self.token_manager: TokenManager = ...      # 注入
 self.task_manager: TaskManager = ...        # 注入
 self.interaction_manager: InteractionManager = ...  # 注入或内部实例化
 self.web_ui_enabled: bool = ...             # 由 main.py 启动参数决定
+self.repository_manager: RepositoryManager | None = None  # 仓库模式管理器，可选
 ```
 
-### 6.3 集成点说明
+Downloader 类新增方法：
+
+```python
+def _init_repository_manager(self):
+    """初始化仓库模式管理器。
+
+    当全局配置中仓库模式启用时，创建 RepositoryDB 和 RepositoryManager 实例。
+    如果仓库模式未启用或配置无效，repository_manager 保持为 None。
+    """
+```
+
+### 7.3 集成点说明
 
 | 功能 | 调用方法 | 返回值处理 |
 |------|----------|------------|
@@ -370,22 +527,38 @@ self.web_ui_enabled: bool = ...             # 由 main.py 启动参数决定
 | 启动批量会话 | `InteractionManager.start_session(user_id, mode='batch')` | 记录会话状态 |
 | 收集输入 | `InteractionManager.add_item(user_id, item)` | 更新计数 |
 | 结束批量会话 | `InteractionManager.end_session(user_id)` | 返回收集列表 |
+| 验证频道输入 | `BotCommands.validate_channel_input(channel_input)` | 返回类型字符串或 None |
+| 解析频道 ID | `BotCommands.resolve_channel_id(client, channel_input)` | 返回 chat_id 字符串 |
+| 检查管理员权限 | `BotCommands._check_admin_permission(client, chat_id)` | 返回布尔值 |
+| 保存仓库频道 ID | `ConfigManager.set_repository_chat_id(chat_id)` | 返回保存是否成功 |
 
-### 6.4 与 ConfigManager 的集成
+### 7.4 与 ConfigManager 的集成
 
 - `ConfigManager.get_config('web_ui.base_url')` 用于 `/web` 链接拼接。
 - `ConfigManager.get_config('bot.batch_timeout_seconds')` 用于 `/batch` 超时时间。
+- `ConfigManager.set_repository_chat_id(chat_id)` 用于 `/setup_repository` 保存仓库频道 ID。
+- `ConfigManager.get_repository_config()` 用于获取仓库配置分组。
+- `ConfigManager.validate_repository_config()` 用于验证仓库配置合法性。
 - 若配置中未启用 WebUI，`/web` 命令回复启动指引。
+
+### 7.5 配置合并影响
+
+配置已从独立的 `GlobalConfig` + `UserConfig` 合并为单一 `config.yaml`，由 `ConfigManager` 统一管理：
+
+- `BotCommands` 构造函数新增可选参数 `config_manager: Optional[ConfigManager] = None`，用于 `/setup_repository` 等需要写配置的命令。
+- `GlobalConfig` 现从 `UserConfig`（即 `ConfigManager` 底层）读取配置，不再独立维护配置文件。
+- Downloader 通过 `_init_global_config(user_config=self.app)` 将合并后的配置传入 `GlobalConfig`。
+- 配置访问模式：读操作通过 `ConfigManager.get_config(key)` / `get_repository_config()`，写操作通过 `ConfigManager.set_config(key, value)` / `set_repository_chat_id(chat_id)`。
 
 ---
 
-## 7. 交互状态管理（InteractionManager）
+## 8. 交互状态管理（InteractionManager）
 
-### 7.1 职责
+### 8.1 职责
 
 `InteractionManager` 负责管理 Bot 端的多轮交互会话，当前仅服务于 `/batch` 模式，后续可扩展至其他需要多轮输入的命令。
 
-### 7.2 数据模型
+### 8.2 数据模型
 
 ```python
 from enum import Enum
@@ -405,7 +578,7 @@ class InteractionState:
     timeout_seconds: int = 600
 ```
 
-### 7.3 接口定义
+### 8.3 接口定义
 
 ```python
 class InteractionManager:
@@ -435,7 +608,7 @@ class InteractionManager:
         """返回已超时的 user_id 列表。"""
 ```
 
-### 7.4 与 Bot 的协作
+### 8.4 与 Bot 的协作
 
 1. Bot 收到 `/batch` 时调用 `start_session`。
 2. Bot 收到普通消息时，先判断 `get_session(user_id)` 是否存在：
@@ -447,34 +620,34 @@ class InteractionManager:
 
 ---
 
-## 8. 向后兼容策略
+## 9. 向后兼容策略
 
-### 8.1 命令兼容
+### 9.1 命令兼容
 
 - 保留命令的解析逻辑、错误提示、返回值全部保持与现有代码一致。
-- 仅调整 `COMMANDS` 列表（注册到 Telegram Bot 菜单的命令），移除 `/table`、`/download_chat`，新增 `/status`、`/web`、`/web_revoke`、`/batch`。
+- 仅调整 `COMMANDS` 列表（注册到 Telegram Bot 菜单的命令），移除 `/table`、`/download_chat`，新增 `/status`、`/web`、`/web_revoke`、`/batch`、`/setup_repository`。
 
-### 8.2 旧命令兜底
+### 9.2 旧命令兜底
 
 - 对于已移除但用户仍可能发送的命令（`/table`、`/download_chat`），在 `process_error_message` 之前增加一层处理：
   - 识别命令 → 返回迁移提示文案 → 不进入原有业务逻辑。
 - 避免直接删除方法，先通过 `bot.py` 内的映射表转发到引导文案，便于后续彻底移除时审计。
 
-### 8.3 配置兼容
+### 9.3 配置兼容
 
 - `GlobalConfig.TEMPLATE` 中新增 `web_ui` 相关配置项，使用 `add_missing_keys` 自动补全，不破坏旧配置文件。
 - 新增配置项均提供默认值，如 `web_ui.base_url` 默认 `http://127.0.0.1:8080`。
 
-### 8.4 监听功能兼容
+### 9.4 监听功能兼容
 
 - `/listen_download`、`/listen_forward`、`/listen_info` 保持原有入口。
 - 复杂监听规则管理后续可在 WebUI 中补充，但 Bot 端入口不删除。
 
 ---
 
-## 9. 错误处理
+## 10. 错误处理
 
-### 9.1 Bot 端错误分类
+### 10.1 Bot 端错误分类
 
 | 错误类型 | 示例 | 处理方式 |
 |----------|------|----------|
@@ -486,7 +659,7 @@ class InteractionManager:
 | 超时错误 | `/batch` 超过 10 分钟 | 自动取消并通知用户 |
 | 核心模块错误 | TokenManager 异常 | 记录日志，回复「服务暂不可用」 |
 
-### 9.2 异常处理原则
+### 10.2 异常处理原则
 
 - Bot 端不吞没异常，所有业务异常记录到日志。
 - 对用户回复使用中文、简洁、不含堆栈信息。
@@ -495,21 +668,21 @@ class InteractionManager:
 
 ---
 
-## 10. TDD 测试策略
+## 11. TDD 测试策略
 
-### 10.1 测试目标
+### 11.1 测试目标
 
 - 新增 Bot 命令处理逻辑单元测试覆盖率 ≥ 80%。
 - `/web` Token 生成与链接拼接逻辑 100% 覆盖。
 - `/batch` 状态机与超时逻辑 100% 覆盖。
 - 向后兼容命令（`/download`、`/forward`、`/upload`）至少保留关键路径回归测试。
 
-### 10.2 测试框架
+### 11.2 测试框架
 
 - 使用 `pytest` + `pytest-asyncio`。
 - 使用 `unittest.mock` / `pytest-mock` 模拟 Pyrogram Client、Message、User。
 
-### 10.3 单元测试用例清单
+### 11.3 单元测试用例清单
 
 #### `/web` 命令
 
@@ -546,6 +719,22 @@ class InteractionManager:
 | TC-STA-01 | 无任务时发送 `/status` | 回复「当前没有运行中任务」 |
 | TC-STA-02 | 有运行中和排队任务 | 回复任务列表与状态 |
 
+#### `/setup_repository` 命令
+
+| 用例 ID | 用例描述 | 预期结果 |
+|---------|----------|----------|
+| TC-REPO-01 | 发送 `/setup_repository` 无参数 | 回复欢迎消息和使用说明 |
+| TC-REPO-02 | 发送 `/setup_repository -1001234567890` 有效数字 ID | 验证通过，解析成功，权限检查通过，保存配置，回复成功 |
+| TC-REPO-03 | 发送 `/setup_repository @my_repo` 有效用户名 | 通过 `client.get_chat()` 解析，保存配置 |
+| TC-REPO-04 | 发送 `/setup_repository https://t.me/my_repo` 有效链接 | 通过 `client.get_chat()` 解析，保存配置 |
+| TC-REPO-05 | 发送 `/setup_repository https://t.me/+AbCdEf` 有效邀请链接 | 通过 `client.get_chat()` 解析，保存配置 |
+| TC-REPO-06 | 发送无效格式输入 | 回复错误提示，列出支持的格式 |
+| TC-REPO-07 | 频道解析失败（不存在/不可访问） | 回复错误提示 |
+| TC-REPO-08 | Bot 无管理员权限 | 回复权限不足提示 |
+| TC-REPO-09 | 配置保存失败 | 回复配置保存失败提示 |
+| TC-REPO-10 | 无 `config_manager` 实例时设置 | 跳过保存，记录警告日志 |
+| TC-REPO-11 | `setup_repository` 在 COMMANDS 列表中 | 命令名和描述均存在 |
+
 #### 向后兼容命令
 
 | 用例 ID | 用例描述 | 预期结果 |
@@ -556,16 +745,16 @@ class InteractionManager:
 | TC-COMP-04 | 发送 `/table` | 回复迁移提示，不进入原逻辑 |
 | TC-COMP-05 | 发送 `/download_chat` | 回复迁移提示，不进入原逻辑 |
 
-### 10.4 Mock 点
+### 11.4 Mock 点
 
-- `pyrogram.Client`：模拟 `send_message`、`edit_message_text`、`set_bot_commands`、`get_me`。
+- `pyrogram.Client`：模拟 `send_message`、`edit_message_text`、`set_bot_commands`、`get_me`、`get_chat`、`get_chat_member`。
 - `pyrogram.types.Message`：构造 `from_user.id`、`text`、`id`。
 - `TokenManager`：模拟 `generate`、`revoke`、`validate`。
 - `TaskManager`：模拟 `list_tasks`、`create_task`。
-- `ConfigManager`：模拟 `get_config` 返回值。
+- `ConfigManager`：模拟 `get_config`、`get_repository_config`、`set_repository_chat_id` 返回值。
 - `datetime.now`：用于 `/batch` 超时测试。
 
-### 10.5 测试目录建议
+### 11.5 测试目录建议
 
 ```
 tests/
@@ -576,6 +765,7 @@ tests/
 │   ├── test_web_command.py
 │   ├── test_batch_command.py
 │   ├── test_status_command.py
+│   ├── test_bot_setup_repository.py
 │   └── test_backward_compat.py
 └── core/
     └── test_interaction_manager.py
@@ -583,25 +773,27 @@ tests/
 
 ---
 
-## 11. 依赖关系
+## 12. 依赖关系
 
-### 11.1 新增依赖
+### 12.1 新增依赖
 
 | 依赖 | 用途 | 是否必选 |
 |------|------|----------|
 | `module/core/token_manager.py` | Token 生成与验证 | 是 |
 | `module/core/task_manager.py` | 任务创建与查询 | 是 |
 | `module/core/interaction_manager.py` | `/batch` 状态管理 | 是 |
-| `module/core/config_manager.py` | 读取 WebUI 配置 | 是（可复用现有 GlobalConfig） |
+| `module/core/config_manager.py` | 统一配置读写（含 repository 配置） | 是 |
+| `module/core/repository_manager.py` | 仓库模式编排（去重/分发） | 否（仓库模式启用时必选） |
+| `module/core/repository_db.py` | 仓库数据持久化 | 否（仓库模式启用时必选） |
 
-### 11.2 现有依赖
+### 12.2 现有依赖
 
 - `pyrogram`：Bot 客户端、消息处理、filters。
 - `module/language.py`：文案翻译（可选，保持现有 `_t` 调用）。
 - `module/enums.py`：`BotCommandText`、`BotButton`、`BotCallbackText` 等。
 - `module/config.py`：`GlobalConfig` 配置读取。
 
-### 11.3 循环依赖规避
+### 12.3 循环依赖规避
 
 - Bot 模块只依赖核心模块的接口，不依赖核心模块内部实现。
 - 核心模块（TaskManager、TokenManager）不反向依赖 `Bot`。
@@ -609,9 +801,9 @@ tests/
 
 ---
 
-## 12. 风险与假设
+## 13. 风险与假设
 
-### 12.1 风险
+### 13.1 风险
 
 | 风险 | 影响 | 缓解措施 |
 |------|------|----------|
@@ -621,7 +813,7 @@ tests/
 | `/batch` 会话超时与真实任务执行混淆 | 用户困惑 | 超时仅针对收集会话，已提交任务不受影响 |
 | 并发消息导致 `/batch` 状态竞争 | 数据不一致 | 单用户 + 单 Bot 实例，状态操作串行化；后续如需扩展再加锁 |
 
-### 12.2 假设
+### 13.2 假设
 
 1. 当前版本为单用户模型，`self.root` 仅包含一个用户 ID。
 2. WebUI 与 Bot 运行在同一进程或同一信任网络中，`base_url` 可配置。
@@ -631,11 +823,12 @@ tests/
 
 ---
 
-## 13. 变更记录
+## 14. 变更记录
 
 | 版本 | 日期 | 变更内容 |
 |------|------|----------|
 | v1.0 | 2026-06-18 | 初始版本，完成 Bot 端重构模块设计 |
+| v1.1 | 2026-06-21 | 新增 `/setup_repository` 命令设计；新增频道验证与解析方法；更新 BotCommands 构造函数（config_manager 参数）；更新 Bot 类属性（repository_manager）；更新配置合并影响说明；新增仓库模式相关依赖 |
 
 ---
 

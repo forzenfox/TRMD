@@ -1,10 +1,10 @@
 # FileManager 模块设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
-> **文档版本**: v1.0  
-> **创建日期**: 2026-06-18  
-> **更新日期**: 2026-06-18  
-> **状态**: 设计中  
+> **文档版本**: v1.1
+> **创建日期**: 2026-06-18
+> **更新日期**: 2026-06-21
+> **状态**: 已实现（含仓库模式）
 > **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)
 
 ---
@@ -42,13 +42,22 @@ FileManager 是 Bot 与 WebUI 共享的**核心文件管理层**，目标是为�
 │  - 媒体组拆分与上传                                                   │
 │  - 上传进度回调                                                       │
 │  - 本地文件清理                                                       │
-└──────────────────────────────────────────────────────────────────────┘
+│  - 仓库模式回调（上传成功后通知 RepositoryManager）                    │
+└──────────┬───────────────────────────────────────────────────────────┘
            │
            ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │                    TelegramClient / Pyrogram                          │
 │  - send_media_group / send_video / send_photo / send_document         │
 │  - save_file / UploadMedia                                            │
+└──────────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────────┐
+│               RepositoryManager（仓库模式，外部模块）                   │
+│  - on_upload_success(): 上传成功后提取媒体信息，写入仓库数据库          │
+│  - check_dedup(): 三级去重（来源 → file_unique_id → 内容哈希）        │
+│  - distribute_to_target(): copy_message → file_id_send → 重新下载     │
+│  - compute_content_hash(): SHA256 内容哈希计算                        │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -58,6 +67,8 @@ FileManager 是 Bot 与 WebUI 共享的**核心文件管理层**，目标是为�
 - 不参与任务队列调度（由 `TaskManager` 负责）。
 - 不处理频道链接解析、消息范围选择（由现有 parser / downloader 负责）。
 - 不持久化任务状态（由 `TaskManager` + SQLite 负责）。
+- 不直接操作仓库数据库（由 `RepositoryManager` + `RepositoryDB` 负责）。
+- 不执行仓库分发逻辑（copy_message / file_id_send 等由 `RepositoryManager` 编排）。
 
 ---
 
@@ -112,6 +123,7 @@ class UploadResult:
     error_code: str | None                 # 错误码（失败时）
     error_msg: str | None                  # 可读错误信息
     deleted: bool = False                  # 本地文件是否已清理
+    file_unique_id: str | None = None      # 文件唯一标识（从 Pyrogram Message 提取，用于仓库去重）
 ```
 
 ### 2.3 MediaGroupConfig
@@ -181,6 +193,15 @@ class FileManager:
             client: 已授权的 Pyrogram Client 实例。
             progress_callback: 可选的全局上传进度回调。
         """
+        self.repository_manager = None      # 外部注入的 RepositoryManager 实例（仓库模式）
+
+    @staticmethod
+    def _extract_file_unique_id(message: Any) -> str | None:
+        """从 Pyrogram Message 对象中提取 file_unique_id。
+
+        按优先级依次检查 video / photo / document / audio / animation / voice / sticker，
+        返回第一个非空的 file_unique_id，均无则返回 None。
+        """
 
     # ---------- 文件浏览与选择 ----------
 
@@ -214,8 +235,15 @@ class FileManager:
         caption: str | None = None,
         progress_callback: Callable[[UploadProgress], Awaitable[None]] | None = None,
         delete_after_upload: bool | None = None,
+        source_chat_id: int | str | None = None,
+        source_message_id: int | None = None,
     ) -> UploadResult:
-        """上传单个本地文件到指定聊天。"""
+        """上传单个本地文件到指定聊天。
+
+        Args:
+            source_chat_id: 来源频道 ID（仓库模式下用于记录来源）。
+            source_message_id: 来源消息 ID（仓库模式下用于记录来源）。
+        """
 
     async def upload_media_group(
         self,
@@ -225,8 +253,15 @@ class FileManager:
         caption: str | None = None,
         progress_callback: Callable[[UploadProgress], Awaitable[None]] | None = None,
         delete_after_upload: bool | None = None,
+        source_chat_id: int | str | None = None,
+        source_message_id: int | None = None,
     ) -> list[UploadResult]:
-        """将多个本地文件以媒体组形式上传，自动拆分与降级。"""
+        """将多个本地文件以媒体组形式上传，自动拆分与降级。
+
+        Args:
+            source_chat_id: 来源频道 ID（仓库模式下用于记录来源）。
+            source_message_id: 来源消息 ID（仓库模式下用于记录来源）。
+        """
 
     # ---------- 清理接口 ----------
 
@@ -248,6 +283,7 @@ class FileManager:
 | `config` | `dict` | 是 | 包含资源限制、上传策略等配置。 |
 | `client` | `pyrogram.Client` | 是 | 已启动的 Telegram 客户端。 |
 | `progress_callback` | `Callable | None` | 否 | 全局进度回调，可被单次上传的同名参数覆盖。 |
+| `repository_manager` | `RepositoryManager | None` | 否 | 外部注入的仓库管理器实例，启用仓库模式后由上层设置。 |
 
 ### 3.3 返回值约定
 
@@ -402,7 +438,15 @@ async def upload_media_group(self, chat_id, file_paths, config, ...):
    - 文件大小 > memory_limit_mb（默认 512MB）时，强制使用文件路径传入 Pyrogram，
      由 Pyrogram 内部自行分片，避免 Python 层缓存。
 5. 调用 Pyrogram 发送 API，传入进度回调。
-6. 根据 delete_after_upload 策略决定是否清理本地文件。
+6. 上传成功后，提取 file_unique_id：
+   - 调用 _extract_file_unique_id(message) 获取 file_unique_id。
+   - 将 file_unique_id 写入 UploadResult。
+7. 仓库模式回调（条件触发）：
+   - 若 self.repository_manager 不为 None（仓库模式已启用）
+     且目标 chat_id 为仓库频道
+     且 source_chat_id / source_message_id 已提供：
+     → 调用 repository_manager.on_upload_success() 记录来源与文件信息。
+8. 根据 delete_after_upload 策略决定是否清理本地文件。
 ```
 
 ### 6.2 与现有 TelegramUploader 的兼容
@@ -416,7 +460,27 @@ async def upload_media_group(self, chat_id, file_paths, config, ...):
   - `stdio.MetaData.suitable_units_display`
 - 若后续需要统一，可在 M2/M5 阶段将 `TelegramUploader` 内部重构为调用 `FileManager`。
 
-### 6.3 流式与内存控制
+### 6.3 TelegramUploader 仓库模式集成
+
+`TelegramUploader` 同样支持仓库模式，关键变更如下：
+
+| 变更点 | 说明 |
+|--------|------|
+| `self.repository_manager` | 新增属性，外部注入，默认 `None`。 |
+| `upload_complete_callback()` | 上传完成回调中，若仓库模式启用且目标为仓库频道，触发 `_repository_on_upload_success()`。 |
+| `_repository_on_upload_success()` | 新增方法：从仓库频道获取消息，调用 `repository_manager.on_upload_success()` 记录来源与文件信息。 |
+| `download_upload()` | 将 `source_chat_id` / `source_message_id` 传递给 `UploadTask`。 |
+
+### 6.4 UploadTask 变更
+
+`UploadTask` 新增以下可选参数以支持仓库模式来源追踪：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `source_chat_id` | `int | str | None` | `None` | 来源频道 ID。 |
+| `source_message_id` | `int | None` | `None` | 来源消息 ID。 |
+
+### 6.5 流式与内存控制
 
 | 文件大小 | 处理方式 |
 |----------|----------|
@@ -510,6 +574,9 @@ async def cleanup_after_upload(self, results, delete_after_upload):
 | `NETWORK_ERROR` | 网络超时 / 连接错误 | 由外层重试。 |
 | `FLOOD_WAIT_X` | Telegram 限流 | 等待指定时间后重试。 |
 | `DELETE_FAILED` | 本地文件删除失败 | 记录 warning，不影响上传结果。 |
+| `COPY_MESSAGE_FAILED` | 仓库分发 copy_message 失败 | 降级为 file_id_send，由 RepositoryManager 处理。 |
+| `FILE_ID_SEND_FAILED` | 仓库分发 file_id_send 失败 | 降级为重新下载上传，由 RepositoryManager 处理。 |
+| `REPOSITORY_WRITE_FAILED` | 仓库数据库写入失败 | 记录 error，不影响上传结果本身。 |
 
 ### 9.2 异常体系
 
@@ -630,6 +697,8 @@ class MediaGroupInvalid(FileManagerError): ...
 | `module.language` | `_t` 多语言文案 |
 | `module.stdio` | `MetaData.suitable_units_display` |
 | `module.task` | `UploadTask`（兼容现有转发上传路径） |
+| `module.core.repository_manager` | `RepositoryManager`（仓库模式编排层，可选依赖） |
+| `module.core.repository_db` | `RepositoryDB`（仓库数据库管理，通过 RepositoryManager 间接使用） |
 
 ### 11.2 外部依赖
 
@@ -646,6 +715,7 @@ class MediaGroupInvalid(FileManagerError): ...
 | `module/api/routes/files.py` | WebUI 文件浏览、上传 API。 |
 | `module/bot.py` | `/upload`、`/upload_r` 等命令。 |
 | `module/core/task_manager.py` | 创建上传任务时调用 FileManager。 |
+| `module/core/repository_manager.py` | 通过 FileManager 的 `repository_manager` 属性注入，接收上传成功回调。 |
 
 ---
 

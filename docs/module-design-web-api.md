@@ -89,7 +89,8 @@ module/
 │   │   ├── chats.py             # 频道/消息统计
 │   │   ├── files.py             # 文件浏览与上传
 │   │   ├── config.py            # 配置管理
-│   │   └── monitor.py           # 监控与资源状态
+│   │   ├── monitor.py           # 监控与资源状态
+│   │   └── repository.py        # 仓库模式（文件/来源/分发/同步）
 │   ├── models/                  # Pydantic 数据模型
 │   │   ├── __init__.py
 │   │   ├── common.py            # 通用模型（APIResponse、分页等）
@@ -98,7 +99,8 @@ module/
 │   │   ├── chat.py              # 频道/消息模型
 │   │   ├── file.py              # 文件模型
 │   │   ├── config.py            # 配置模型
-│   │   └── monitor.py           # 监控模型
+│   │   ├── monitor.py           # 监控模型
+│   │   └── repository.py        # 仓库模式模型
 │   └── websocket/               # WebSocket 处理
 │       ├── __init__.py          # WebSocket 路由注册
 │       ├── connection.py        # 连接管理器（多客户端、生命周期）
@@ -125,6 +127,7 @@ def create_app(
     file_manager: FileManager | None = None,
     config_manager: ConfigManager | None = None,
     monitor: Monitor | None = None,
+    repository_manager: RepositoryManager | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="TRMD Web API",
@@ -139,6 +142,7 @@ def create_app(
     app.state.file_manager = file_manager or FileManager()
     app.state.config_manager = config_manager or ConfigManager()
     app.state.monitor = monitor or Monitor()
+    app.state.repository_manager = repository_manager  # 可选，仓库模式未启用时为 None
 
     setup_middleware(app)
     setup_exception_handlers(app)
@@ -158,6 +162,7 @@ def create_app(
 | `files_router` | `/api/files` | 文件列表、上传 |
 | `config_router` | `/api/config` | 配置读取与更新 |
 | `monitor_router` | `/api/monitor` | 监控统计、资源状态 |
+| `repository_router` | `/api/repository` | 仓库模式：文件管理、来源映射、分发、同步 |
 | `websocket_router` | `/ws/*` | WebSocket 实时推送 |
 
 ### 2.4 中间件栈
@@ -306,6 +311,18 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
 | `/api/monitor/stats` | GET | 获取监控统计 | Token |
 | `/api/resource/status` | GET | 获取资源状态（磁盘/内存/并发） | Token |
 
+#### 4.1.7 仓库模式
+
+| 端点 | 方法 | 功能 | 认证 |
+|------|------|------|------|
+| `/api/repository/status` | GET | 获取仓库模式状态（是否启用、chat_id、文件数、最后同步时间） | Token |
+| `/api/repository/files` | GET | 列出仓库文件（分页、按 file_type/status 过滤） | Token |
+| `/api/repository/files/{file_unique_id}` | GET | 获取仓库文件详情 | Token |
+| `/api/repository/sources` | GET | 列出来源映射记录 | Token |
+| `/api/repository/distributions` | GET | 列出分发记录 | Token |
+| `/api/repository/distribute` | POST | 触发分发（指定文件、目标频道、可选 caption） | Token |
+| `/api/repository/sync` | POST | 触发手动同步 | Token |
+
 ### 4.2 重点端点说明
 
 #### 4.2.1 `GET /api/tasks`
@@ -361,7 +378,9 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
     "max_id": 500,
     "download_type": ["video", "photo"],
     "save_directory": "/downloads"
-  }
+  },
+  "distribution_method": "copy_message",
+  "enable_dedup": true
 }
 ```
 
@@ -379,6 +398,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
 | `params.forward_target` | `string` | 转发必填 | 目标频道 |
 | `params.delete_after_upload` | `bool` | 否 | 转发后删除本地文件，默认 `true` |
 | `params.file_paths` | `string[]` | 上传必填 | 本地文件路径 |
+| `distribution_method` | `string` | 否 | 分发方式：`copy_message` / `file_id_send` / `upload`，仓库模式启用时有效 |
+| `enable_dedup` | `bool` | 否 | 是否启用去重，默认 `true`，仓库模式启用时有效 |
 
 **响应体**：
 
@@ -732,6 +753,8 @@ class UploadTaskParams(BaseModel):
 class TaskCreate(BaseModel):
     task_type: TaskType
     params: dict
+    distribution_method: Optional[Literal["copy_message", "file_id_send", "upload"]] = None
+    enable_dedup: bool = True
 
 
 class TaskOut(BaseModel):
@@ -827,6 +850,13 @@ class ProxyConfig(BaseModel):
     password: Optional[str] = None
 
 
+class RepositoryConfig(BaseModel):
+    enabled: bool = False
+    chat_id: Optional[int] = None
+    auto_sync_enabled: bool = False
+    auto_sync_interval_minutes: int = 60
+
+
 class ConfigOut(BaseModel):
     api_id: str
     api_hash: str
@@ -835,6 +865,7 @@ class ConfigOut(BaseModel):
     proxy: ProxyConfig
     download_type: list[str]
     max_retry_count: int
+    repository: RepositoryConfig = RepositoryConfig()
 
 
 class ConfigUpdate(BaseModel):
@@ -842,7 +873,10 @@ class ConfigUpdate(BaseModel):
     proxy: Optional[ProxyConfig] = None
     download_type: Optional[list[str]] = None
     max_retry_count: Optional[int] = None
+    repository: Optional[RepositoryConfig] = None
 ```
+
+> **配置合并说明**：原 `config.yaml` 与 `global_config.yaml` 已合并为单一 `config.yaml`，`repository` 节为新增配置段。
 
 ### 6.7 监控模型
 
@@ -872,6 +906,61 @@ class ResourceStatus(BaseModel):
     memory_percent: float
     max_concurrent_tasks: int
     current_running_tasks: int
+```
+
+### 6.8 仓库模式模型
+
+```python
+# module/api/models/repository.py
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+from datetime import datetime
+
+
+class RepositoryFileOut(BaseModel):
+    file_unique_id: str
+    file_id: str
+    content_hash: str
+    file_size: int
+    file_type: str
+    mime_type: Optional[str] = None
+    file_name: Optional[str] = None
+    repo_chat_id: int
+    repo_message_id: int
+    status: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class RepositorySourceOut(BaseModel):
+    file_unique_id: str
+    source_chat_id: int
+    source_message_id: int
+    source_link: Optional[str] = None
+    created_at: datetime
+
+
+class FileDistributionOut(BaseModel):
+    file_unique_id: str
+    target_chat_id: int
+    target_message_id: Optional[int] = None
+    method: Literal["copy_message", "file_id_send", "upload"]
+    task_id: Optional[str] = None
+    created_at: datetime
+
+
+class DistributeRequest(BaseModel):
+    file_unique_id: str
+    target_chat_id: int
+    caption: Optional[str] = None
+
+
+class RepositoryStatusOut(BaseModel):
+    enabled: bool
+    chat_id: Optional[int] = None
+    total_files: int = 0
+    total_distributions: int = 0
+    last_sync_at: Optional[datetime] = None
 ```
 
 ---
@@ -1013,6 +1102,7 @@ def setup_exception_handlers(app):
 | `FileManager` | 避免真实文件系统操作 | `create_app(file_manager=mock)` |
 | `ConfigManager` | 避免修改真实配置文件 | `create_app(config_manager=mock)` |
 | `Monitor` | 避免真实系统资源采集 | `create_app(monitor=mock)` |
+| `RepositoryManager` | 避免真实仓库同步与分发操作 | `create_app(repository_manager=mock)` |
 | `TelegramClient` | 避免连接 Telegram 服务器 | 在 TaskManager Mock 中隔离 |
 
 ### 8.4 覆盖率目标
@@ -1056,6 +1146,7 @@ module/api/app.py
     ├── module/api/routes/config.py ──>  module/core/config_manager.py
     ├── module/api/routes/monitor.py ──> module/core/monitor.py
     ├── module/api/routes/chats.py  ──>  module/core/telegram_client.py
+    ├── module/api/routes/repository.py ──> module/repository/repository_manager.py
     └── module/api/dependencies.py  ──>  module/core/token_manager.py
 ```
 

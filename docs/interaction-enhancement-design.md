@@ -1,9 +1,9 @@
 # Telegram Bot 交互体验增强设计文档
 
-> **项目名称**: Telegram_Restricted_Media_Downloader  
-> **文档版本**: v5.0
+> **项目名称**: Telegram_Restricted_Media_Downloader
+> **文档版本**: v6.0
 > **创建日期**: 2026-06-12
-> **更新日期**: 2026-06-12
+> **更新日期**: 2026-06-21
 > **作者**: SOLO
 > **状态**: 待审核
 
@@ -85,6 +85,11 @@
 │  │InteractionMgr│  │Monitor       │  │ TelegramClient   │  │
 │  │(交互状态)     │  │(任务监控)     │  │ (Telegram API)   │  │
 │  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │ RepositoryManager (仓库编排)                          │  │
+│  │ ├─ RepositoryDB (数据访问)                            │  │
+│  │ └─ RepositorySync (增量同步)                          │  │
+│  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
             │
 ┌───────────▼─────────────────────────────────────────────────┐
@@ -93,6 +98,12 @@
 │  │   SQLite     │  │  File System │  │   Config Files   │  │
 │  │  (任务/日志)  │  │  (文件存储)   │  │  (YAML 配置)     │  │
 │  └──────────────┘  └──────────────┘  └──────────────────┘  │
+│  ┌──────────────────────────────────────────────────────┐  │
+│  │ trmd.db (仓库数据库)                                  │  │
+│  │ ├─ repository_files (文件记录)                        │  │
+│  │ ├─ repository_sources (来源映射)                      │  │
+│  │ └─ file_distributions (分发记录)                      │  │
+│  └──────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -108,6 +119,9 @@
 | **Config Manager** | 配置读取、修改、保存 | 共享 |
 | **Interaction Manager** | 交互状态管理、超时处理 | 共享 |
 | **Monitor** | 任务进度监控、日志收集 | 共享 |
+| **RepositoryManager** | 仓库频道编排：三级去重、分发降级、上传回调（不直接操作文件和 Telegram API） | 共享 |
+| **RepositoryDB** | 仓库数据访问：三张表 CRUD、去重查询、来源追踪 | RepositoryManager 内部 |
+| **RepositorySync** | 仓库频道增量同步：定时扫描、查漏补缺 | 可选（独立启动） |
 
 ### 2.3 状态机设计
 
@@ -165,6 +179,7 @@ Bot 端只保留简单命令，复杂操作引导到 WebUI：
 | `/web` | 获取 WebUI 访问链接（带 Token，1 小时有效期） | 低 |
 | `/web_revoke` | 撤销所有已生成的 WebUI Token | 低 |
 | `/batch` | 进入批量操作模式（简化版） | 中 |
+| `/setup_repository` | 设置仓库频道（支持频道 ID、用户名、链接、邀请链接） | 中 |
 
 ### 3.2 `/web` 命令
 
@@ -714,21 +729,67 @@ class TaskManager:
 - 已存在 → 跳过该文件，不重新上传
 - 不存在 → 重新上传
 
+#### 5.1.3 仓库模式去重集成
+
+当仓库模式启用时，任务执行流程中嵌入三级去重检查，避免重复下载和上传：
+
+| 去重时机 | 去重级别 | 触发位置 | 命中后行为 |
+|---------|---------|---------|-----------|
+| **下载前** | L1: source_chat_id + source_message_id | `forward()` / `create_download_task()` | 跳过下载，直接从仓库分发 |
+| **下载完成后、上传前** | L2: file_unique_id | `_dedup_before_upload()` | 跳过上传，添加 source mapping，从仓库分发 |
+| **下载完成后、上传前** | L3: content_hash (SHA256) | `_dedup_before_upload()` | 删除本地文件，跳过上传，添加 source mapping，从仓库分发 |
+
+**去重流程：**
+
+```
+转发任务开始
+  │
+  ├─ 仓库模式未启用 → 正常下载+上传流程
+  │
+  └─ 仓库模式启用
+       │
+       ├─ L1 去重命中 (source 定位)
+       │    └─ 跳过下载，从仓库分发到目标频道
+       │
+       └─ L1 未命中 → 执行下载
+            │
+            ├─ L2 去重命中 (file_unique_id)
+            │    └─ 跳过上传，添加 source mapping，从仓库分发
+            │
+            ├─ L3 去重命中 (content_hash)
+            │    └─ 删除本地文件，跳过上传，添加 source mapping，从仓库分发
+            │
+            └─ 均未命中 → 上传到仓库频道 → 写入仓库记录 → 分发到目标频道
+```
+
 ### 5.2 FileManager
 
+> **仓库模式集成**：`UploadResult` 新增 `file_unique_id` 字段；`upload()` 方法新增 `source_chat_id` / `source_message_id` 参数，上传到仓库频道时自动调用 `RepositoryManager.on_upload_success` 写入仓库记录。
+
 ```python
+@dataclass
+class UploadResult:
+    """描述一次上传任务的最终结果。"""
+    success: bool
+    file_path: str | None = None
+    message: object | None = None          # Pyrogram Message 对象
+    error_code: str | None = None
+    error_msg: str | None = None
+    deleted: bool = False                  # 本地文件是否已清理
+    file_unique_id: str | None = None      # 文件唯一标识（仓库模式使用）
+
 class FileManager:
     """文件管理器 - Bot 和 WebUI 共享"""
-    
+
     async def list_files(self, path: str, recursive: bool = False) -> list[FileInfo]:
         """列出文件"""
-    
+
     async def get_file_info(self, path: str) -> FileInfo:
         """获取文件信息"""
-    
+
     async def select_files(self, paths: list[str]) -> list[FileInfo]:
         """选择文件"""
-    
+
     async def upload_media_group(
         self,
         client: pyrogram.Client,
@@ -737,7 +798,7 @@ class FileManager:
         progress_callback=None
     ) -> list[pyrogram.types.Message]:
         """上传媒体组"""
-    
+
     async def upload_single(
         self,
         client: pyrogram.Client,
@@ -746,6 +807,23 @@ class FileManager:
         progress_callback=None
     ) -> pyrogram.types.Message:
         """上传单个文件"""
+
+    async def upload(
+        self,
+        file_path: str,
+        chat_id: int,
+        progress_callback=None,
+        delete_after: bool = False,
+        caption: str = "",
+        source_chat_id: int | None = None,
+        source_message_id: int | None = None,
+    ) -> UploadResult:
+        """上传单个文件到 Telegram 频道/群组
+
+        仓库模式集成：
+        - 上传目标是仓库频道时，上传成功后调用 on_upload_success 写入仓库记录
+        - 上传目标不是仓库频道时，先上传到仓库频道，再分发到目标频道
+        """
 ```
 
 ### 5.3 InteractionManager
@@ -780,25 +858,300 @@ class InteractionManager:
 
 ### 5.4 ConfigManager
 
+> **BREAKING 变更**：`config.yaml` 和 `global_config.yaml` 已合并为单一 `config.yaml`。新分组结构包含：credential、proxy、task、preference、log、repository。GlobalConfig 现在从 UserConfig 的 preference/log 分组读取，回退到 `.CONFIG.yaml` 以保持向后兼容。
+
+**config.yaml 分组结构：**
+
+```yaml
+credential:
+  api_id: null
+  api_hash: null
+  bot_token: null
+
+proxy:
+  enable_proxy: null
+  scheme: null
+  hostname: null
+  port: null
+  username: null
+  password: null
+
+task:
+  links: null
+  save_directory: null
+  temp_directory: null
+  session_directory: null
+  download_type: null
+  is_shutdown: null
+  max_tasks:
+    download: null
+    upload: null
+  max_retries:
+    download: null
+    upload: null
+
+preference:
+  notice: true
+  forward_type: { ... }
+  upload:
+    download_upload: true
+    delete: false
+  export_table: { ... }
+
+log:
+  file_log_level: INFO
+  console_log_level: WARNING
+
+repository:
+  enabled: true
+  chat_id: ""
+  auto_sync_enabled: false
+  auto_sync_interval_minutes: 60
+```
+
 ```python
 class ConfigManager:
-    """配置管理器 - Bot 和 WebUI 共享"""
-    
+    """配置管理器 - Bot 和 WebUI 共享
+
+    包装 UserConfig，提供统一配置读写接口。
+    所有配置已合并到单一 config.yaml，不再依赖独立的 GlobalConfig。
+    """
+
     def load_config(self) -> dict:
         """加载配置"""
-    
+
     def save_config(self, config: dict) -> bool:
         """保存配置"""
-    
+
     def get_config(self, key: str, default=None):
         """获取配置项"""
-    
+
     def set_config(self, key: str, value) -> bool:
         """设置配置项"""
-    
+
     def validate_config(self, config: dict) -> tuple[bool, list[str]]:
         """验证配置"""
+
+    def get_repository_config(self) -> dict:
+        """获取 repository 分组配置"""
+
+    def set_repository_chat_id(self, chat_id: str) -> bool:
+        """设置 repository.chat_id 并保存"""
+
+    def validate_repository_config(self) -> tuple[bool, str]:
+        """验证 repository 配置（启用时 chat_id 必填且格式合法）"""
 ```
+
+---
+
+## 5.5 仓库模式（Repository Mode）
+
+### 5.5.1 概述
+
+仓库模式通过将下载的媒体文件集中存储到指定的 Telegram 频道（仓库频道），实现文件去重和高效分发。核心设计约束：
+
+| 约束 | 说明 |
+|------|------|
+| **RepositoryManager 是编排层** | 不直接操作文件和 Telegram API，委托 FileManager/Uploader 执行操作 |
+| **使用 User Client** | 所有仓库操作使用 User Client（file_id 作用域一致） |
+| **file_unique_id 作为去重键** | 跨 Client 稳定标识，file_id 仅用于发送（可能过期） |
+
+### 5.5.2 RepositoryDB - 数据访问层
+
+管理 `trmd.db` 中的三张表，提供文件去重、来源追踪、分发记录的 CRUD 和查询接口。
+
+**数据库表结构：**
+
+| 表名 | 用途 | 关键约束 |
+|------|------|---------|
+| `repository_files` | 仓库文件记录 | `file_unique_id` UNIQUE |
+| `repository_sources` | 文件来源映射 | `(source_chat_id, source_message_id)` UNIQUE, FK → repository_files |
+| `file_distributions` | 文件分发记录 | FK → repository_files |
+
+**repository_files 字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PK | 自增主键 |
+| `file_unique_id` | TEXT UNIQUE | 文件唯一标识（跨 Client 稳定） |
+| `file_id` | TEXT | 文件发送标识（可能过期，需刷新） |
+| `content_hash` | TEXT | SHA256 内容哈希（L3 去重） |
+| `file_size` | INTEGER | 文件大小 |
+| `file_type` | TEXT | 文件类型（photo/video/document/audio/animation） |
+| `mime_type` | TEXT | MIME 类型 |
+| `file_name` | TEXT | 文件名 |
+| `repository_chat_id` | INTEGER | 仓库频道 ID |
+| `repository_message_id` | INTEGER | 仓库频道消息 ID |
+| `status` | TEXT | 状态（active） |
+| `created_at` / `updated_at` | TEXT | 时间戳 |
+
+**repository_sources 字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PK | 自增主键 |
+| `file_unique_id` | TEXT FK | 关联 repository_files |
+| `source_chat_id` | INTEGER | 源频道 ID |
+| `source_message_id` | INTEGER | 源消息 ID |
+| `source_link` | TEXT | 源链接 |
+| `created_at` | TEXT | 时间戳 |
+
+**file_distributions 字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PK | 自增主键 |
+| `file_unique_id` | TEXT FK | 关联 repository_files |
+| `target_chat_id` | INTEGER | 目标频道 ID |
+| `target_message_id` | INTEGER | 目标消息 ID |
+| `method` | TEXT | 分发方法（copy_message / file_id_send） |
+| `task_id` | TEXT | 关联任务 ID |
+| `created_at` | TEXT | 时间戳 |
+
+**SQLite 配置：** WAL 模式、外键约束启用、busy_timeout=10000ms。
+
+```python
+class RepositoryDB:
+    """仓库数据库管理器"""
+
+    def __init__(self, db_path: str) -> None: ...
+
+    # CRUD
+    def insert_file_record(self, record: RepositoryFile) -> int: ...
+    def insert_source_mapping(self, record: RepositorySource) -> int: ...
+    def update_file_id(self, file_unique_id: str, new_file_id: str) -> None: ...
+    def insert_distribution(self, record: FileDistribution) -> int: ...
+
+    # 去重查询
+    def get_file_by_source(self, source_chat_id: int, source_message_id: int) -> RepositoryFile | None: ...
+    def get_file_by_unique_id(self, file_unique_id: str) -> RepositoryFile | None: ...
+    def get_file_by_content_hash(self, content_hash: str) -> RepositoryFile | None: ...
+
+    # 分发查询
+    def get_repository_message_id(self, file_unique_id: str) -> tuple[int, int] | None: ...
+```
+
+### 5.5.3 RepositoryManager - 编排层
+
+仓库频道的核心编排器，协调去重检查、上传回调、分发降级等流程。
+
+```python
+class RepositoryManager:
+    """仓库频道编排器（不直接操作文件和 Telegram API）"""
+
+    def __init__(self, repository_db: RepositoryDB, config_manager) -> None: ...
+
+    # 配置
+    def should_use_repository(self) -> bool: ...
+    def get_repository_chat_id(self) -> str | None: ...
+
+    # 三级去重
+    def check_dedup(
+        self,
+        source_chat_id: int,
+        source_message_id: int,
+        file_unique_id: str | None = None,
+        content_hash: str | None = None,
+    ) -> RepositoryFile | None: ...
+
+    # 上传成功回调
+    async def on_upload_success(
+        self, message, source_chat_id: int, source_message_id: int,
+        content_hash: str | None = None,
+    ) -> None: ...
+
+    # 内容哈希
+    @staticmethod
+    def compute_content_hash(file_path: str) -> str: ...
+
+    # 分发（含降级链）
+    async def distribute_to_target(
+        self, client, file_unique_id: str, target_chat_id: int,
+        caption: str | None = None,
+    ) -> int | None: ...
+```
+
+### 5.5.4 三级去重机制
+
+| 级别 | 去重键 | 命中行为 | 适用场景 |
+|------|--------|---------|---------|
+| **L1** | source_chat_id + source_message_id | 跳过下载，直接从仓库分发 | 同一源消息重复转发 |
+| **L2** | file_unique_id | 跳过上传，添加 source mapping，从仓库分发 | 同一文件不同消息来源 |
+| **L3** | content_hash (SHA256) | 删除本地文件，跳过上传，添加 source mapping，从仓库分发 | 不同格式/来源的相同内容 |
+
+**关键设计：**
+- `file_unique_id` 作为去重主键（跨 Client 稳定），`file_id` 仅用于发送（可能过期）
+- L1 在下载前检查（`forward()` / `create_download_task()`），L2/L3 在下载完成后检查（`_dedup_before_upload()`）
+- L3 命中时删除本地文件以释放磁盘空间
+
+### 5.5.5 分发降级链
+
+从仓库频道分发文件到目标频道时，采用逐级降级策略：
+
+| 优先级 | 方法 | 说明 | 失败原因 |
+|--------|------|------|---------|
+| **1** | `copy_message` | 从仓库频道直接复制消息 | 权限不足、消息被删除 |
+| **2** | `file_id_send` | 刷新 file_id 后使用对应 send 方法发送 | file_id 过期、消息被删除 |
+| **3** | 重新下载上传 | 返回 None，由调用方处理 | 仓库消息被删除 |
+
+**file_id 三级刷新策略：**
+
+| 级别 | 来源 | 说明 |
+|------|------|------|
+| **1** | 数据库存储的 file_id | 直接使用，可能已过期 |
+| **2** | 从仓库消息刷新 | `get_messages()` 获取最新 file_id 并更新数据库 |
+| **3** | 重新下载 | 仓库消息也被删除时，需从源频道重新下载 |
+
+### 5.5.6 RepositorySync - 增量同步
+
+可选的定时同步器，用于查漏补缺（程序崩溃或数据不一致时的恢复）。
+
+```python
+class RepositorySync:
+    """仓库频道定时同步器（可选功能）"""
+
+    def __init__(self, repository_db: RepositoryDB, config_manager) -> None: ...
+
+    def start(self) -> None: ...      # 启动定时同步（需 auto_sync_enabled=True）
+    def stop(self) -> None: ...       # 停止同步
+
+    async def incremental_sync(self, client=None) -> int: ...
+        # 增量同步：追踪上次同步的最大 message_id，仅扫描新消息
+        # 同步时不计算 content_hash，仅记录元数据
+```
+
+**配置项：**
+
+| 配置 | 默认值 | 说明 |
+|------|--------|------|
+| `repository.auto_sync_enabled` | false | 是否启用自动同步 |
+| `repository.auto_sync_interval_minutes` | 60 | 同步间隔（分钟） |
+
+### 5.5.7 降级策略
+
+覆盖 9 种异常场景的降级处理：
+
+| 场景 | 降级方式 |
+|------|----------|
+| 仓库频道未配置 | 直接上传到目标频道 |
+| 仓库频道权限不足 | 直接上传到目标频道，输出警告 |
+| 上传到仓库失败 | 直接上传到目标频道 |
+| 数据表写入失败 | 继续上传，记录错误日志 |
+| 仓库频道被删除/封禁 | 降级为直接上传，输出错误日志，建议用户重新配置 |
+| Bot 被移出仓库频道 | 降级为直接上传，输出错误日志，建议用户重新配置 |
+| file_id 失效 | 从仓库频道重新获取 file_id，若消息也被删除则重新上传 |
+| 数据库文件损坏 | 降级为直接上传，提示用户运行同步恢复 |
+| 并发写入冲突 | SQLite WAL 模式 + busy_timeout=10000ms |
+
+### 5.5.8 集成点
+
+| 模块 | 集成方式 |
+|------|---------|
+| **TelegramUploader** | 上传成功后触发 `RepositoryManager.on_upload_success`（`_repository_on_upload_success`） |
+| **Downloader** | `forward()` 中 L1 去重检查，命中则从仓库分发；`_dedup_before_upload()` 执行 L2/L3 去重 |
+| **FileManager** | `upload()` 新增 `source_chat_id`/`source_message_id` 参数；`UploadResult` 新增 `file_unique_id` 字段 |
+| **BotCommands** | `/setup_repository` 命令：验证频道输入 → 解析频道 ID → 检查管理员权限 → 保存配置 |
+| **ConfigManager** | 新增 `get_repository_config()`、`set_repository_chat_id()`、`validate_repository_config()` |
 
 ---
 
@@ -814,7 +1167,10 @@ module/
 │   ├── file_manager.py      # 文件管理器
 │   ├── config_manager.py    # 配置管理器
 │   ├── interaction.py       # 交互状态管理
-│   └── monitor.py           # 任务监控
+│   ├── monitor.py           # 任务监控
+│   ├── repository_db.py     # [新增] 仓库数据库管理（三张表 CRUD）
+│   ├── repository_manager.py # [新增] 仓库频道编排器（去重/分发/回调）
+│   └── repository_sync.py   # [新增] 仓库增量同步器（可选）
 │
 ├── api/                     # [新增] Web API 层
 │   ├── __init__.py
@@ -855,10 +1211,12 @@ module/
 
 | 文件 | 修改内容 |
 |------|---------|
-| **bot.py** | 1. 简化命令体系<br>2. 添加 `/web` 命令<br>3. 复杂操作引导到 WebUI<br>4. 保留原有命令兼容性 |
-| **app.py** | 1. 集成 TaskManager<br>2. 集成 ConfigManager<br>3. 启动 Web API 服务 |
+| **bot.py** | 1. 简化命令体系<br>2. 添加 `/web` 命令<br>3. 复杂操作引导到 WebUI<br>4. 保留原有命令兼容性<br>5. 注册 `/setup_repository` 命令 handler |
+| **app.py** | 1. 集成 TaskManager<br>2. 集成 ConfigManager<br>3. 启动 Web API 服务<br>4. 初始化 RepositoryManager 和 RepositorySync |
 | **main.py** | 1. 支持同时启动 Bot 和 Web API<br>2. 添加启动参数控制 |
 | **enums.py** | 1. 新增 TaskType、TaskStatus 枚举<br>2. 新增 InteractionMode 枚举 |
+| **downloader.py** | 1. forward() 中仓库模式启用时执行 L1 去重检查，命中则从仓库分发<br>2. 下载完成后执行 L2/L3 去重检查（`_dedup_before_upload`）<br>3. 为上传任务附加 source_chat_id/source_message_id |
+| **uploader.py** | 1. 上传成功后触发 `_repository_on_upload_success` 回调<br>2. 去重命中时调用 `_dedup_distribute` 从仓库分发<br>3. UploadTask 支持 source_chat_id/source_message_id 字段 |
 
 ### 6.3 启动方式
 
@@ -936,6 +1294,7 @@ python main.py --web --port 8080
 | v3.0 | 2026-06-12 | **简化认证方案**：<br>1. 移除「## 三、用户白名单设计」整个章节（包括配置、验证逻辑、UserValidator 模块、登录页面）<br>2. 移除 `/web_login` 命令，整合到 `/web` 命令<br>3. Bot 端沿用现有 `filters.user(self.root)` 机制（登录用户账户 ID 才能下达指令）<br>4. WebUI 改为 Token 认证，无需手动输入 User ID | SOLO |
 | v4.0 | 2026-06-12 | **Token 认证方案**：<br>1. 新增 TokenManager 模块，生成/验证临时 Token（1 小时有效期）<br>2. `/web` 命令返回带 Token 的访问链接，无需手动输入 User ID<br>3. 所有 API 接口（REST + WebSocket）强制 Token 校验<br>4. Token 以 URL 参数或 Authorization Header 形式传递<br>5. 更新架构图、认证流程、非功能性需求 | SOLO |
 | v5.0 | 2026-06-12 | **消息范围 + 资源限制**：<br>1. 新增消息范围选择四种模式（日期范围/ID 范围/多个 ID 或链接/全部消息）<br>2. 新增资源保护机制（5GB 告警、10GB 禁止）<br>3. 新增转发任务本地文件清理策略（默认上传后删除）<br>4. 新增多任务并发资源限制（任务并发/文件并发/磁盘保护/内存保护，所有参数可配置）<br>5. 提供带宽参考建议表，方便用户根据服务器配置调整 | SOLO |
+| v6.0 | 2026-06-21 | **仓库模式（Repository Mode）**：<br>1. 新增 RepositoryDB 模块，管理 trmd.db 三张表（repository_files/repository_sources/file_distributions）<br>2. 新增 RepositoryManager 编排层，实现三级去重（L1:source定位/L2:file_unique_id/L3:content_hash）<br>3. 新增 RepositorySync 增量同步器（可选，定时查漏补缺）<br>4. **BREAKING**: config.yaml 与 global_config.yaml 合并为单一 config.yaml，新增 repository 分组<br>5. GlobalConfig 从 UserConfig 的 preference/log 分组读取，回退 .CONFIG.yaml 向后兼容<br>6. 分发降级链：copy_message → file_id_send → 重新下载上传<br>7. file_id 三级刷新：存储值 → 从仓库消息刷新 → 重新下载<br>8. 9 种降级场景覆盖（未配置/权限不足/上传失败/DB写入失败/频道删除/Bot移出/file_id失效/DB损坏/并发冲突）<br>9. 新增 `/setup_repository` Bot 命令<br>10. FileManager.UploadResult 新增 file_unique_id，upload() 新增 source_chat_id/source_message_id<br>11. Downloader 集成 L1 去重（forward）和 L2/L3 去重（_dedup_before_upload）<br>12. Uploader 集成上传成功回调（_repository_on_upload_success）和去重分发（_dedup_distribute） | SOLO |
 
 ---
 

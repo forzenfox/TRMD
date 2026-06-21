@@ -1,10 +1,10 @@
 # TaskManager 模块级开发设计文档
 
-> **项目名称**: Telegram_Restricted_Media_Downloader  
-> **模块**: TaskManager（任务管理器）  
-> **文档版本**: v1.0  
-> **创建日期**: 2026-06-18  
-> **状态**: 草案  
+> **项目名称**: Telegram_Restricted_Media_Downloader
+> **模块**: TaskManager（任务管理器）
+> **文档版本**: v1.1
+> **创建日期**: 2026-06-18
+> **状态**: 已更新（集成仓库模式）
 > **作者**: SOLO
 
 ---
@@ -34,6 +34,7 @@ TaskManager 是核心业务层中负责**任务全生命周期管理**的模块�
 ### 1.3 兼容性要求
 
 - 现有 `module/task.py` 中的 `DownloadTask` 与 `UploadTask` 继续保留，作为**执行器内部的任务跟踪对象**，不直接删除。
+- `UploadTask` 新增可选参数 `source_chat_id` 和 `source_message_id`，用于仓库模式下记录文件的原始来源信息，便于注册到 `repository_sources` 表。不传时保持原有行为不变。
 - 新 `TaskManager` 在 Bot 命令入口处被调用，将原命令参数转换为 `Task` 后排队执行；原命令返回给用户的文案不变。
 - WebUI 通过 RESTful API 直接调用 `TaskManager` 公共方法，不绕过 TaskManager 直接操作下载/上传逻辑。
 
@@ -192,8 +193,9 @@ class TaskItem:
     target_id: Optional[Union[int, str]] = None   # 目标频道 ID / 目标路径
     file_path: Optional[str] = None         # 本地文件路径（下载/转发后）
     file_size: int = 0                      # 文件大小（字节）
-    file_sha256: Optional[str] = None       # 本地文件 SHA256（用于去重与断点续传）
+    file_sha256: Optional[str] = None       # 文件内容哈希（SHA256），用于 L3 内容级去重（与 repository_files.content_hash 对应）
     telegram_file_id: Optional[str] = None  # Telegram file_id（上传成功后回填）
+    file_unique_id: Optional[str] = None    # Telegram file_unique_id（L2 文件级去重标识，与 repository_files.file_unique_id 对应）
     uploaded_message_id: Optional[int] = None   # 上传/转发后的消息 ID
     retry_count: int = 0
     error_code: Optional[str] = None        # 失败原因分类码
@@ -248,8 +250,9 @@ CREATE INDEX idx_tm_tasks_created_at ON tm_tasks(created_at);
 | `target_id` | TEXT | 目标频道 ID |
 | `file_path` | TEXT | 本地文件路径 |
 | `file_size` | INTEGER DEFAULT 0 | 文件大小 |
-| `file_sha256` | TEXT | 文件哈希 |
+| `file_sha256` | TEXT | 文件内容哈希，用于 L3 内容级去重 |
 | `telegram_file_id` | TEXT | Telegram file_id |
+| `file_unique_id` | TEXT | Telegram file_unique_id，L2 文件级去重标识 |
 | `uploaded_message_id` | INTEGER | 上传后消息 ID |
 | `retry_count` | INTEGER DEFAULT 0 | 子任务重试次数 |
 | `error_code` | TEXT | 错误分类码 |
@@ -265,6 +268,7 @@ CREATE INDEX idx_tm_tasks_created_at ON tm_tasks(created_at);
 CREATE INDEX idx_tm_task_items_task_id ON tm_task_items(task_id);
 CREATE INDEX idx_tm_task_items_status ON tm_task_items(status);
 CREATE INDEX idx_tm_task_items_sha256 ON tm_task_items(file_sha256);
+CREATE INDEX idx_tm_task_items_file_unique_id ON tm_task_items(file_unique_id);
 ```
 
 #### 3.3.3 `tm_task_events` 任务事件/日志表（可选，用于监控与审计）
@@ -285,6 +289,71 @@ CREATE INDEX idx_tm_task_items_sha256 ON tm_task_items(file_sha256);
 CREATE INDEX idx_tm_task_events_task_id ON tm_task_events(task_id);
 ```
 
+#### 3.3.4 `repository_files` 仓库文件表
+
+仓库模式下的文件注册表，记录已入库的文件元数据与仓库定位信息。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `file_unique_id` | TEXT PRIMARY KEY | Telegram file_unique_id，全局唯一标识同一文件 |
+| `file_id` | TEXT NOT NULL | Telegram file_id（可变，随会话刷新） |
+| `content_hash` | TEXT | 文件内容哈希（SHA256），用于 L3 内容级去重 |
+| `file_name` | TEXT | 文件名 |
+| `file_size` | INTEGER DEFAULT 0 | 文件大小（字节） |
+| `mime_type` | TEXT | MIME 类型 |
+| `repo_chat_id` | INTEGER NOT NULL | 仓库频道 ID |
+| `repo_message_id` | INTEGER NOT NULL | 仓库中的消息 ID |
+| `created_at` | TEXT NOT NULL | ISO-8601 UTC 时间 |
+| `updated_at` | TEXT NOT NULL | ISO-8601 UTC 时间 |
+
+索引：
+
+```sql
+CREATE INDEX idx_repo_files_content_hash ON repository_files(content_hash);
+CREATE INDEX idx_repo_files_repo_location ON repository_files(repo_chat_id, repo_message_id);
+```
+
+#### 3.3.5 `repository_sources` 仓库文件来源表
+
+记录文件与原始来源消息的映射关系，用于 L1 来源级去重。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 自增 ID |
+| `file_unique_id` | TEXT NOT NULL | 外键（repository_files.file_unique_id） |
+| `source_chat_id` | INTEGER NOT NULL | 来源频道 ID |
+| `source_message_id` | INTEGER NOT NULL | 来源消息 ID |
+| `created_at` | TEXT NOT NULL | ISO-8601 UTC 时间 |
+
+索引与约束：
+
+```sql
+CREATE UNIQUE INDEX idx_repo_sources_unique ON repository_sources(source_chat_id, source_message_id);
+CREATE INDEX idx_repo_sources_file_unique_id ON repository_sources(file_unique_id);
+```
+
+#### 3.3.6 `file_distributions` 文件分发记录表
+
+记录文件从仓库分发到目标频道的历史，用于分发追踪与回溯。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PRIMARY KEY AUTOINCREMENT | 自增 ID |
+| `file_unique_id` | TEXT NOT NULL | 外键（repository_files.file_unique_id） |
+| `target_chat_id` | INTEGER NOT NULL | 目标频道 ID |
+| `target_message_id` | INTEGER | 分发后的消息 ID |
+| `method` | TEXT NOT NULL | 分发方式：copy_message / file_id_send |
+| `task_id` | TEXT | 关联的任务 ID（tm_tasks.id） |
+| `created_at` | TEXT NOT NULL | ISO-8601 UTC 时间 |
+
+索引：
+
+```sql
+CREATE INDEX idx_file_dist_file_unique_id ON file_distributions(file_unique_id);
+CREATE INDEX idx_file_dist_target ON file_distributions(target_chat_id, target_message_id);
+CREATE INDEX idx_file_dist_task_id ON file_distributions(task_id);
+```
+
 ---
 
 ## 4. 接口契约
@@ -301,15 +370,18 @@ class TaskManager:
         db_path: str,
         user_client: pyrogram.Client,
         bot_client: Optional[pyrogram.Client] = None,
-        notify_callback: Optional[Callable[[str], Awaitable[None]]] = None
+        notify_callback: Optional[Callable[[str], Awaitable[None]]] = None,
+        repository_manager: Optional["RepositoryManager"] = None
     ):
         """
         Args:
-            config: 全局配置字典，至少包含 resource_limits。
+            config: 全局配置字典，包含 task / repository 等节配置。
             db_path: SQLite 数据库路径。
             user_client: Telegram 用户会话 Client。
             bot_client: Telegram Bot Client，可选。
             notify_callback: 任务完成/失败通知回调。
+            repository_manager: 仓库管理器实例，可选。启用仓库模式时传入，
+                提供去重查询、文件注册、分发执行等能力。
         """
 
     async def initialize(self) -> None:
@@ -460,6 +532,16 @@ class TaskManager:
 [消息范围解析] ──无法解析──▶ 抛出 ValidationError
         │
         ▼
+[L1 来源级去重检查]（仅 DOWNLOAD / FORWARD 类型，仓库模式启用时）
+        │
+        ├── source_chat_id + source_message_id 在 repository_sources 中存在
+        │       │
+        │       ├── FORWARD 类型 ──▶ 标记 skipped (DUPLICATE_FILE)，触发仓库分发到目标频道
+        │       └── DOWNLOAD 类型 ──▶ 标记 skipped (DUPLICATE_FILE)，跳过下载
+        │
+        └── 未命中 ──▶ 继续创建
+        │
+        ▼
 [资源预估]
         │
         ├── total_size > 10GB ──▶ 禁止创建，抛出 ResourceLimitError
@@ -495,7 +577,7 @@ class TaskManager:
 | 任务类型 | 执行器 | 说明 |
 |----------|--------|------|
 | `download` | `DownloadExecutor` | 调用 `downloader.py` 中的下载逻辑 |
-| `forward` | `ForwardExecutor` | 先下载到本地，再调用上传逻辑；可配置 `with_delete` |
+| `forward` | `ForwardExecutor` | 先下载到本地，再调用上传逻辑；可配置 `with_delete`；仓库模式下集成 `RepositoryManager` 分发 |
 | `upload` | `UploadExecutor` | 调用 `uploader.py` 中的上传逻辑 |
 
 执行器内部约束：
@@ -503,6 +585,72 @@ class TaskManager:
 - 使用 `asyncio.Semaphore` 控制 `max_download_concurrency` / `max_upload_concurrency` / `max_forward_concurrency`。
 - 每个子任务执行前检查取消信号，若收到取消则立即将子任务状态置为 `cancelled` 并退出。
 - 子任务完成后回调 `_on_item_complete()`，由 TaskManager 统一落库与聚合统计。
+
+#### 5.3.1 下载完成回调中的去重与仓库集成
+
+当仓库模式启用时，下载完成回调 `download_complete_callback` 中执行 L2/L3 去重检查：
+
+```
+[下载完成]
+    │
+    ▼
+[L2 文件级去重检查] file_unique_id 是否在 repository_files 中存在
+    │
+    ├── 命中 ──▶ 标记 skipped (DUPLICATE_FILE)
+    │            │
+    │            ├── FORWARD 类型 ──▶ 调用 RepositoryManager.distribute() 分发到目标频道
+    │            └── DOWNLOAD 类型 ──▶ 跳过上传，删除本地文件（如有）
+    │
+    └── 未命中
+            │
+            ▼
+[计算 content_hash（SHA256）]
+            │
+            ▼
+[L3 内容级去重检查] content_hash 是否在 repository_files 中存在
+            │
+            ├── 命中 ──▶ 标记 skipped (DUPLICATE_FILE)
+            │            │
+            │            ├── FORWARD 类型 ──▶ 调用 RepositoryManager.distribute() 分发到目标频道
+            │            └── DOWNLOAD 类型 ──▶ 跳过上传，删除本地文件（如有）
+            │
+            └── 未命中 ──▶ 继续正常上传流程
+                            │
+                            ▼
+                    [上传到目标频道]
+                            │
+                            ▼
+                    [注册到仓库] 调用 RepositoryManager.register_file()
+                    写入 repository_files + repository_sources
+```
+
+#### 5.3.2 仓库分发降级策略
+
+仓库分发采用降级策略，确保分发可靠性：
+
+```
+[RepositoryManager.distribute()]
+    │
+    ▼
+[首选方式: copy_message] ──配置项 distribution_method─▶
+    │
+    ├── 成功 ──▶ 记录 file_distributions，完成
+    │
+    └── 失败 (COPY_MESSAGE_FAILED)
+            │
+            ▼
+[降级: file_id_send]
+            │
+            ├── 成功 ──▶ 记录 file_distributions (method=file_id_send)，完成
+            │
+            └── 失败 (FILE_ID_SEND_FAILED)
+                    │
+                    ▼
+            [降级: 重新下载后上传]
+                    │
+                    ├── 成功 ──▶ 注册新文件到仓库，记录 file_distributions
+                    └── 失败 ──▶ 标记 failed，按重试策略处理
+```
 
 ### 5.4 完成阶段
 
@@ -547,18 +695,52 @@ class TaskManager:
 
 ### 6.2 资源限制配置
 
+配置统一管理于 `config.yaml`，各模块按节划分。TaskManager 相关配置位于 `task` 和 `repository` 节下。
+
 ```yaml
-resource_limits:
-  max_concurrent_tasks: 1
+# config.yaml 统一结构
+credential:
+  api_id: ...
+  api_hash: ...
+  bot_token: ...
+  session_name: ...
+
+proxy:
+  scheme: ...
+  hostname: ...
+  port: ...
+  username: ...
+  password: ...
+
+task:
+  max_tasks: 1                    # 原 max_concurrent_tasks
+  max_retries: 5                  # 原 max_retry_count
   max_download_concurrency: 3
   max_upload_concurrency: 1
   max_forward_concurrency: 1
-
   min_disk_space_gb: 2
   memory_limit_mb: 512
-
   task_size_warning_gb: 5
   task_size_max_gb: 10
+
+preference:
+  download_dir: ./downloads
+  language: zh-CN
+  ...
+
+log:
+  level: INFO
+  ...
+
+repository:
+  enabled: true
+  repo_chat_id: -100xxxxxxxxxx    # 仓库频道 ID
+  auto_dedup: true                # 启用自动去重
+  dedup_levels:                   # 启用的去重级别
+    - L1_source                   # 来源级去重（source_chat_id + source_message_id）
+    - L2_file_unique_id           # 文件级去重（file_unique_id）
+    - L3_content_hash             # 内容级去重（content_hash / SHA256）
+  distribution_method: copy_message  # 首选分发方式（copy_message / file_id_send）
 ```
 
 ### 6.3 任务大小边界判断
@@ -623,6 +805,9 @@ if available_bytes < min_required_bytes:
 | `NO_PERMISSION` | 无访问权限 | 否 | 标记 failed，任务终止 |
 | `FILE_TOO_LARGE` | 单文件超过 Telegram 限制 | 否 | 标记 skipped |
 | `DUPLICATE_UPLOAD` | 目标频道已存在 | 否 | 标记 success（幂等视为成功） |
+| `COPY_MESSAGE_FAILED` | 仓库 copy_message 分发失败 | 是 | 降级为 file_id_send 重试 |
+| `FILE_ID_SEND_FAILED` | 仓库 file_id_send 分发失败 | 是 | 降级为重新下载后上传 |
+| `DUPLICATE_FILE` | 去重命中（L1/L2/L3） | 否 | 标记 skipped，触发仓库分发（如需上传） |
 | `UNKNOWN` | 未知错误 | 是（有限次） | 纳入重试计数 |
 
 ### 7.3 子任务重试流程
@@ -815,14 +1000,15 @@ class ExecutorError(TaskManagerError):
 ```
 TaskManager
     ├── module/enums.py           # TaskType / TaskStatus / ItemStatus 等枚举
-    ├── module/config.py          # 读取 resource_limits 配置
+    ├── module/config.py          # 读取 config.yaml 统一配置
     ├── module/client.py          # TelegramClient 封装
     ├── module/downloader.py      # 下载执行细节
     ├── module/uploader.py        # 上传执行细节
     ├── module/task.py            # 现有 DownloadTask / UploadTask（执行器内部复用）
     ├── module/path_tool.py       # safe_delete / calc_sha256
     ├── module/monitor.py         # 进度/事件推送（可选）
-    └── module/language.py        # 文案国际化（Bot 通知）
+    ├── module/language.py        # 文案国际化（Bot 通知）
+    └── module/repository_manager.py  # 仓库管理器（去重查询、文件注册、分发执行）
 ```
 
 ### 10.2 外部依赖
@@ -884,6 +1070,7 @@ module/monitor.py      # 读取 tm_task_events 展示任务日志
 | 版本 | 日期 | 变更内容 | 作者 |
 |------|------|---------|------|
 | v1.0 | 2026-06-18 | 初始版本，完成 TaskManager 模块级设计 | SOLO |
+| v1.1 | 2026-06-21 | 集成仓库模式（Repository Mode）：新增 repository_files / repository_sources / file_distributions 数据库表；TaskItem 新增 file_unique_id 字段；配置合并为 config.yaml 统一结构；新增仓库相关错误码；执行流程增加 L1/L2/L3 去重检查与仓库分发集成；TaskManager 构造函数新增 repository_manager 参数；UploadTask 新增 source_chat_id / source_message_id 可选参数 | SOLO |
 
 ---
 
