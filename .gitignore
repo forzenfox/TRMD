@@ -10,6 +10,7 @@ venv/
 # IDE
 .idea/
 .vscode/
+.trae/
 
 # Sessions
 sessions/
