@@ -290,7 +290,7 @@ class ApiClient {
    * 获取资源状态
    */
   async getResourceStatus() {
-    return this.request('GET', '/api/resource/status');
+    return this.request('GET', '/api/monitor/resource/status');
   }
 }
 

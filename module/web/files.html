@@ -128,15 +128,15 @@
           <h1 class="text-xl font-semibold text-white">文件管理</h1>
         </div>
         <div class="flex items-center space-x-3">
-          <button @click="fileManager.refresh()" class="btn btn-secondary">
+          <button @click="refreshFiles()" class="btn btn-secondary">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
             </svg>
             <span>刷新</span>
           </button>
           <button 
-            x-show="fileManager.selectedFiles.length > 0"
-            @click="fileManager.openUploadModal()"
+            x-show="selectedFiles.length > 0"
+            @click="openUploadModal()"
             class="btn btn-primary"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -183,13 +183,13 @@
 
         <!-- 面包屑导航 -->
         <div class="breadcrumb">
-          <template x-for="(crumb, index) in fileManager.getBreadcrumbs()" :key="crumb.path">
+          <template x-for="(crumb, index) in getBreadcrumbs()" :key="crumb.path">
             <span class="flex items-center">
               <span x-show="index > 0" class="breadcrumb-separator mx-1">/</span>
               <a 
-                @click.prevent="fileManager.loadFiles(crumb.path)"
+                @click.prevent="loadFiles(crumb.path)"
                 href="#"
-                :class="index === fileManager.getBreadcrumbs().length - 1 ? 'breadcrumb-item active' : 'breadcrumb-item'"
+                :class="index === getBreadcrumbs().length - 1 ? 'breadcrumb-item active' : 'breadcrumb-item'"
                 x-text="crumb.name"
               ></a>
             </span>
@@ -200,14 +200,14 @@
         <div class="flex items-center justify-between mb-4">
           <div class="flex items-center gap-2">
             <button 
-              @click="fileManager.selectAllFiles()"
+              @click="selectAllFiles()"
               class="btn btn-sm btn-secondary"
             >
               全选
             </button>
             <button 
-              x-show="fileManager.selectedFiles.length > 0"
-              @click="fileManager.clearSelection()"
+              x-show="selectedFiles.length > 0"
+              @click="clearSelection()"
               class="btn btn-sm btn-secondary"
             >
               清空选择
@@ -215,53 +215,53 @@
           </div>
           <div class="flex items-center gap-2">
             <button 
-              @click="fileManager.toggleSort('name')"
+              @click="toggleSort('name')"
               class="btn btn-sm"
-              :class="fileManager.sortBy === 'name' ? 'btn-primary' : 'btn-secondary'"
+              :class="sortBy === 'name' ? 'btn-primary' : 'btn-secondary'"
             >
               名称
-              <span x-show="fileManager.sortBy === 'name'" x-text="fileManager.sortOrder === 'asc' ? '↑' : '↓'"></span>
+              <span x-show="sortBy === 'name'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
             </button>
             <button 
-              @click="fileManager.toggleSort('size')"
+              @click="toggleSort('size')"
               class="btn btn-sm"
-              :class="fileManager.sortBy === 'size' ? 'btn-primary' : 'btn-secondary'"
+              :class="sortBy === 'size' ? 'btn-primary' : 'btn-secondary'"
             >
               大小
-              <span x-show="fileManager.sortBy === 'size'" x-text="fileManager.sortOrder === 'asc' ? '↑' : '↓'"></span>
+              <span x-show="sortBy === 'size'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
             </button>
             <button 
-              @click="fileManager.toggleSort('date')"
+              @click="toggleSort('date')"
               class="btn btn-sm"
-              :class="fileManager.sortBy === 'date' ? 'btn-primary' : 'btn-secondary'"
+              :class="sortBy === 'date' ? 'btn-primary' : 'btn-secondary'"
             >
               日期
-              <span x-show="fileManager.sortBy === 'date'" x-text="fileManager.sortOrder === 'asc' ? '↑' : '↓'"></span>
+              <span x-show="sortBy === 'date'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
             </button>
           </div>
         </div>
 
         <!-- 加载状态 -->
-        <div x-show="fileManager.loading" class="flex items-center justify-center py-12">
+        <div x-show="loading" class="flex items-center justify-center py-12">
           <div class="spinner spinner-lg"></div>
           <span class="ml-3 text-slate-400">加载文件列表...</span>
         </div>
 
         <!-- 错误提示 -->
-        <div x-show="fileManager.error" class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-4">
-          <span x-text="fileManager.error"></span>
+        <div x-show="error" class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-4">
+          <span x-text="error"></span>
         </div>
 
         <!-- 文件列表 -->
-        <div x-show="!fileManager.loading && !fileManager.error" class="card">
-          <div x-show="fileManager.files.length === 0" class="py-8 text-center">
+        <div x-show="!loading && !error" class="card">
+          <div x-show="files.length === 0" class="py-8 text-center">
             <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
             </svg>
             <p class="text-slate-400 mt-2">当前目录为空</p>
           </div>
 
-          <div x-show="fileManager.files.length > 0" class="overflow-x-auto">
+          <div x-show="files.length > 0" class="overflow-x-auto">
             <table class="table">
               <thead>
                 <tr>
@@ -273,26 +273,26 @@
                 </tr>
               </thead>
               <tbody>
-                <template x-for="file in fileManager.files" :key="file.path">
+                <template x-for="file in files" :key="file.path">
                   <tr 
                     :class="isSelected(file) ? 'bg-primary-500/10' : ''"
-                    @dblclick="file.is_directory && fileManager.enterDirectory(file.name)"
+                    @dblclick="file.is_directory && enterDirectory(file.name)"
                   >
                     <td>
                       <input 
                         type="checkbox"
                         :checked="isSelected(file)"
-                        @change="fileManager.toggleFileSelection(file)"
+                        @change="toggleFileSelection(file)"
                         :disabled="file.is_directory"
                         class="w-4 h-4 rounded border-slate-600 bg-slate-700 text-primary-600 focus:ring-primary-500"
                       >
                     </td>
                     <td>
                       <div class="flex items-center gap-2">
-                        <span x-text="fileManager.getFileIcon(file)" class="text-lg"></span>
+                        <span x-text="getFileIcon(file)" class="text-lg"></span>
                         <a 
                           x-show="file.is_directory"
-                          @click.prevent="fileManager.enterDirectory(file.name)"
+                          @click.prevent="enterDirectory(file.name)"
                           href="#"
                           class="text-primary-400 hover:text-primary-300"
                           x-text="file.name"
@@ -300,11 +300,11 @@
                         <span x-show="!file.is_directory" class="text-white" x-text="file.name"></span>
                       </div>
                     </td>
-                    <td class="text-sm text-slate-400" x-text="file.is_directory ? '-' : fileManager.formatFileSize(file.size)"></td>
-                    <td class="text-sm text-slate-400" x-text="fileManager.formatTime(file.modified_at)"></td>
+                    <td class="text-sm text-slate-400" x-text="file.is_directory ? '-' : formatFileSize(file.size)"></td>
+                    <td class="text-sm text-slate-400" x-text="formatTime(file.modified_at)"></td>
                     <td>
                       <button 
-                        x-show="!file.is_directory && fileManager.isMediaFile(file)"
+                        x-show="!file.is_directory && isMediaFile(file)"
                         @click="previewFile(file)"
                         class="text-slate-400 hover:text-white"
                         title="预览"
@@ -324,7 +324,7 @@
 
         <!-- 底部选择信息栏 -->
         <div 
-          x-show="fileManager.selectedFiles.length > 0"
+          x-show="selectedFiles.length > 0"
           x-transition:enter="transition ease-out duration-300"
           x-transition:enter-start="translate-y-full"
           x-transition:enter-end="translate-y-0"
@@ -334,15 +334,15 @@
           class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-slate-800 border border-slate-700 rounded-lg shadow-lg px-6 py-3 flex items-center gap-4 z-40"
         >
           <span class="text-sm text-white">
-            已选择 <span class="font-medium text-primary-400" x-text="fileManager.selectedFiles.length"></span> 个文件
+            已选择 <span class="font-medium text-primary-400" x-text="selectedFiles.length"></span> 个文件
           </span>
           <span class="text-sm text-slate-400">
-            共 <span x-text="fileManager.formatFileSize(fileManager.getTotalSelectedSize())"></span>
+            共 <span x-text="formatFileSize(getTotalSelectedSize())"></span>
           </span>
-          <button @click="fileManager.openUploadModal()" class="btn btn-sm btn-primary">
+          <button @click="openUploadModal()" class="btn btn-sm btn-primary">
             上传
           </button>
-          <button @click="fileManager.clearSelection()" class="text-slate-400 hover:text-white">
+          <button @click="clearSelection()" class="text-slate-400 hover:text-white">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
@@ -353,7 +353,7 @@
 
     <!-- 上传配置弹窗 -->
     <div 
-      x-show="fileManager.showUploadModal"
+      x-show="showUploadModal"
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -361,10 +361,10 @@
       x-transition:leave-start="opacity-100"
       x-transition:leave-end="opacity-0"
       class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-      @click="fileManager.closeUploadModal()"
+      @click="closeUploadModal()"
     >
       <div 
-        x-show="fileManager.showUploadModal"
+        x-show="showUploadModal"
         x-transition:enter="transition ease-out duration-300"
         x-transition:enter-start="opacity-0 scale-95"
         x-transition:enter-end="opacity-100 scale-100"
@@ -376,20 +376,20 @@
       >
         <div class="modal-header">
           <h3 class="modal-title text-white">上传配置</h3>
-          <button @click="fileManager.closeUploadModal()" class="text-slate-400 hover:text-white">
+          <button @click="closeUploadModal()" class="text-slate-400 hover:text-white">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
           </button>
         </div>
-        <div class="modal-body" x-data="{ targetChat: '', sendAsMediaGroup: true, deleteAfterUpload: false }">
+        <div class="modal-body">
           <form @submit.prevent="handleUpload" class="space-y-4">
             <!-- 目标频道 -->
             <div class="form-group">
               <label class="form-label">目标频道</label>
               <input 
                 type="text" 
-                x-model="targetChat"
+                x-model="uploadForm.targetChat"
                 class="form-input"
                 placeholder="@username 或 https://t.me/xxx"
                 required
@@ -399,7 +399,7 @@
             <!-- 媒体组选项 -->
             <div class="form-group">
               <label class="flex items-center cursor-pointer">
-                <input type="checkbox" x-model="sendAsMediaGroup" class="mr-2">
+                <input type="checkbox" x-model="uploadForm.sendAsMediaGroup" class="mr-2">
                 <span>发送为媒体组（最多 10 个一组）</span>
               </label>
             </div>
@@ -407,7 +407,7 @@
             <!-- 上传后删除 -->
             <div class="form-group">
               <label class="flex items-center cursor-pointer">
-                <input type="checkbox" x-model="deleteAfterUpload" class="mr-2">
+                <input type="checkbox" x-model="uploadForm.deleteAfterUpload" class="mr-2">
                 <span>上传后删除本地文件</span>
               </label>
             </div>
@@ -416,11 +416,11 @@
             <div>
               <p class="text-sm text-slate-400 mb-2">已选文件：</p>
               <div class="bg-slate-700/50 rounded p-3 max-h-40 overflow-y-auto">
-                <template x-for="file in fileManager.selectedFiles" :key="file.path">
+                <template x-for="file in selectedFiles" :key="file.path">
                   <div class="flex items-center gap-2 py-1 text-sm">
-                    <span x-text="fileManager.getFileIcon(file)"></span>
+                    <span x-text="getFileIcon(file)"></span>
                     <span class="text-white truncate flex-1" x-text="file.name"></span>
-                    <span class="text-slate-400" x-text="fileManager.formatFileSize(file.size)"></span>
+                    <span class="text-slate-400" x-text="formatFileSize(file.size)"></span>
                   </div>
                 </template>
               </div>
@@ -428,7 +428,7 @@
           </form>
         </div>
         <div class="modal-footer">
-          <button @click="fileManager.closeUploadModal()" class="btn btn-secondary">
+          <button @click="closeUploadModal()" class="btn btn-secondary">
             取消
           </button>
           <button 
@@ -455,34 +455,139 @@
         mobileSidebarOpen: false,
         userName: '用户',
         notifications: [],
+        // Alpine 响应式状态
+        currentPath: '/',
+        files: [],
+        selectedFiles: [],
+        loading: false,
+        error: null,
+        showUploadModal: false,
+        sortBy: 'name',
+        sortOrder: 'asc',
+        uploadForm: {
+          targetChat: '',
+          sendAsMediaGroup: true,
+          deleteAfterUpload: false,
+        },
 
         async init() {
           const authenticated = await authManager.ensureAuthenticated();
           if (!authenticated) return;
 
           this.userName = authManager.getDisplayName();
-          await fileManager.loadFiles('/');
+          await this.loadFiles('/');
+        },
+
+        async loadFiles(path) {
+          this.currentPath = path;
+          this.loading = true;
+          this.error = null;
+          this.selectedFiles = [];
+
+          try {
+            const files = await fileManager.loadFiles(path);
+            this.files = fileManager.sortFiles(files, this.sortBy, this.sortOrder);
+          } catch (error) {
+            this.error = error.message;
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        enterDirectory(dirName) {
+          const newPath = fileManager.enterDirectory(this.currentPath, dirName);
+          this.loadFiles(newPath);
+        },
+
+        goToParentDirectory() {
+          const parentPath = fileManager.goToParentDirectory(this.currentPath);
+          this.loadFiles(parentPath);
+        },
+
+        refreshFiles() {
+          this.loadFiles(this.currentPath);
         },
 
         isSelected(file) {
-          return fileManager.selectedFiles.some(f => f.path === file.path);
+          return this.selectedFiles.some(f => f.path === file.path);
+        },
+
+        toggleFileSelection(file) {
+          this.selectedFiles = fileManager.toggleFileSelection(this.selectedFiles, file);
+        },
+
+        selectAllFiles() {
+          this.selectedFiles = fileManager.selectAllFiles(this.files);
+        },
+
+        clearSelection() {
+          this.selectedFiles = [];
+        },
+
+        getTotalSelectedSize() {
+          return fileManager.getTotalSelectedSize(this.selectedFiles);
+        },
+
+        toggleSort(newSortBy) {
+          const result = fileManager.toggleSort(this.sortBy, this.sortOrder, newSortBy);
+          this.sortBy = result.sortBy;
+          this.sortOrder = result.sortOrder;
+          this.files = fileManager.sortFiles(this.files, this.sortBy, this.sortOrder);
+        },
+
+        getFileIcon(file) {
+          return fileManager.getFileIcon(file);
+        },
+
+        isMediaFile(file) {
+          return fileManager.isMediaFile(file);
+        },
+
+        getBreadcrumbs() {
+          return fileManager.getBreadcrumbs(this.currentPath);
+        },
+
+        formatFileSize(bytes) {
+          return fileManager.formatFileSize(bytes);
+        },
+
+        formatTime(isoString) {
+          return fileManager.formatTime(isoString);
+        },
+
+        openUploadModal() {
+          if (this.selectedFiles.length === 0) {
+            this.addNotification('warning', '请先选择要上传的文件');
+            return;
+          }
+          this.uploadForm.targetChat = '';
+          this.uploadForm.sendAsMediaGroup = true;
+          this.uploadForm.deleteAfterUpload = false;
+          this.showUploadModal = true;
+        },
+
+        closeUploadModal() {
+          this.showUploadModal = false;
+        },
+
+        async handleUpload() {
+          try {
+            const count = await fileManager.createUploadTask(
+              this.selectedFiles,
+              this.uploadForm.targetChat,
+              this.uploadForm.sendAsMediaGroup,
+              this.uploadForm.deleteAfterUpload
+            );
+            this.closeUploadModal();
+            this.clearSelection();
+            this.addNotification('success', `已创建 ${count} 个上传任务`);
+          } catch (error) {
+            this.addNotification('error', `创建上传任务失败: ${error.message}`);
+          }
         },
 
         previewFile(file) {
-          // 简单预览功能，可扩展为模态框预览
           this.addNotification('info', `预览: ${file.name}`);
-        },
-
-        handleUpload() {
-          // 从弹窗表单获取数据
-          const modal = document.querySelector('[x-data] .modal-body');
-          if (!modal) return;
-          
-          const targetChat = modal.querySelector('input[type="text"]').value;
-          const sendAsMediaGroup = modal.querySelector('input[type="checkbox"]').checked;
-          const deleteAfterUpload = modal.querySelectorAll('input[type="checkbox"]')[1]?.checked || false;
-          
-          fileManager.createUploadTask(targetChat, sendAsMediaGroup, deleteAfterUpload);
         },
 
         logout() {

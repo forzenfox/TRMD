@@ -374,6 +374,8 @@ class TaskManager {
 
     this.ws.onopen = () => {
       console.log('任务 WebSocket 连接已建立');
+      // 发送初始心跳，触发后端进入消息循环
+      this.ws.send(JSON.stringify({ type: 'ping' }));
     };
 
     this.ws.onmessage = (event) => {

@@ -458,9 +458,17 @@
 
           // 连接 WebSocket
           taskManager.connectWebSocket();
-          this.$watch('taskManager.tasks', () => {
-            this.recentTasks = taskManager.tasks.slice(0, 5);
-          });
+
+          // 定期刷新最近任务（WebSocket 更新的是 taskManager.tasks，无法直接 watch）
+          this._refreshInterval = setInterval(() => {
+            this.loadRecentTasks();
+          }, 30000);
+        },
+
+        destroy() {
+          if (this._refreshInterval) {
+            clearInterval(this._refreshInterval);
+          }
         },
 
         async loadStats() {

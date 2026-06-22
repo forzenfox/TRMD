@@ -128,7 +128,7 @@
           <h1 class="text-xl font-semibold text-white">任务管理</h1>
         </div>
         <div class="flex items-center space-x-3">
-          <button @click="taskManager.showCreateModal = true" class="btn btn-primary">
+          <button @click="openCreateModal()" class="btn btn-primary">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
             </svg>
@@ -436,7 +436,7 @@
 
     <!-- 创建任务弹窗 -->
     <div 
-      x-show="taskManager.showCreateModal"
+      x-show="showCreateModal"
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -444,10 +444,10 @@
       x-transition:leave-start="opacity-100"
       x-transition:leave-end="opacity-0"
       class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-      @click="taskManager.closeCreateModal()"
+      @click="closeCreateModal()"
     >
       <div 
-        x-show="taskManager.showCreateModal"
+        x-show="showCreateModal"
         x-transition:enter="transition ease-out duration-300"
         x-transition:enter-start="opacity-0 scale-95"
         x-transition:enter-end="opacity-100 scale-100"
@@ -472,15 +472,15 @@
               <label class="form-label">任务类型</label>
               <div class="flex gap-3">
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="taskManager.createForm.taskType" value="download" class="mr-2">
+                  <input type="radio" x-model="createForm.taskType" value="download" class="mr-2">
                   <span>下载</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="taskManager.createForm.taskType" value="forward" class="mr-2">
+                  <input type="radio" x-model="createForm.taskType" value="forward" class="mr-2">
                   <span>转发</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="taskManager.createForm.taskType" value="upload" class="mr-2">
+                  <input type="radio" x-model="createForm.taskType" value="upload" class="mr-2">
                   <span>上传</span>
                 </label>
               </div>
@@ -491,18 +491,18 @@
               <label class="form-label">任务名称（可选）</label>
               <input 
                 type="text" 
-                x-model="taskManager.createForm.taskName"
+                x-model="createForm.taskName"
                 class="form-input"
                 placeholder="留空将自动生成"
               >
             </div>
 
             <!-- 源频道 -->
-            <div class="form-group" x-show="taskManager.createForm.taskType !== 'upload'">
+            <div class="form-group" x-show="createForm.taskType !== 'upload'">
               <label class="form-label">源频道</label>
               <input 
                 type="text" 
-                x-model="taskManager.createForm.sourceChat"
+                x-model="createForm.sourceChat"
                 class="form-input"
                 placeholder="@username 或 https://t.me/xxx"
                 required
@@ -510,11 +510,11 @@
             </div>
 
             <!-- 目标频道 -->
-            <div class="form-group" x-show="taskManager.createForm.taskType !== 'download'">
+            <div class="form-group" x-show="createForm.taskType !== 'download'">
               <label class="form-label">目标频道</label>
               <input 
                 type="text" 
-                x-model="taskManager.createForm.targetChat"
+                x-model="createForm.targetChat"
                 class="form-input"
                 placeholder="@username 或 https://t.me/xxx"
                 required
@@ -522,39 +522,39 @@
             </div>
 
             <!-- 消息范围模式 -->
-            <div class="form-group" x-show="taskManager.createForm.taskType !== 'upload'">
+            <div class="form-group" x-show="createForm.taskType !== 'upload'">
               <label class="form-label">消息范围</label>
               <div class="flex flex-wrap gap-3 mb-3">
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="id_range" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="id_range" class="mr-2">
                   <span>ID 范围</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="date_range" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="date_range" class="mr-2">
                   <span>日期范围</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="id_list" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="id_list" class="mr-2">
                   <span>ID 列表</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="taskManager.createForm.messageRangeMode" value="all" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="all" class="mr-2">
                   <span>全部</span>
                 </label>
               </div>
 
               <!-- ID 范围 -->
-              <div x-show="taskManager.createForm.messageRangeMode === 'id_range'" class="flex gap-3">
+              <div x-show="createForm.messageRangeMode === 'id_range'" class="flex gap-3">
                 <input 
                   type="number" 
-                  x-model="taskManager.createForm.minId"
+                  x-model="createForm.minId"
                   class="form-input flex-1"
                   placeholder="最小 ID"
                   min="1"
                 >
                 <input 
                   type="number" 
-                  x-model="taskManager.createForm.maxId"
+                  x-model="createForm.maxId"
                   class="form-input flex-1"
                   placeholder="最大 ID"
                   min="1"
@@ -562,15 +562,15 @@
               </div>
 
               <!-- 日期范围 -->
-              <div x-show="taskManager.createForm.messageRangeMode === 'date_range'" class="flex gap-3">
-                <input type="date" x-model="taskManager.createForm.startDate" class="form-input flex-1">
-                <input type="date" x-model="taskManager.createForm.endDate" class="form-input flex-1">
+              <div x-show="createForm.messageRangeMode === 'date_range'" class="flex gap-3">
+                <input type="date" x-model="createForm.startDate" class="form-input flex-1">
+                <input type="date" x-model="createForm.endDate" class="form-input flex-1">
               </div>
 
               <!-- ID 列表 -->
-              <div x-show="taskManager.createForm.messageRangeMode === 'id_list'">
+              <div x-show="createForm.messageRangeMode === 'id_list'">
                 <textarea 
-                  x-model="taskManager.createForm.rawItems"
+                  x-model="createForm.rawItems"
                   class="form-input form-textarea"
                   placeholder="每行一个消息 ID 或链接"
                   rows="4"
@@ -581,13 +581,13 @@
               </div>
 
               <!-- 全部消息 -->
-              <div x-show="taskManager.createForm.messageRangeMode === 'all'" class="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-sm text-yellow-300">
+              <div x-show="createForm.messageRangeMode === 'all'" class="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-sm text-yellow-300">
                 ⚠️ 将处理频道历史所有消息，可能耗时较长。
               </div>
             </div>
 
             <!-- 类型过滤 -->
-            <div class="form-group" x-show="taskManager.createForm.taskType !== 'upload'">
+            <div class="form-group" x-show="createForm.taskType !== 'upload'">
               <label class="form-label">类型过滤</label>
               <div class="flex flex-wrap gap-3">
                 <template x-for="option in configManager.getDownloadTypeOptions()" :key="option.value">
@@ -638,6 +638,19 @@
         userName: '用户',
         notifications: [],
         createFormError: null,
+        showCreateModal: false, // Alpine 响应式状态
+        createForm: { // Alpine 响应式状态
+          taskType: 'download',
+          taskName: '',
+          sourceChat: '',
+          targetChat: '',
+          messageRangeMode: 'id_range',
+          minId: 0,
+          maxId: 0,
+          startDate: '',
+          endDate: '',
+          rawItems: '',
+        },
 
         async init() {
           const authenticated = await authManager.ensureAuthenticated();
@@ -650,8 +663,21 @@
           taskManager.connectWebSocket();
         },
 
+        openCreateModal() {
+          this.showCreateModal = true;
+          taskManager.showCreateModal = true;
+        },
+
+        closeCreateModal() {
+          this.showCreateModal = false;
+          taskManager.closeCreateModal();
+        },
+
         async handleCreateTask() {
           this.createFormError = null;
+          
+          // 同步 Alpine createForm 到 taskManager
+          Object.assign(taskManager.createForm, this.createForm);
           
           // 验证表单
           const errors = taskManager.validateCreateForm();
@@ -663,6 +689,7 @@
           try {
             await taskManager.createTask();
             this.addNotification('success', '任务创建成功');
+            this.closeCreateModal();
           } catch (error) {
             this.addNotification('error', `创建失败: ${error.message}`);
           }

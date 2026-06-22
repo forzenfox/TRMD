@@ -2,164 +2,126 @@
  * 文件管理逻辑模块
  * 
  * 处理文件浏览、选择、上传准备等功能
+ * 注意: 状态由 Alpine 组件管理，FileManager 作为纯服务层
  */
 
 class FileManager {
   constructor() {
-    this.currentPath = '/';
-    this.files = [];
-    this.selectedFiles = [];
-    this.loading = false;
-    this.error = null;
-    this.showUploadModal = false;
     this.mediaGroupSize = 10; // Telegram 媒体组上限
-    this.viewMode = 'list'; // list, grid
-    this.sortBy = 'name'; // name, size, date
-    this.sortOrder = 'asc'; // asc, desc
   }
 
   /**
    * 加载文件列表
    * @param {string} path - 目录路径
+   * @returns {Promise<Array>} 文件列表
    */
-  async loadFiles(path = null) {
-    if (path !== null) {
-      this.currentPath = path;
-    }
-
-    this.loading = true;
-    this.error = null;
-
+  async loadFiles(path) {
     try {
-      const response = await api.getFiles(this.currentPath);
-      this.files = response.files || [];
-      this._sortFiles();
+      const response = await api.getFiles(path);
+      return response.files || [];
     } catch (error) {
-      this.error = error.message;
       console.error('加载文件列表失败:', error);
-    } finally {
-      this.loading = false;
+      throw error;
     }
   }
 
   /**
    * 进入子目录
+   * @param {string} currentPath - 当前路径
    * @param {string} dirName - 目录名
+   * @returns {string} 新路径
    */
-  enterDirectory(dirName) {
-    const newPath = this.currentPath === '/' 
+  enterDirectory(currentPath, dirName) {
+    return currentPath === '/' 
       ? `/${dirName}` 
-      : `${this.currentPath}/${dirName}`;
-    this.loadFiles(newPath);
+      : `${currentPath}/${dirName}`;
   }
 
   /**
    * 返回父目录
+   * @param {string} currentPath - 当前路径
+   * @returns {string} 父路径
    */
-  goToParentDirectory() {
-    if (this.currentPath === '/') return;
+  goToParentDirectory(currentPath) {
+    if (currentPath === '/') return '/';
     
-    const parts = this.currentPath.split('/').filter(Boolean);
+    const parts = currentPath.split('/').filter(Boolean);
     parts.pop();
     const parentPath = '/' + parts.join('/');
-    this.loadFiles(parentPath || '/');
+    return parentPath || '/';
   }
 
   /**
    * 切换文件选择状态
+   * @param {Array} selectedFiles - 当前选中文件列表
    * @param {object} file - 文件对象
+   * @returns {Array} 更新后的选中文件列表
    */
-  toggleFileSelection(file) {
-    if (file.is_directory) return; // 目录不可选
+  toggleFileSelection(selectedFiles, file) {
+    if (file.is_directory) return selectedFiles;
 
-    const index = this.selectedFiles.findIndex(f => f.path === file.path);
+    const index = selectedFiles.findIndex(f => f.path === file.path);
+    const newSelected = [...selectedFiles];
     if (index === -1) {
-      this.selectedFiles.push(file);
+      newSelected.push(file);
     } else {
-      this.selectedFiles.splice(index, 1);
+      newSelected.splice(index, 1);
     }
+    return newSelected;
   }
 
   /**
    * 全选当前目录下的所有文件
+   * @param {Array} files - 文件列表
+   * @returns {Array} 选中的文件列表
    */
-  selectAllFiles() {
-    this.selectedFiles = this.files
+  selectAllFiles(files) {
+    return files
       .filter(f => !f.is_directory)
       .map(f => ({ ...f }));
   }
 
   /**
-   * 清空选择
-   */
-  clearSelection() {
-    this.selectedFiles = [];
-  }
-
-  /**
    * 获取已选文件总大小
+   * @param {Array} selectedFiles - 选中文件列表
+   * @returns {number} 总大小（字节）
    */
-  getTotalSelectedSize() {
-    return this.selectedFiles.reduce((total, file) => total + (file.size || 0), 0);
-  }
-
-  /**
-   * 打开上传配置弹窗
-   */
-  openUploadModal() {
-    if (this.selectedFiles.length === 0) {
-      this._notify('warning', '请先选择要上传的文件');
-      return;
-    }
-    this.showUploadModal = true;
-  }
-
-  /**
-   * 关闭上传配置弹窗
-   */
-  closeUploadModal() {
-    this.showUploadModal = false;
+  getTotalSelectedSize(selectedFiles) {
+    return selectedFiles.reduce((total, file) => total + (file.size || 0), 0);
   }
 
   /**
    * 创建上传任务
+   * @param {Array} selectedFiles - 选中文件列表
    * @param {string} targetChat - 目标频道
    * @param {boolean} sendAsMediaGroup - 是否发送为媒体组
    * @param {boolean} deleteAfterUpload - 上传后是否删除本地文件
    */
-  async createUploadTask(targetChat, sendAsMediaGroup, deleteAfterUpload) {
+  async createUploadTask(selectedFiles, targetChat, sendAsMediaGroup, deleteAfterUpload) {
     if (!targetChat) {
-      this._notify('error', '请输入目标频道');
-      return;
+      throw new Error('请输入目标频道');
     }
 
-    try {
-      // 如果启用媒体组，按组拆分文件
-      const fileGroups = sendAsMediaGroup 
-        ? this._splitIntoMediaGroups(this.selectedFiles)
-        : [this.selectedFiles];
+    // 如果启用媒体组，按组拆分文件
+    const fileGroups = sendAsMediaGroup 
+      ? this._splitIntoMediaGroups(selectedFiles)
+      : [selectedFiles];
 
-      // 为每个组创建上传任务
-      for (const fileGroup of fileGroups) {
-        const payload = {
-          type: 'upload',
-          name: `上传_${new Date().toLocaleString('zh-CN').replace(/[/:]/g, '')}`,
-          target_chat: targetChat,
-          files: fileGroup.map(f => f.path),
-          send_as_media_group: sendAsMediaGroup && fileGroup.length > 1,
-          delete_after_upload: deleteAfterUpload,
-        };
+    // 为每个组创建上传任务
+    for (const fileGroup of fileGroups) {
+      const payload = {
+        type: 'upload',
+        name: `上传_${new Date().toLocaleString('zh-CN').replace(/[/:]/g, '')}`,
+        target_chat: targetChat,
+        files: fileGroup.map(f => f.path),
+        send_as_media_group: sendAsMediaGroup && fileGroup.length > 1,
+        delete_after_upload: deleteAfterUpload,
+      };
 
-        await api.createTask(payload);
-      }
-
-      this.closeUploadModal();
-      this.clearSelection();
-      this._notify('success', `已创建 ${fileGroups.length} 个上传任务`);
-    } catch (error) {
-      this._notify('error', `创建上传任务失败: ${error.message}`);
-      throw error;
+      await api.createTask(payload);
     }
+
+    return fileGroups.length;
   }
 
   /**
@@ -177,16 +139,20 @@ class FileManager {
 
   /**
    * 排序文件列表
+   * @param {Array} files - 文件列表
+   * @param {string} sortBy - 排序字段
+   * @param {string} sortOrder - 排序方向
+   * @returns {Array} 排序后的文件列表
    */
-  _sortFiles() {
-    this.files.sort((a, b) => {
+  sortFiles(files, sortBy, sortOrder) {
+    const sorted = [...files].sort((a, b) => {
       // 目录始终排在文件前面
       if (a.is_directory !== b.is_directory) {
         return a.is_directory ? -1 : 1;
       }
 
       let comparison = 0;
-      switch (this.sortBy) {
+      switch (sortBy) {
         case 'name':
           comparison = a.name.localeCompare(b.name);
           break;
@@ -198,22 +164,24 @@ class FileManager {
           break;
       }
 
-      return this.sortOrder === 'asc' ? comparison : -comparison;
+      return sortOrder === 'asc' ? comparison : -comparison;
     });
+    return sorted;
   }
 
   /**
    * 切换排序
-   * @param {string} sortBy - 排序字段
+   * @param {string} currentSortBy - 当前排序字段
+   * @param {string} currentSortOrder - 当前排序方向
+   * @param {string} newSortBy - 新排序字段
+   * @returns {{sortBy: string, sortOrder: string}} 新的排序状态
    */
-  toggleSort(sortBy) {
-    if (this.sortBy === sortBy) {
-      this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+  toggleSort(currentSortBy, currentSortOrder, newSortBy) {
+    if (currentSortBy === newSortBy) {
+      return { sortBy: currentSortBy, sortOrder: currentSortOrder === 'asc' ? 'desc' : 'asc' };
     } else {
-      this.sortBy = sortBy;
-      this.sortOrder = 'asc';
+      return { sortBy: newSortBy, sortOrder: 'asc' };
     }
-    this._sortFiles();
   }
 
   /**
@@ -228,18 +196,18 @@ class FileManager {
     const ext = file.name.split('.').pop().toLowerCase();
     const iconMap = {
       // 视频
-      mp4: '🎬', mkv: '🎬', avi: '🎬', mov: '🎬', webm: '🎬',
+      mp4: '🎬', mkv: '🎬', avi: '🎬', mov: '', webm: '🎬',
       // 图片
-      jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '🖼️', webp: '🖼️', bmp: '🖼️',
+      jpg: '🖼️', jpeg: '🖼️', png: '🖼️', gif: '️', webp: '🖼️', bmp: '🖼️',
       // 音频
-      mp3: '🎵', wav: '🎵', flac: '🎵', aac: '🎵', ogg: '🎵',
+      mp3: '🎵', wav: '🎵', flac: '', aac: '🎵', ogg: '🎵',
       // 文档
-      pdf: '📄', doc: '📄', docx: '📄', txt: '📄', md: '📄',
+      pdf: '📄', doc: '', docx: '📄', txt: '📄', md: '📄',
       // 压缩文件
-      zip: '📦', rar: '📦', '7z': '📦', tar: '📦', gz: '📦',
+      zip: '📦', rar: '📦', '7z': '📦', tar: '', gz: '📦',
     };
 
-    return iconMap[ext] || '📄';
+    return iconMap[ext] || '';
   }
 
   /**
@@ -255,39 +223,23 @@ class FileManager {
   }
 
   /**
-   * 获取文件类型的 CSS 类
-   * @param {string} ext - 文件扩展名
-   */
-  getFileTypeClass(ext) {
-    const classMap = {
-      mp4: 'text-blue-400',
-      mkv: 'text-blue-400',
-      jpg: 'text-green-400',
-      png: 'text-green-400',
-      mp3: 'text-purple-400',
-      pdf: 'text-red-400',
-      zip: 'text-yellow-400',
-    };
-    return classMap[ext] || 'text-gray-400';
-  }
-
-  /**
    * 获取面包屑路径数组
+   * @param {string} currentPath - 当前路径
    */
-  getBreadcrumbs() {
-    if (this.currentPath === '/') {
+  getBreadcrumbs(currentPath) {
+    if (currentPath === '/') {
       return [{ name: '根目录', path: '/' }];
     }
 
-    const parts = this.currentPath.split('/').filter(Boolean);
+    const parts = currentPath.split('/').filter(Boolean);
     const breadcrumbs = [{ name: '根目录', path: '/' }];
     
-    let currentPath = '';
+    let path = '';
     for (const part of parts) {
-      currentPath += `/${part}`;
+      path += `/${part}`;
       breadcrumbs.push({
         name: part,
-        path: currentPath,
+        path: path,
       });
     }
 
@@ -326,26 +278,6 @@ class FileManager {
       hour: '2-digit',
       minute: '2-digit',
     });
-  }
-
-  /**
-   * 显示通知
-   * @param {string} type - 通知类型
-   * @param {string} message - 通知内容
-   */
-  _notify(type, message) {
-    if (window.showNotification) {
-      window.showNotification(type, message);
-    } else {
-      console.log(`[${type}] ${message}`);
-    }
-  }
-
-  /**
-   * 刷新文件列表
-   */
-  refresh() {
-    this.loadFiles(this.currentPath);
   }
 }
 
