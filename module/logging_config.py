@@ -147,6 +147,8 @@ logging.basicConfig(
 
 # 创建主日志记录器
 log = logging.getLogger("rich")
+# 抑制 Pyrogram 的 INFO 级别日志
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
 log.info(f"{SOFTWARE_SHORT_NAME}:{__version__},更新日期:{__update_date__}。")
 log.info(f'文件日志等级:"{logging.getLevelName(FILE_LOG_LEVEL)}"。')
 log.info(f'终端日志等级:"{logging.getLevelName(CONSOLE_LOG_LEVEL)}"。')

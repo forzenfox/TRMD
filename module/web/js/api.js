@@ -29,6 +29,8 @@ class ApiClient {
     if (urlToken) {
       this.token = urlToken;
       this.tokenSource = 'url';
+      // 保存 token 到全局变量，供 Alpine.js 组件读取
+      window.__urlToken = urlToken;
       // 首次验证成功后清理 URL 中的 token 参数
       this._cleanUrlToken();
       return;
@@ -113,13 +115,13 @@ class ApiClient {
       // 处理 401 未授权
       if (response.status === 401) {
         this.clearToken();
-        window.location.href = '/login.html?redirect=' + encodeURIComponent(window.location.pathname);
+        window.location.href = '/web/login.html?redirect=' + encodeURIComponent(window.location.pathname);
         return null;
       }
 
       // 处理 403 禁止访问
       if (response.status === 403) {
-        window.location.href = '/error.html?code=403';
+        window.location.href = '/web/error.html?code=403';
         return null;
       }
 

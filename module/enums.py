@@ -453,6 +453,15 @@ class BotCommandText:
         "download_chat",
         "下载指定频道并支持通过内联键盘自定义内容过滤。`/download_chat 频道链接`",
     )
+    WEB: tuple = ("web", "生成 WebUI 访问链接（带一次性 Token）")
+    WEB_REVOKE: tuple = ("web_revoke", "撤销所有 WebUI Token")
+    BATCH: tuple = ("batch", "简化批量操作：转发/下载任务（多步引导）")
+    STATUS: tuple = ("status", "查看当前任务状态摘要（复杂操作请前往 WebUI）")
+    CANCEL: tuple = ("cancel", "取消当前正在进行的交互流程")
+    SETUP_REPOSITORY: tuple = (
+        "setup_repository",
+        "设置仓库频道（配置存储频道）",
+    )
 
     @staticmethod
     def with_description(text: tuple) -> str:

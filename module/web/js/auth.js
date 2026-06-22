@@ -34,8 +34,8 @@ class AuthManager {
       if (error.message.includes('401') || error.message.includes('认证')) {
         api.clearToken();
         const currentPath = window.location.pathname;
-        if (currentPath !== '/login.html') {
-          window.location.href = `/login.html?redirect=${encodeURIComponent(currentPath)}`;
+        if (currentPath !== '/web/login.html') {
+          window.location.href = `/web/login.html?redirect=${encodeURIComponent(currentPath)}`;
         }
       }
       
@@ -51,7 +51,7 @@ class AuthManager {
    * @param {string} redirectUrl - 登录成功后跳转的 URL
    * @returns {Promise<boolean>} 是否登录成功
    */
-  async login(token, redirectUrl = '/') {
+  async login(token, redirectUrl = '/web/index.html') {
     this.loading = true;
     this.error = null;
 
@@ -85,7 +85,7 @@ class AuthManager {
     api.clearToken();
     this.isAuthenticated = false;
     this.user = null;
-    window.location.href = '/login.html';
+    window.location.href = '/web/login.html';
   }
 
   /**
@@ -94,7 +94,7 @@ class AuthManager {
    */
   async ensureAuthenticated() {
     if (!api.token) {
-      window.location.href = '/login.html?redirect=' + encodeURIComponent(window.location.pathname);
+      window.location.href = '/web/login.html?redirect=' + encodeURIComponent(window.location.pathname);
       return false;
     }
 
@@ -139,7 +139,7 @@ window.authManager = authManager;
 // 页面加载完成后自动验证认证状态
 document.addEventListener('DOMContentLoaded', async () => {
   // 仅在需要认证的页面执行
-  const publicPages = ['/login.html', '/error.html'];
+  const publicPages = ['/login.html', '/web/login.html', '/error.html', '/web/error.html'];
   const currentPath = window.location.pathname;
   
   if (!publicPages.includes(currentPath) && !currentPath.startsWith('/error')) {

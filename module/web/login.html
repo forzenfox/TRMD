@@ -5,16 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>登录 - Telegram Restricted Media Downloader</title>
   
-  <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <!-- Alpine.js CDN -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-  
-  <!-- 自定义样式 -->
-  <link rel="stylesheet" href="css/style.css">
-  
+  <!-- Tailwind 自定义配置 -->
   <script>
+    window.tailwind = window.tailwind || {};
     tailwind.config = {
       darkMode: 'class',
       theme: {
@@ -42,6 +35,12 @@
       }
     }
   </script>
+  
+  <!-- Tailwind CSS (本地) -->
+  <script src="vendor/tailwindcss.js"></script>
+  
+  <!-- 自定义样式 -->
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body class="bg-slate-900 min-h-screen flex items-center justify-center p-4">
   <div 
@@ -147,15 +146,15 @@
         showToken: false,
         loading: false,
         error: null,
-        redirectUrl: '/',
+        redirectUrl: '/web/index.html',
 
         init() {
           // 从 URL 获取重定向地址
           const params = new URLSearchParams(window.location.search);
-          this.redirectUrl = params.get('redirect') || '/';
+          this.redirectUrl = params.get('redirect') || '/web/index.html';
           
-          // 如果 URL 中有 token，自动填充
-          const urlToken = params.get('token');
+          // 优先从全局变量读取 token（api.js 在 _cleanUrlToken 前保存）
+          const urlToken = window.__urlToken || params.get('token');
           if (urlToken) {
             this.token = urlToken;
           }
@@ -186,5 +185,8 @@
       };
     }
   </script>
+
+  <!-- Alpine.js (本地) - 必须在组件函数定义之后加载 -->
+  <script src="vendor/alpinejs.js"></script>
 </body>
 </html>

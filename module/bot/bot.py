@@ -57,8 +57,6 @@ from module.enums import (
     BotButton,
     KeyWord,
 )
-from module.core.token_manager import TokenManager
-from module.interaction_manager import InteractionManager
 from module.bot.commands import BotCommands
 
 # 新增模块：重构后的职责分离组件
@@ -387,13 +385,13 @@ class Bot:
         from pyrogram.handlers import MessageHandler
         from pyrogram import filters
 
-        # 初始化 BotCommands 实例
+        # 初始化 BotCommands 实例（通过 AppContext 共享管理器）
         if self.bot_commands is None:
-            token_mgr = TokenManager(storage_type="sqlite")
-            interaction_mgr = InteractionManager()
+            from module.integration import init_context
+            ctx = init_context()
             self.bot_commands = BotCommands(
-                token_manager=token_mgr,
-                interaction_manager=interaction_mgr,
+                token_manager=ctx.token_manager,
+                interaction_manager=ctx.interaction_manager,
                 webui_base_url=f"http://localhost:8000",
             )
 
@@ -436,9 +434,9 @@ class Bot:
         self.bot.add_handler(
             MessageHandler(
                 self.handle_batch_message,
-                filters=filters.text & ~filters.command & filters.user(self.root),
-                group=1,
-            )
+                filters=filters.text & ~filters.command([]) & filters.user(self.root),
+            ),
+            group=1,
         )
 
         # 更新 COMMANDS 列表
@@ -494,7 +492,6 @@ class Bot:
             root = await self.user.get_me()
             self.root.append(root.id)
             await bot_client_obj.start()
-            await self.bot.set_bot_commands(self.COMMANDS)
             bot = await self.bot.get_me()
             bot_username = getattr(bot, "username", None)
 
@@ -606,6 +603,9 @@ class Bot:
                     self.callback_data, filters=pyrogram.filters.user(self.root)
                 )
             )
+            # 注册新命令 handlers (/web, /batch, /status, /cancel)
+            # 必须在 process_error_message 之前注册，否则新命令会被兜底 handler 拦截
+            self._register_new_command_handlers(bot_username=bot_username)
             self.bot.add_handler(
                 MessageHandler(
                     self.process_error_message,
@@ -621,8 +621,8 @@ class Bot:
                     ),
                 )
             )
-            # 注册新命令 handlers (/web, /batch, /status, /cancel)
-            self._register_new_command_handlers(bot_username=bot_username)
+            # 同步所有命令到 Telegram Bot API（包含原有命令和新命令）
+            await self.bot.set_bot_commands(self.COMMANDS)
             self.is_bot_running: bool = True
             await self.send_message_to_bot(text="/start")
             return f"🤖「机器人」启动成功。({BotButton.OPEN_NOTICE if self.gc.config.get(BotCallbackText.NOTICE) else BotButton.CLOSE_NOTICE})"

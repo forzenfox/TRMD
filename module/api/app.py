@@ -35,20 +35,31 @@ def create_app(
     :param monitor: Monitor 实例（测试时可注入 Mock）
     :return: 配置完成的 FastAPI 应用
     """
+    # 根据环境变量决定是否启用 Swagger UI
+    is_prod = os.getenv("TRMD_ENV") == "production"
+
     app = FastAPI(
         title="TRMD Web API",
         version="1.0.0",
-        docs_url=None,  # 禁用 Swagger
-        redoc_url=None,  # 禁用 ReDoc
+        description="Telegram Restricted Media Downloader Web API",
+        docs_url=None if is_prod else "/docs",
+        redoc_url=None if is_prod else "/redoc",
+        openapi_url=None if is_prod else "/openapi.json",
     )
 
     # 挂载核心管理器到应用状态
-    from module.core.token_manager import TokenManager
     from module.core.monitor import Monitor
 
-    app.state.token_manager = token_manager or TokenManager()
-    app.state.task_manager = task_manager
-    app.state.file_manager = file_manager
+    # 通过 AppContext 获取共享的管理器实例（与 BOT 共享同一 TokenManager）
+    ctx = None
+    if token_manager is None:
+        from module.integration import init_context
+        ctx = init_context()
+        token_manager = ctx.token_manager
+
+    app.state.token_manager = token_manager
+    app.state.task_manager = task_manager or (ctx.task_manager if ctx else None)
+    app.state.file_manager = file_manager or (ctx.file_manager if ctx else None)
     app.state.config_manager = config_manager
     app.state.monitor = monitor or Monitor()
 
@@ -63,6 +74,15 @@ def create_app(
 
     # 注册 WebSocket 路由
     app.include_router(websocket_router)
+
+    # 根路径：重定向到登录页（保留 token 参数）
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/")
+    async def root(token: str = None):
+        if token:
+            return RedirectResponse(url=f"/web/login.html?token={token}")
+        return RedirectResponse(url="/web/login.html")
 
     # 提供 WebUI 静态文件（如果存在）
     web_dir = os.path.join(

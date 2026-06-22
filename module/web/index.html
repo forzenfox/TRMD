@@ -5,16 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard - Telegram Restricted Media Downloader</title>
   
-  <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
-  
-  <!-- Alpine.js CDN -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-  
-  <!-- 自定义样式 -->
-  <link rel="stylesheet" href="css/style.css">
-  
+  <!-- Tailwind 自定义配置 -->
   <script>
+    window.tailwind = window.tailwind || {};
     tailwind.config = {
       darkMode: 'class',
       theme: {
@@ -33,6 +26,12 @@
       }
     }
   </script>
+  
+  <!-- Tailwind CSS (本地) -->
+  <script src="vendor/tailwindcss.js"></script>
+  
+  <!-- 自定义样式 -->
+  <link rel="stylesheet" href="css/style.css">
 </head>
 <body class="bg-slate-900 min-h-screen">
   <div 
@@ -582,5 +581,8 @@
       }
     };
   </script>
+
+  <!-- Alpine.js (本地) - 必须在组件函数定义之后加载 -->
+  <script src="vendor/alpinejs.js"></script>
 </body>
 </html>

@@ -164,20 +164,20 @@ class Application(UserConfig, StatisticalTable):
         return download_type if download_type else "unknown_type"
 
     def check_download_type(self) -> None:
+        if not self.download_type:
+            self.download_type = [_ for _ in DownloadType()]
+            self.config["download_type"] = self.download_type
+            self.save_config(config=self.config)
+            console.log(
+                "未找到任何支持的下载类型,已设置为[#f08a5d]「默认」[/#f08a5d]所有已支持的下载类型。"
+            )
+            return
         for dtype in self.download_type:
             if dtype not in DownloadType():
                 self.download_type.remove(dtype)
                 p = f'"{dtype}"不是支持的下载类型,已移除。'
                 console.log(p, style="#FF4689")
                 log.info(p)
-        if self.download_type:
-            return None
-        self.download_type = [_ for _ in DownloadType()]
-        self.config["download_type"] = self.download_type
-        self.save_config(config=self.config)
-        console.log(
-            "未找到任何支持的下载类型,已设置为[#f08a5d]「默认」[/#f08a5d]所有已支持的下载类型。"
-        )
 
     def shutdown_task(self, second: int) -> None:
         """下载完成后自动关机的功能。"""

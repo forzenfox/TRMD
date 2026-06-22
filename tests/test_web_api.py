@@ -890,8 +890,11 @@ class TestAppFactory:
         """测试使用默认参数创建应用。"""
         app = create_app()
         assert app.title == "TRMD Web API"
-        assert app.docs_url is None
-        assert app.redoc_url is None
+        # Swagger UI 根据环境变量决定启用状态
+        import os
+        is_prod = os.getenv("TRMD_ENV") == "production"
+        assert app.docs_url == (None if is_prod else "/docs")
+        assert app.redoc_url == (None if is_prod else "/redoc")
         assert app.state.token_manager is not None
 
     def test_create_app_with_mocks(self, token_manager, task_manager, config_manager):

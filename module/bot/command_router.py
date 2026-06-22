@@ -94,18 +94,25 @@ class CommandRouter:
             f"`\n💎 {SOFTWARE_FULL_NAME} v{__version__} 💎\n"
             f"©️ {__copyright__.replace(' <https://github.com/Gentlesprite>', '.')}\n"
             f"📖 Licensed under the terms of the {__license__}.`\n\n"
-            f"🎮️ 可用命令:\n"
+            f"️ 可用命令:\n"
             f"🛎️ {BotCommandText.with_description(BotCommandText.HELP)}\n"
             f"📁 {BotCommandText.with_description(BotCommandText.DOWNLOAD)}\n"
-            f"📝 {BotCommandText.with_description(BotCommandText.TABLE)}\n"
+            f" {BotCommandText.with_description(BotCommandText.TABLE)}\n"
             f"↗️ {BotCommandText.with_description(BotCommandText.FORWARD)}\n"
             f"❌ {BotCommandText.with_description(BotCommandText.EXIT)}\n"
             f"🕵️ {BotCommandText.with_description(BotCommandText.LISTEN_DOWNLOAD)}\n"
             f"📲 {BotCommandText.with_description(BotCommandText.LISTEN_FORWARD)}\n"
             f"🔍 {BotCommandText.with_description(BotCommandText.LISTEN_INFO)}\n"
-            f"📤 {BotCommandText.with_description(BotCommandText.UPLOAD)}\n"
+            f" {BotCommandText.with_description(BotCommandText.UPLOAD)}\n"
             f"🌳 {BotCommandText.with_description(BotCommandText.UPLOAD_R)}\n"
             f"💬 {BotCommandText.with_description(BotCommandText.DOWNLOAD_CHAT)}\n\n"
+            f"✨ 新功能:\n"
+            f"🌐 {BotCommandText.with_description(BotCommandText.WEB)}\n"
+            f"🔒 {BotCommandText.with_description(BotCommandText.WEB_REVOKE)}\n"
+            f"📦 {BotCommandText.with_description(BotCommandText.BATCH)}\n"
+            f"📊 {BotCommandText.with_description(BotCommandText.STATUS)}\n"
+            f"❌ {BotCommandText.with_description(BotCommandText.CANCEL)}\n"
+            f"🗄️ {BotCommandText.with_description(BotCommandText.SETUP_REPOSITORY)}\n\n"
             f"✨ 其他功能:\n"
             f"📨 转发`视频`、`图片`、`音频`、`语音`、`GIF`、`文档`、`视频笔记`类型的消息给我,即可创建下载任务。\n"
         )
@@ -851,6 +858,13 @@ class CommandRouter:
         """
         if keyword_handler:
             return
+        
+        # 记录未知命令日志
+        user_id = message.from_user.id
+        user_name = message.from_user.username or user_id
+        command_text = message.text[:50] if message.text else "None"
+        log.warning(f"未知命令 - 用户: {user_name}, 命令: {command_text}")
+        
         await self.help(client, message)
         await client.send_message(
             chat_id=message.from_user.id,

@@ -46,7 +46,6 @@ class AppContext:
         if hasattr(self, "_initialized") and self._initialized:
             return
 
-        self._initialized = True
         self.data_dir = data_dir or os.path.join(os.path.expanduser("~"), ".trmd")
         os.makedirs(self.data_dir, exist_ok=True)
 
@@ -63,6 +62,9 @@ class AppContext:
         self.cache_manager = self._init_cache_manager()
         self.file_manager = self._init_file_manager()
         self.interaction_manager = self._init_interaction_manager()
+
+        # 全部初始化成功后才标记，避免部分失败导致单例残缺
+        self._initialized = True
 
         log.info(f"应用上下文已初始化，数据目录: {self.data_dir}")
 
@@ -90,15 +92,15 @@ class AppContext:
         return cm
 
     def _init_file_manager(self) -> FileManager:
-        """初始化 FileManager。"""
-        fm = FileManager()
-        log.info("FileManager 已初始化")
+        """初始化 FileManager（延迟初始化，config/client 由外部注入）。"""
+        fm = FileManager(config={}, client=None)
+        log.info("FileManager 已初始化（待外部注入 config/client）")
         return fm
 
     def _init_interaction_manager(self) -> InteractionManager:
         """初始化 InteractionManager。"""
         state_file = os.path.join(self.data_dir, "interaction_state.json")
-        im = InteractionManager(state_file=state_file, timeout_minutes=5)
+        im = InteractionManager(state_file=state_file, timeout_seconds=300)
         log.info("InteractionManager 已初始化")
         return im
 

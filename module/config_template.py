@@ -19,9 +19,6 @@ download_type: # 需要下载的类型。支持的参数:video,photo,document,au
 - animation # GIF。
 - video_note # 视频笔记。
 is_shutdown: true # 下载完成后是否自动关机。支持的参数：true,false。
-links: D:\path\where\your\link\files\save\content.txt # 链接地址写法如下:
-# 新建txt文本，一个链接为一行，将路径填入即可请不要加引号，在软件运行前就准备好。
-# D:\path\where\your\link\txt\save\content.txt 一个链接一行。
 max_retries:
   download: 5 # 最大的下载任务的重试次数。
   upload: 3 # 最大的上传任务的重试次数。

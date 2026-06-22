@@ -4,6 +4,7 @@
 # Time:2024/9/5 19:08
 # File:main.py
 import sys
+import threading
 
 from module.utils.helpers import check_environ
 from module.parser import PARSE_ARGS
@@ -17,10 +18,16 @@ def _run_web_api(port: int = 8000):
         from module.api.app import create_app
 
         app = create_app()
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     except ImportError:
         print("错误: 未安装 FastAPI 相关依赖。请运行: pip install fastapi uvicorn")
         sys.exit(1)
+
+
+def _start_web_api_background(port: int = 8000):
+    """在后台线程启动 Web API 服务。"""
+    t = threading.Thread(target=_run_web_api, args=(port,), daemon=True)
+    t.start()
 
 
 if __name__ == '__main__':
@@ -35,11 +42,8 @@ if __name__ == '__main__':
     if PARSE_ARGS.web_only:
         _run_web_api(port=web_port)
 
-    # 通过 --web 参数启动 FastAPI WebUI
-    elif PARSE_ARGS.web is not None:
-        _run_web_api(port=web_port)
-
-    # 核心下载器模式
+    # 核心下载器模式（同时后台启动 Web API）
     else:
+        _start_web_api_background(port=web_port)
         trmd = TelegramRestrictedMediaDownloader()
         trmd.run()

@@ -2842,7 +2842,6 @@ class TelegramRestrictedMediaDownloader(Bot):
     def run(self) -> None:
         record_error: bool = False
         try:
-            MetaData.print_helper()
             MetaData.print_meta()
             self.app.print_env_table(self.app)
             self.app.print_config_table(self.app)
