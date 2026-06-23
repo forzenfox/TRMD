@@ -38,7 +38,6 @@ from module import (
 from module.language import _t
 from module.utils.stdio import MetaData
 from module.task import UploadTask
-from module.config import GlobalConfig
 from module.utils.path_tool import safe_scan_directory_file
 from module.utils.helpers import (
     parse_link,
@@ -103,9 +102,6 @@ class Bot:
         self.bot: Union[pyrogram.Client, None] = None
         self.is_bot_running: bool = False
         self.bot_task_link: set = set()
-        self.gc: Union[GlobalConfig, None] = (
-            None  # 延迟初始化，在 _init_global_config 中设置
-        )
         self.root: list = []
         self.last_client: Union[pyrogram.Client, None] = None
         self.last_message: Union[pyrogram.types.Message, None] = None
@@ -115,16 +111,6 @@ class Bot:
         self._state = StateManager()
         self._commands = CommandRouter(self._state)
         self._keyboards = KeyboardManager()
-
-    def _init_global_config(self, user_config=None) -> None:
-        """初始化 GlobalConfig，从 UserConfig 读取合并后的配置。
-
-        Args:
-            user_config: UserConfig 实例（Application）。如果提供，
-                         GlobalConfig 将从 UserConfig 的分组结构读取配置；
-                         否则回退到独立的 .CONFIG.yaml 文件。
-        """
-        self.gc = GlobalConfig(user_config=user_config)
 
     # ==================== 向后兼容的状态属性 ====================
 
@@ -458,7 +444,7 @@ class Bot:
         pass
 
     async def done_notice(self, text):
-        if self.gc.get_config(BotCallbackText.NOTICE):
+        if self.application.config.get("preference", {}).get(BotCallbackText.NOTICE, True):
             if all([self.last_client, self.last_message]):
                 while True:
                     try:
@@ -625,7 +611,7 @@ class Bot:
             await self.bot.set_bot_commands(self.COMMANDS)
             self.is_bot_running: bool = True
             await self.send_message_to_bot(text="/start")
-            return f"🤖「机器人」启动成功。({BotButton.OPEN_NOTICE if self.gc.config.get(BotCallbackText.NOTICE) else BotButton.CLOSE_NOTICE})"
+            return f"🤖「机器人」启动成功。({BotButton.OPEN_NOTICE if self.application.config.get('preference', {}).get(BotCallbackText.NOTICE, True) else BotButton.CLOSE_NOTICE})"
         except AccessTokenInvalid as e:
             self.is_bot_running: bool = False
             return f'🤖「机器人」启动失败,「bot_token」错误,{_t(KeyWord.REASON)}:"{e}"'

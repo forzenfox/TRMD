@@ -5,6 +5,7 @@
 """
 
 import asyncio
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -12,6 +13,8 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 
 from module.api.websocket.connection import ConnectionManager
 from module.core.token_manager import TokenManager
+
+logger = logging.getLogger(__name__)
 
 websocket_router = APIRouter(tags=["WebSocket"])
 
@@ -56,8 +59,95 @@ async def websocket_tasks(websocket: WebSocket, token: str = Query(...)):
 
     try:
         while True:
-            # 等待客户端消息（心跳等）
             data = await websocket.receive_json()
+
+            msg_type = data.get("type", "")
+            if msg_type == "ping":
+                await ws_manager.handle_heartbeat(client_id)
+                await websocket.send_json(
+                    {
+                        "type": "pong",
+                        "timestamp": _now_iso(),
+                        "payload": {},
+                    }
+                )
+    except WebSocketDisconnect as e:
+        logger.info("WebSocket 断开 [%s]: code=%d", client_id, e.code)
+        await ws_manager.disconnect(client_id)
+    except Exception as e:
+        logger.info("WebSocket 断开 [%s]: %s", client_id, e)
+        await ws_manager.disconnect(client_id)
+
+
+async def _push_monitor_periodic(
+    websocket: WebSocket,
+    client_id: str,
+    task_manager,
+    interval: float = 5.0,
+):
+    """后台周期性推送监控数据。
+
+    :param websocket: WebSocket 实例
+    :param client_id: 客户端标识
+    :param task_manager: TaskManager 实例
+    :param interval: 推送间隔（秒）
+    """
+    import psutil
+
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            cpu_percent = psutil.cpu_percent(interval=None)
+            memory = psutil.virtual_memory()
+            disk = psutil.disk_usage("/")
+            task_stats = {}
+            if task_manager:
+                tasks = task_manager.list_tasks()
+                task_stats = {
+                    "total": len(tasks),
+                    "running": sum(1 for t in tasks if t.status.value == "running"),
+                    "pending": sum(1 for t in tasks if t.status.value == "pending"),
+                    "completed": sum(1 for t in tasks if t.status.value == "completed"),
+                    "failed": sum(1 for t in tasks if t.status.value == "failed"),
+                }
+            await websocket.send_json(
+                {
+                    "type": "monitor_data",
+                    "timestamp": _now_iso(),
+                    "payload": {
+                        "cpu_percent": cpu_percent,
+                        "memory": {
+                            "total": memory.total,
+                            "available": memory.available,
+                            "used": memory.used,
+                            "percent": memory.percent,
+                        },
+                        "disk": {
+                            "total": disk.total,
+                            "used": disk.used,
+                            "free": disk.free,
+                            "percent": disk.percent,
+                        },
+                        "task_stats": task_stats,
+                    },
+                }
+            )
+    except Exception:
+        pass
+
+
+async def _handle_websocket_messages(
+    websocket: WebSocket, client_id: str
+) -> None:
+    """接收 WebSocket 客户端消息，处理心跳。
+
+    :param websocket: WebSocket 实例
+    :param client_id: 客户端标识
+    """
+    try:
+        while True:
+            data = await websocket.receive_json()
+
             msg_type = data.get("type", "")
             if msg_type == "ping":
                 await ws_manager.handle_heartbeat(client_id)
@@ -69,9 +159,9 @@ async def websocket_tasks(websocket: WebSocket, token: str = Query(...)):
                     }
                 )
     except WebSocketDisconnect:
-        await ws_manager.disconnect(client_id)
-    except Exception as e:
-        await ws_manager.disconnect(client_id)
+        pass
+    except Exception:
+        pass
 
 
 @websocket_router.websocket("/ws/monitor")
@@ -79,6 +169,7 @@ async def websocket_monitor(websocket: WebSocket, token: str = Query(...)):
     """监控数据推送 WebSocket。
 
     定期推送系统资源使用情况（CPU、内存、磁盘、任务统计）。
+    监控数据由后台任务独立推送，主循环仅处理心跳，互不阻塞。
     """
     import psutil
     from module.core.task_manager import TaskManager
@@ -92,13 +183,11 @@ async def websocket_monitor(websocket: WebSocket, token: str = Query(...)):
 
     await ws_manager.connect(websocket, client_id)
 
-    # 发送初始监控数据
+    # 发送首次监控数据
     try:
         cpu_percent = psutil.cpu_percent(interval=1)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
-
-        # 获取任务统计
         task_manager: TaskManager = getattr(websocket.app.state, "task_manager", None)
         task_stats = {}
         if task_manager:
@@ -110,7 +199,6 @@ async def websocket_monitor(websocket: WebSocket, token: str = Query(...)):
                 "completed": sum(1 for t in tasks if t.status.value == "completed"),
                 "failed": sum(1 for t in tasks if t.status.value == "failed"),
             }
-
         await websocket.send_json(
             {
                 "type": "monitor_data",
@@ -134,7 +222,7 @@ async def websocket_monitor(websocket: WebSocket, token: str = Query(...)):
             }
         )
     except ImportError:
-        # psutil 未安装时返回基础信息
+        task_manager = None
         await websocket.send_json(
             {
                 "type": "monitor_data",
@@ -143,38 +231,68 @@ async def websocket_monitor(websocket: WebSocket, token: str = Query(...)):
             }
         )
 
+    # 后台任务：周期性推送监控数据
+    monitor_task = asyncio.create_task(
+        _push_monitor_periodic(websocket, client_id, task_manager)
+    )
+
+    try:
+        # 主循环：仅处理客户端消息（心跳），非阻塞
+        await _handle_websocket_messages(websocket, client_id)
+    finally:
+        monitor_task.cancel()
+        await ws_manager.disconnect(client_id)
+
+
+async def _handle_logs_messages(
+    websocket: WebSocket,
+    client_id: str,
+    subscription: "LogSubscription",
+) -> None:
+    """接收日志客户端的消息，处理心跳和级别切换。
+
+    :param websocket: WebSocket 实例
+    :param client_id: 客户端标识
+    :param subscription: 日志订阅实例
+    """
+    import logging
+
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+    }
+
     try:
         while True:
             data = await websocket.receive_json()
+
             msg_type = data.get("type", "")
             if msg_type == "ping":
                 await ws_manager.handle_heartbeat(client_id)
-                # 推送最新监控数据
-                try:
-                    cpu_percent = psutil.cpu_percent(interval=None)
-                    memory = psutil.virtual_memory()
+                await websocket.send_json(
+                    {
+                        "type": "pong",
+                        "timestamp": _now_iso(),
+                        "payload": {},
+                    }
+                )
+            elif msg_type == "set_level":
+                new_level = data.get("level", "INFO")
+                if new_level in level_map:
+                    subscription.min_level = level_map[new_level]
                     await websocket.send_json(
                         {
-                            "type": "monitor_data",
+                            "type": "level_changed",
                             "timestamp": _now_iso(),
-                            "payload": {
-                                "cpu_percent": cpu_percent,
-                                "memory_percent": memory.percent,
-                            },
-                        }
-                    )
-                except ImportError:
-                    await websocket.send_json(
-                        {
-                            "type": "pong",
-                            "timestamp": _now_iso(),
-                            "payload": {},
+                            "payload": {"level": new_level},
                         }
                     )
     except WebSocketDisconnect:
-        await ws_manager.disconnect(client_id)
+        pass
     except Exception:
-        await ws_manager.disconnect(client_id)
+        pass
 
 
 @websocket_router.websocket("/ws/logs")
@@ -196,13 +314,6 @@ async def websocket_logs(websocket: WebSocket, token: str = Query(...)):
     from module.api.websocket.log_handler import get_log_handler, LogSubscription
     import logging
 
-    level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-    }
-
     log_handler = get_log_handler()
     min_level = logging.INFO  # 默认 INFO 级别
 
@@ -219,38 +330,12 @@ async def websocket_logs(websocket: WebSocket, token: str = Query(...)):
         }
     )
 
-    # 启动日志推送任务
+    # 启动日志推送任务（后台独立运行，不被主循环阻塞）
     log_task = asyncio.create_task(subscription.start())
 
     try:
-        while True:
-            data = await websocket.receive_json()
-            msg_type = data.get("type", "")
-            if msg_type == "ping":
-                await ws_manager.handle_heartbeat(client_id)
-                await websocket.send_json(
-                    {
-                        "type": "pong",
-                        "timestamp": _now_iso(),
-                        "payload": {},
-                    }
-                )
-            elif msg_type == "set_level":
-                # 动态设置日志级别
-                new_level = data.get("level", "INFO")
-                if new_level in level_map:
-                    subscription.min_level = level_map[new_level]
-                    await websocket.send_json(
-                        {
-                            "type": "level_changed",
-                            "timestamp": _now_iso(),
-                            "payload": {"level": new_level},
-                        }
-                    )
-    except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
+        # 主循环：非阻塞处理客户端消息（心跳、级别切换）
+        await _handle_logs_messages(websocket, client_id, subscription)
     finally:
         subscription.stop()
         log_task.cancel()

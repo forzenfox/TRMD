@@ -39,8 +39,6 @@ SOFTWARE_SHORT_NAME = "TRMD"
 WORK_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 路径常量
-GLOBAL_CONFIG_NAME = ".CONFIG.yaml"
-GLOBAL_CONFIG_PATH = os.path.join(WORK_DIR, GLOBAL_CONFIG_NAME)
 PLATFORM = platform.system()
 INPUT_HISTORY_PATH = os.path.join(WORK_DIR, ".history")
 MAX_RECORD_LENGTH = 1000

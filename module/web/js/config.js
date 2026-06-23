@@ -189,32 +189,28 @@ class ConfigManager {
    * 构建更新请求体
    */
   _buildUpdatePayload() {
-    // 将扁平配置还原为嵌套结构
     return {
-      api_id: this.config.api_id,
-      api_hash: this.config.api_hash,
-      bot_token: this.config.bot_token,
-      work_dir: this.config.work_dir,
       download_type: this.config.download_type || [],
-      max_download_task: parseInt(this.config.max_download_task),
-      retry_count: parseInt(this.config.retry_count),
-      max_upload_task: parseInt(this.config.max_upload_task),
-      media_group_size: parseInt(this.config.media_group_size),
-      default_send_method: this.config.default_send_method || 'media',
-      proxy_enabled: this.config.proxy_enabled === true || this.config.proxy_enabled === 'true',
-      proxy_type: this.config.proxy_type || 'socks5',
-      proxy_host: this.config.proxy_host,
-      proxy_port: parseInt(this.config.proxy_port),
-      proxy_username: this.config.proxy_username,
-      proxy_password: this.config.proxy_password,
-      notification_enabled: this.config.notification_enabled === true || this.config.notification_enabled === 'true',
-      error_notification_enabled: this.config.error_notification_enabled === true || this.config.error_notification_enabled === 'true',
+      max_retry_count: parseInt(this.config.retry_count),
       resource_limits: {
-        max_concurrent_tasks: parseInt(this.config.max_concurrent_tasks),
-        task_size_warning_gb: parseFloat(this.config.task_size_warning_gb),
-        task_size_max_gb: parseFloat(this.config.task_size_max_gb),
-        min_disk_space_gb: parseFloat(this.config.min_disk_space_gb),
+        max_concurrent_tasks: parseInt(this.config.max_concurrent_tasks) || 1,
+        max_download_concurrency: 3,
+        max_upload_concurrency: 1,
+        max_forward_concurrency: 1,
+        min_disk_space_gb: parseFloat(this.config.min_disk_space_gb) || 2,
+        memory_limit_mb: 512,
+        task_size_warning_gb: parseFloat(this.config.task_size_warning_gb) || 5,
+        task_size_max_gb: parseFloat(this.config.task_size_max_gb) || 10,
       },
+      proxy: {
+        enable_proxy: this.config.proxy_enabled === true || this.config.proxy_enabled === 'true',
+        scheme: this.config.proxy_type || 'socks5',
+        hostname: this.config.proxy_host,
+        port: parseInt(this.config.proxy_port),
+        username: this.config.proxy_username,
+        password: this.config.proxy_password,
+      },
+      upload_max_group_size: parseInt(this.config.media_group_size) || 10,
     };
   }
 
@@ -226,7 +222,7 @@ class ConfigManager {
   _flattenConfig(config) {
     const flattened = {};
 
-    // 基础配置
+    // 基础配置（后端 ConfigOut 直接返回）
     flattened.api_id = config.api_id || '';
     flattened.api_hash = config.api_hash || '';
     flattened.bot_token = config.bot_token || '';
@@ -234,29 +230,32 @@ class ConfigManager {
 
     // 下载配置
     flattened.download_type = config.download_type || [];
-    flattened.max_download_task = config.max_download_task || 3;
-    flattened.retry_count = config.retry_count || 3;
+    flattened.retry_count = config.max_retry_count || 3;
 
     // 上传配置
-    flattened.max_upload_task = config.max_upload_task || 2;
-    flattened.media_group_size = config.media_group_size || 10;
-    flattened.default_send_method = config.default_send_method || 'media';
+    flattened.media_group_size = config.upload_max_group_size || 10;
+    flattened.upload_delete_after = config.upload_delete_after || false;
 
-    // 代理配置
-    flattened.proxy_enabled = config.proxy_enabled || false;
-    flattened.proxy_type = config.proxy_type || 'socks5';
-    flattened.proxy_host = config.proxy_host || '';
-    flattened.proxy_port = config.proxy_port || 1080;
-    flattened.proxy_username = config.proxy_username || '';
-    flattened.proxy_password = config.proxy_password || '';
+    // 代理配置：后端返回嵌套 proxy 对象
+    if (config.proxy) {
+      flattened.proxy_enabled = config.proxy.enable_proxy || false;
+      flattened.proxy_type = config.proxy.scheme || 'socks5';
+      flattened.proxy_host = config.proxy.hostname || '';
+      flattened.proxy_port = config.proxy.port || 1080;
+      flattened.proxy_username = config.proxy.username || '';
+      flattened.proxy_password = config.proxy.password || '';
+    } else {
+      flattened.proxy_enabled = false;
+      flattened.proxy_type = 'socks5';
+      flattened.proxy_host = '';
+      flattened.proxy_port = 1080;
+      flattened.proxy_username = '';
+      flattened.proxy_password = '';
+    }
 
-    // 通知配置
-    flattened.notification_enabled = config.notification_enabled || true;
-    flattened.error_notification_enabled = config.error_notification_enabled || true;
-
-    // 资源限制
+    // 资源限制：后端返回嵌套 resource_limits 对象
     if (config.resource_limits) {
-      flattened.max_concurrent_tasks = config.resource_limits.max_concurrent_tasks || 5;
+      flattened.max_concurrent_tasks = config.resource_limits.max_concurrent_tasks || 1;
       flattened.task_size_warning_gb = config.resource_limits.task_size_warning_gb || 5;
       flattened.task_size_max_gb = config.resource_limits.task_size_max_gb || 10;
       flattened.min_disk_space_gb = config.resource_limits.min_disk_space_gb || 2;

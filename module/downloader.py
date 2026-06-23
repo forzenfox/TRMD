@@ -105,8 +105,6 @@ class TelegramRestrictedMediaDownloader(Bot):
         self.cd: Union[CallbackData, None] = None
         self.my_id: int = 0
         self.repository_manager = None  # 可选的 RepositoryManager，在启动时初始化
-        # GlobalConfig 从合并后的 UserConfig 读取
-        self._init_global_config(user_config=self.app)
 
     def env_save_directory(self, message: pyrogram.types.Message) -> str:
         save_directory = self.app.save_directory
@@ -177,9 +175,11 @@ class TelegramRestrictedMediaDownloader(Bot):
             task: dict = await self.create_download_task(
                 message_ids=link, retry=None, with_upload=with_upload
             )
-            invalid_link.add(link) if task.get(
-                "status"
-            ) == DownloadStatus.FAILURE else self.bot_task_link.add(link)
+            (
+                invalid_link.add(link)
+                if task.get("status") == DownloadStatus.FAILURE
+                else self.bot_task_link.add(link)
+            )
         right_link -= invalid_link
         await self.safe_edit_message(
             client=client,
@@ -214,18 +214,22 @@ class TelegramRestrictedMediaDownloader(Bot):
         target_link: str = link_meta.get("target_link")
         valid_link_cache: dict = link_meta.get("valid_link_cache")
         upload_task = link_meta.get("upload_task")
-        upload_task.with_delete = self.gc.upload_delete
+        upload_task.with_delete = (
+            self.app.config.get("preference", {}).get("upload", {}).get("delete", False)
+        )
         await self.uploader.create_upload_task(
-            link=valid_link_cache.get(target_link, None) or target_link
-            if valid_link_cache
-            else target_link,
+            link=(
+                valid_link_cache.get(target_link, None) or target_link
+                if valid_link_cache
+                else target_link
+            ),
             upload_task=upload_task,
         )
 
     async def start(self, client: pyrogram.Client, message: pyrogram.types.Message):
         self.last_client: pyrogram.Client = client
         self.last_message: pyrogram.types.Message = message
-        if self.gc.config.get(BotCallbackText.NOTICE):
+        if self.app.config.get("preference", {}).get("notice", True):
             chat_id = message.from_user.id
             await asyncio.gather(
                 super().start(client, message),
@@ -245,18 +249,17 @@ class TelegramRestrictedMediaDownloader(Bot):
             return None
         elif callback_data == BotCallbackText.NOTICE:
             try:
-                self.gc.config[BotCallbackText.NOTICE] = not self.gc.config.get(
-                    BotCallbackText.NOTICE
+                pref = self.app.config.setdefault("preference", {})
+                pref[BotCallbackText.NOTICE] = not pref.get(
+                    BotCallbackText.NOTICE, True
                 )
-                self.gc.save_config(self.gc.config)
-                n_s: str = (
-                    "启用" if self.gc.config.get(BotCallbackText.NOTICE) else "禁用"
-                )
+                self.app.save_config(self.app.config)
+                n_s: str = "启用" if pref.get(BotCallbackText.NOTICE, True) else "禁用"
                 n_p: str = f"机器人消息通知已{n_s}。"
                 log.info(n_p)
                 console.log(n_p, style="#FF4689")
                 await kb.toggle_setting_button(
-                    global_config=self.gc.config, user_config=self.app.config
+                    global_config=self.app.config, user_config=self.app.config
                 )
             except Exception as e:
                 await callback_query.message.reply_text(
@@ -296,7 +299,9 @@ class TelegramRestrictedMediaDownloader(Bot):
                     with_upload={
                         "link": target_link,
                         "file_name": None,
-                        "with_delete": self.gc.upload_delete,
+                        "with_delete": self.app.config.get("preference", {})
+                        .get("upload", {})
+                        .get("delete", False),
                         "send_as_media_group": True,
                     },
                 )
@@ -316,7 +321,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                 log.info(s_p)
                 console.log(s_p, style="#FF4689")
                 await kb.toggle_setting_button(
-                    global_config=self.gc.config, user_config=self.app.config
+                    global_config=self.app.config, user_config=self.app.config
                 )
             except Exception as e:
                 await callback_query.message.reply_text(
@@ -325,16 +330,16 @@ class TelegramRestrictedMediaDownloader(Bot):
                 log.error(f'启用或禁用自动关机失败,{_t(KeyWord.REASON)}:"{e}"')
         elif callback_data == BotCallbackText.SETTING:
             await kb.toggle_setting_button(
-                global_config=self.gc.config, user_config=self.app.config
+                global_config=self.app.config, user_config=self.app.config
             )
         elif callback_data == BotCallbackText.EXPORT_TABLE:
-            await kb.toggle_table_button(config=self.gc.config)
+            await kb.toggle_table_button(config=self.app.config)
         elif callback_data == BotCallbackText.DOWNLOAD_SETTING:
             await kb.toggle_download_setting_button(user_config=self.app.config)
         elif callback_data == BotCallbackText.UPLOAD_SETTING:
-            await kb.toggle_upload_setting_button(global_config=self.gc.config)
+            await kb.toggle_upload_setting_button(global_config=self.app.config)
         elif callback_data == BotCallbackText.FORWARD_SETTING:
-            await kb.toggle_forward_setting_button(global_config=self.gc.config)
+            await kb.toggle_forward_setting_button(global_config=self.app.config)
         elif callback_data in (
             BotCallbackText.LINK_TABLE,
             BotCallbackText.COUNT_TABLE,
@@ -381,7 +386,9 @@ class TelegramRestrictedMediaDownloader(Bot):
         ):
 
             async def _toggle_button(_table_type):
-                export_config: dict = self.gc.config.get("export_table")
+                export_config: dict = self.app.config.get("preference", {}).get(
+                    "export_table", {}
+                )
                 export_config[_table_type] = not export_config.get(_table_type)
                 if _table_type == "link":
                     t_t = "链接统计表"
@@ -395,8 +402,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                 t_p: str = f"退出后导出{t_t}已{s_t}。"
                 console.log(t_p, style="#FF4689")
                 log.info(t_p)
-                self.gc.save_config(self.gc.config)
-                await kb.toggle_table_button(config=self.gc.config, choice=_table_type)
+                self.app.save_config(self.app.config)
+                await kb.toggle_table_button(config=self.app.config, choice=_table_type)
 
             if callback_data == BotCallbackText.TOGGLE_LINK_TABLE:
                 await _toggle_button("link")
@@ -448,18 +455,19 @@ class TelegramRestrictedMediaDownloader(Bot):
         ):
 
             def _toggle_button(_param: str):
-                param: bool = self.gc.get_nesting_config(
-                    default_nesting=self.gc.default_upload_nesting,
-                    param="upload",
-                    nesting_param=_param,
+                pref = self.app.config.setdefault("preference", {})
+                upload_cfg = pref.setdefault(
+                    "upload", {"download_upload": True, "delete": False}
                 )
-                self.gc.config.get("upload", self.gc.default_upload_nesting)[
-                    _param
-                ] = not param
+                default_nesting = {"download_upload": True, "delete": False}
+                param: bool = upload_cfg.get(_param, default_nesting.get(_param, False))
+                upload_cfg[_param] = not param
                 u_s: str = "禁用" if param else "开启"
                 u_p: str = ""
                 if _param == "delete":
-                    u_p: str = f'遇到"受限转发"时,下载后上传并"删除上传完成的本地文件"的行为已{u_s}。'
+                    u_p: str = (
+                        f'遇到"受限转发"时,下载后上传并"删除上传完成的本地文件"的行为已{u_s}。'
+                    )
                 elif _param == "download_upload":
                     u_p: str = f'遇到"受限转发"时,下载后上传已{u_s}。'
                 console.log(u_p, style="#FF4689")
@@ -470,8 +478,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                     _toggle_button("download_upload")
                 elif callback_data == BotCallbackText.UPLOAD_DOWNLOAD_DELETE:
                     _toggle_button("delete")
-                self.gc.save_config(self.gc.config)
-                await kb.toggle_upload_setting_button(global_config=self.gc.config)
+                self.app.save_config(self.app.config)
+                await kb.toggle_upload_setting_button(global_config=self.app.config)
             except Exception as e:
                 await callback_query.message.reply_text(
                     "上传设置失败\n(具体原因请前往终端查看报错信息)"
@@ -540,13 +548,21 @@ class TelegramRestrictedMediaDownloader(Bot):
         ):
 
             def _toggle_forward_type_button(_param: str):
-                _forward_type: dict = self.gc.config.get(
-                    "forward_type", self.gc.default_forward_type_nesting
+                default_forward_type_nesting = {
+                    "video": True,
+                    "photo": True,
+                    "audio": True,
+                    "document": True,
+                    "voice": True,
+                    "text": True,
+                    "animation": True,
+                    "video_note": True,
+                }
+                _forward_type: dict = self.app.config.get("preference", {}).get(
+                    "forward_type", default_forward_type_nesting
                 )
-                _status: bool = self.gc.get_nesting_config(
-                    default_nesting=self.gc.default_forward_type_nesting,
-                    param="forward_type",
-                    nesting_param=_param,
+                _status: bool = _forward_type.get(
+                    _param, default_forward_type_nesting.get(_param, True)
                 )
                 if list(_forward_type.values()).count(True) == 1 and _status:
                     raise ValueError
@@ -573,8 +589,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                     _toggle_forward_type_button("text")
                 elif callback_data == BotCallbackText.TOGGLE_FORWARD_VIDEO_NOTE:
                     _toggle_forward_type_button("video_note")
-                self.gc.save_config(self.gc.config)
-                await kb.toggle_forward_setting_button(self.gc.config)
+                self.app.save_config(self.app.config)
+                await kb.toggle_forward_setting_button(self.app.config)
             except ValueError:
                 await callback_query.message.reply_text(
                     "⚠️⚠️⚠️至少需要选择一个转发类型⚠️⚠️⚠️"
@@ -762,11 +778,13 @@ class TelegramRestrictedMediaDownloader(Bot):
                 # 返回或点击。
                 await callback_query.message.edit_text(
                     text=_filter_prompt(),
-                    reply_markup=kb.download_chat_filter_button(
-                        self.download_chat_filter[chat_id]["comment"]
-                    )
-                    if callback_data == BotCallbackText.DOWNLOAD_CHAT_FILTER
-                    else kb.filter_date_range_button(),
+                    reply_markup=(
+                        kb.download_chat_filter_button(
+                            self.download_chat_filter[chat_id]["comment"]
+                        )
+                        if callback_data == BotCallbackText.DOWNLOAD_CHAT_FILTER
+                        else kb.filter_date_range_button()
+                    ),
                 )
             elif callback_data in (
                 BotCallbackText.FILTER_START_DATE,
@@ -793,9 +811,9 @@ class TelegramRestrictedMediaDownloader(Bot):
                 current_index = step_sequence.index(current_step)
                 next_index = (current_index + 1) % len(step_sequence)
                 new_step = step_sequence[next_index]
-                self.download_chat_filter[chat_id]["date_range"]["adjust_step"] = (
-                    new_step
-                )
+                self.download_chat_filter[chat_id]["date_range"][
+                    "adjust_step"
+                ] = new_step
                 current_date = datetime.datetime.fromtimestamp(
                     self.download_chat_filter[chat_id]["date_range"][f"{dtype}_date"]
                 ).strftime("%Y-%m-%d %H:%M:%S")
@@ -1131,7 +1149,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                     )
             # 回退到原始下载后上传逻辑
             link = message.link
-            if not self.gc.download_upload:
+            if (
+                not self.app.config.get("preference", {})
+                .get("upload", {})
+                .get("download_upload", True)
+            ):
                 await self.bot.send_message(
                     chat_id=client.me.id,
                     text=f"⚠️⚠️⚠️无法转发⚠️⚠️⚠️\n"
@@ -1157,7 +1179,9 @@ class TelegramRestrictedMediaDownloader(Bot):
                 with_upload={
                     "link": target_link,
                     "file_name": None,
-                    "with_delete": self.gc.upload_delete,
+                    "with_delete": self.app.config.get("preference", {})
+                    .get("upload", {})
+                    .get("delete", False),
                     "send_as_media_group": True,
                 },
             )
@@ -1252,7 +1276,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                         if isinstance(getattr(origin_chat, "username"), str)
                         else ""
                     )
-                    if not self.gc.download_upload:
+                    if (
+                        not self.app.config.get("preference", {})
+                        .get("upload", {})
+                        .get("download_upload", True)
+                    ):
                         await client.send_message(
                             chat_id=message.from_user.id,
                             text=f"⚠️⚠️⚠️无法转发⚠️⚠️⚠️\n`{origin_link}`\n{channel}存在内容保护限制。",
@@ -1276,7 +1304,9 @@ class TelegramRestrictedMediaDownloader(Bot):
                         with_upload={
                             "link": target_link,
                             "file_name": None,
-                            "with_delete": self.gc.upload_delete,
+                            "with_delete": self.app.config.get("preference", {})
+                            .get("upload", {})
+                            .get("delete", False),
                             "send_as_media_group": True,
                         },
                     )
@@ -1326,9 +1356,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                         invalid_chat if invalid_chat else "Your Saved Messages"
                     )
                     invalid_text = "\n".join(f"{invalid_chat}/{i}" for i in invalid_id)
-                    await safe_delete_message(last_message) if len(
-                        invalid_text
-                    ) >= 3969 else None
+                    (
+                        await safe_delete_message(last_message)
+                        if len(invalid_text) >= 3969
+                        else None
+                    )
                     last_message = await self.safe_edit_message(
                         client=client,
                         message=message,
@@ -1345,11 +1377,19 @@ class TelegramRestrictedMediaDownloader(Bot):
                     text=safe_message(
                         f"{last_message.text.strip(loading)}\n🌟🌟🌟转发任务已完成🌟🌟🌟\n(若设置了转发过滤规则,请前往终端查看转发记录,此处不做展示)"
                     ),
-                    reply_markup=InlineKeyboardMarkup(
-                        [[InlineKeyboardButton(BotButton.CLICK_VIEW, url=direct_url)]]
-                    )
-                    if direct_url
-                    else None,
+                    reply_markup=(
+                        InlineKeyboardMarkup(
+                            [
+                                [
+                                    InlineKeyboardButton(
+                                        BotButton.CLICK_VIEW, url=direct_url
+                                    )
+                                ]
+                            ]
+                        )
+                        if direct_url
+                        else None
+                    ),
                 )
         except AttributeError as e:
             log.exception(f'转发时遇到错误,{_t(KeyWord.REASON)}:"{e}"')
@@ -1399,9 +1439,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                     [
                         InlineKeyboardButton(
                             BotButton.DROP,
-                            callback_data=f"{BotCallbackText.REMOVE_LISTEN_DOWNLOAD} {link}"
-                            if command == "/listen_download"
-                            else BotCallbackText.REMOVE_LISTEN_FORWARD,
+                            callback_data=(
+                                f"{BotCallbackText.REMOVE_LISTEN_DOWNLOAD} {link}"
+                                if command == "/listen_download"
+                                else BotCallbackText.REMOVE_LISTEN_FORWARD
+                            ),
                         )
                     ]
                 ]
@@ -1481,31 +1523,31 @@ class TelegramRestrictedMediaDownloader(Bot):
                     link, self.listen_download_chat, self.listen_download
                 ):
                     if not last_message:
-                        last_message: Union[
-                            pyrogram.types.Message, str, None
-                        ] = await client.send_message(
-                            chat_id=message.from_user.id,
-                            reply_parameters=ReplyParameters(message_id=message.id),
-                            link_preview_options=LINK_PREVIEW_OPTIONS,
-                            text=f"✅新增`监听下载频道`频道:\n",
+                        last_message: Union[pyrogram.types.Message, str, None] = (
+                            await client.send_message(
+                                chat_id=message.from_user.id,
+                                reply_parameters=ReplyParameters(message_id=message.id),
+                                link_preview_options=LINK_PREVIEW_OPTIONS,
+                                text=f"✅新增`监听下载频道`频道:\n",
+                            )
                         )
-                    last_message: Union[
-                        pyrogram.types.Message, None
-                    ] = await self.safe_edit_message(
-                        client=client,
-                        message=message,
-                        last_message_id=last_message.id,
-                        text=safe_message(f"{last_message.text}\n{link}"),
-                        reply_markup=InlineKeyboardMarkup(
-                            [
+                    last_message: Union[pyrogram.types.Message, None] = (
+                        await self.safe_edit_message(
+                            client=client,
+                            message=message,
+                            last_message_id=last_message.id,
+                            text=safe_message(f"{last_message.text}\n{link}"),
+                            reply_markup=InlineKeyboardMarkup(
                                 [
-                                    InlineKeyboardButton(
-                                        BotButton.LOOKUP_LISTEN_INFO,
-                                        callback_data=BotCallbackText.LOOKUP_LISTEN_INFO,
-                                    )
+                                    [
+                                        InlineKeyboardButton(
+                                            BotButton.LOOKUP_LISTEN_INFO,
+                                            callback_data=BotCallbackText.LOOKUP_LISTEN_INFO,
+                                        )
+                                    ]
                                 ]
-                            ]
-                        ),
+                            ),
+                        )
                     )
                     p = f'已新增监听下载,频道链接:"{link}"。'
                     console.log(p, style="#FF4689")
@@ -1546,7 +1588,20 @@ class TelegramRestrictedMediaDownloader(Bot):
             log.exception(f'监听下载出现错误,{_t(KeyWord.REASON)}:"{e}"')
 
     def check_type(self, message: pyrogram.types.Message):
-        for dtype, is_forward in self.gc.forward_type.items():
+        forward_type = self.app.config.get("preference", {}).get(
+            "forward_type",
+            {
+                "video": True,
+                "photo": True,
+                "audio": True,
+                "document": True,
+                "voice": True,
+                "text": True,
+                "animation": True,
+                "video_note": True,
+            },
+        )
+        for dtype, is_forward in forward_type.items():
             if is_forward:
                 result = getattr(message, dtype)
                 if result:
@@ -1601,9 +1656,22 @@ class TelegramRestrictedMediaDownloader(Bot):
                         media_group_ids = await message.get_media_group()
                         if not media_group_ids:
                             raise ValueError
-                        if not self.gc.forward_type.get(
-                            "video"
-                        ) or not self.gc.forward_type.get("photo"):
+                        forward_type = self.app.config.get("preference", {}).get(
+                            "forward_type",
+                            {
+                                "video": True,
+                                "photo": True,
+                                "audio": True,
+                                "document": True,
+                                "voice": True,
+                                "text": True,
+                                "animation": True,
+                                "video_note": True,
+                            },
+                        )
+                        if not forward_type.get("video") or not forward_type.get(
+                            "photo"
+                        ):
                             log.warning(
                                 "由于过滤了图片或视频类型的转发,将不再以媒体组方式发送。"
                             )
@@ -2756,10 +2824,7 @@ class TelegramRestrictedMediaDownloader(Bot):
             from module.core.repository_manager import RepositoryManager
 
             # 使用 ConfigManager 检查仓库配置
-            if not hasattr(self.gc, "get_repository_config"):
-                return
-
-            repo_config = self.gc.get_repository_config()
+            repo_config = self.app.config.get("repository", {})
             if not repo_config or not repo_config.get("enabled", False):
                 return
 
@@ -2776,7 +2841,7 @@ class TelegramRestrictedMediaDownloader(Bot):
             # 创建 RepositoryManager
             self.repository_manager = RepositoryManager(
                 repository_db=repo_db,
-                config_manager=self.gc,
+                config_manager=None,
             )
             log.info(f"仓库模式已初始化，仓库频道: {chat_id}")
         except Exception as e:
@@ -2813,7 +2878,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                 self._init_repository_manager()
                 if self.repository_manager is not None:
                     self.uploader.repository_manager = self.repository_manager
-                if self.gc.upload_delete:
+                if (
+                    self.app.config.get("preference", {})
+                    .get("upload", {})
+                    .get("delete", False)
+                ):
                     console.log(
                         f"在使用转发(/forward)、监听转发(/listen_forward)、上传(/upload)、递归上传(/upload_r)时:\n"
                         f'当检测到"受限转发"时,自动采用"下载后上传"的方式,并在完成后删除本地文件。\n'
@@ -2895,18 +2964,21 @@ class TelegramRestrictedMediaDownloader(Bot):
             self.is_running = False
             self.pb.progress.stop()
             if not record_error:
+                export_table = self.app.config.get("preference", {}).get(
+                    "export_table", {}
+                )
                 self.app.print_link_table(
                     link_info=DownloadTask.LINK_INFO,
-                    export=self.gc.get_config("export_table").get("link"),
+                    export=export_table.get("link"),
                 )
-                self.app.print_count_table(
-                    export=self.gc.get_config("export_table").get("count")
-                )
+                self.app.print_count_table(export=export_table.get("count"))
                 self.app.print_upload_table(
                     upload_tasks=UploadTask.TASKS,
-                    export=self.gc.get_config("export_table").get("upload"),
+                    export=export_table.get("upload"),
                 )
-                self.app.process_shutdown(60) if len(
-                    self.running_log
-                ) == 2 else None  # v1.2.8如果并未打开客户端执行任何下载,则不执行关机。
+                (
+                    self.app.process_shutdown(60)
+                    if len(self.running_log) == 2
+                    else None
+                )  # v1.2.8如果并未打开客户端执行任何下载,则不执行关机。
             self.app.ctrl_c()

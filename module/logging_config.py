@@ -18,7 +18,6 @@ from module.constants import (
     BACKUP_COUNT,
     LOG_FORMAT,
     LOG_TIME_FORMAT,
-    GLOBAL_CONFIG_PATH,
     SOFTWARE_SHORT_NAME,
     __version__,
     __update_date__,
@@ -59,8 +58,7 @@ def _load_log_levels_from_config():
 
     优先级：
     1. 工作目录下的 config.yaml 的 log 分组
-    2. 工作目录下的 .CONFIG.yaml
-    3. 默认值 INFO / WARNING
+    2. 默认值 INFO / WARNING
     """
     global FILE_LOG_LEVEL, CONSOLE_LOG_LEVEL
 
@@ -87,25 +85,6 @@ def _load_log_levels_from_config():
                     ):
                         CONSOLE_LOG_LEVEL = logging.getLevelName(console_log_level)
                     return
-        except Exception:
-            pass
-
-    # 回退：从旧的 .CONFIG.yaml 读取（向后兼容）
-    if os.path.exists(GLOBAL_CONFIG_PATH):
-        try:
-            with open(file=GLOBAL_CONFIG_PATH, mode="r", encoding="UTF-8") as f:
-                global_config = yaml.safe_load(f)
-            if global_config and isinstance(global_config, dict):
-                file_log_level = global_config.get("file_log_level")
-                console_log_level = global_config.get("console_log_level")
-                if file_log_level and via_log_level(
-                    file_log_level, "file_log_level", logging.INFO
-                ):
-                    FILE_LOG_LEVEL = logging.getLevelName(file_log_level)
-                if console_log_level and via_log_level(
-                    console_log_level, "console_log_level", logging.WARNING
-                ):
-                    CONSOLE_LOG_LEVEL = logging.getLevelName(console_log_level)
         except Exception:
             pass
 

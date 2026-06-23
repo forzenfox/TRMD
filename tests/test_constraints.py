@@ -161,20 +161,6 @@ class TestConfigPathConvention:
         )
         assert config_action.required is False, "--config 参数应为可选"
 
-    def test_global_config_path_format(self):
-        """验证全局配置路径格式。"""
-        from module.config.legacy_config import GlobalConfig
-
-        # GlobalConfig 应该使用 %APPDATA% 路径（Windows）或 ~/.config（Linux/Mac）
-        if os.name == "nt":  # Windows
-            assert "TRMD" in GlobalConfig.PATH or ".CONFIG.yaml" in GlobalConfig.PATH, (
-                "Windows 下全局配置路径应包含 TRMD 或 .CONFIG.yaml"
-            )
-        else:
-            assert ".config" in GlobalConfig.PATH or "TRMD" in GlobalConfig.PATH, (
-                "Linux/Mac 下全局配置路径应包含 .config 或 TRMD"
-            )
-
     def test_log_file_path_format(self):
         """验证日志文件路径格式。"""
         from module import LOG_PATH

@@ -29,8 +29,8 @@ class TestKeyboardManagerBuild:
         keyboard = KeyboardManager.build_help_keyboard()
         assert isinstance(keyboard, InlineKeyboardMarkup)
         assert keyboard.inline_keyboard is not None
-        # 应有 GitHub, 订阅频道, 视频教程 至少三行
-        assert len(keyboard.inline_keyboard) >= 3
+        # 应有设置按钮
+        assert len(keyboard.inline_keyboard) >= 1
 
     def test_build_table_keyboard(self):
         """build_table_keyboard 应返回 InlineKeyboardMarkup。"""

@@ -18,7 +18,14 @@ def _run_web_api(port: int = 8000):
         from module.api.app import create_app
 
         app = create_app()
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+            ws_ping_interval=None,
+            ws_ping_timeout=None,
+        )
     except ImportError:
         print("错误: 未安装 FastAPI 相关依赖。请运行: pip install fastapi uvicorn")
         sys.exit(1)

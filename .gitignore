@@ -23,6 +23,8 @@ output/
 img/
 downloads/
 DownloadRecordForm/
+.trmd/
+.history
 
 # Tests
 .coverage

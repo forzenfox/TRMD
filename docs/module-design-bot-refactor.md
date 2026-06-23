@@ -546,8 +546,8 @@ def _init_repository_manager(self):
 配置已从独立的 `GlobalConfig` + `UserConfig` 合并为单一 `config.yaml`，由 `ConfigManager` 统一管理：
 
 - `BotCommands` 构造函数新增可选参数 `config_manager: Optional[ConfigManager] = None`，用于 `/setup_repository` 等需要写配置的命令。
-- `GlobalConfig` 现从 `UserConfig`（即 `ConfigManager` 底层）读取配置，不再独立维护配置文件。
-- Downloader 通过 `_init_global_config(user_config=self.app)` 将合并后的配置传入 `GlobalConfig`。
+- `GlobalConfig` 类已被完全移除，所有配置直接从 `UserConfig`（`self.app` / `self.application`）读取。
+- Downloader 通过 `self.app.config` 直接访问配置，通过 `self.app.save_config()` 保存配置。
 - 配置访问模式：读操作通过 `ConfigManager.get_config(key)` / `get_repository_config()`，写操作通过 `ConfigManager.set_config(key, value)` / `set_repository_chat_id(chat_id)`。
 
 ---
@@ -635,8 +635,8 @@ class InteractionManager:
 
 ### 9.3 配置兼容
 
-- `GlobalConfig.TEMPLATE` 中新增 `web_ui` 相关配置项，使用 `add_missing_keys` 自动补全，不破坏旧配置文件。
-- 新增配置项均提供默认值，如 `web_ui.base_url` 默认 `http://127.0.0.1:8080`。
+- `UserConfig.TEMPLATE` 中新增 `web_ui` 相关配置项（位于 `preference` 分组下），使用 `add_missing_keys` 自动补全，不破坏旧配置文件。
+- 新增配置项均提供默认值。
 
 ### 9.4 监听功能兼容
 
@@ -791,7 +791,7 @@ tests/
 - `pyrogram`：Bot 客户端、消息处理、filters。
 - `module/language.py`：文案翻译（可选，保持现有 `_t` 调用）。
 - `module/enums.py`：`BotCommandText`、`BotButton`、`BotCallbackText` 等。
-- `module/config.py`：`GlobalConfig` 配置读取。
+- `module/config.py`：`UserConfig` / `ConfigManager` 配置读取。
 
 ### 12.3 循环依赖规避
 

@@ -45,22 +45,6 @@ class KeyboardManager:
             [
                 [
                     InlineKeyboardButton(
-                        BotButton.GITHUB,
-                        url="https://github.com/Gentlesprite/Telegram_Restricted_Media_Downloader/releases",
-                    ),
-                    InlineKeyboardButton(
-                        BotButton.SUBSCRIBE_CHANNEL,
-                        url="https://t.me/RestrictedMediaDownloader",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        BotButton.VIDEO_TUTORIAL,
-                        url="https://www.youtube.com/watch?v=ucwKJu-MrBw",
-                    )
-                ],
-                [
-                    InlineKeyboardButton(
                         BotButton.SETTING, callback_data=BotCallbackText.SETTING
                     )
                 ],

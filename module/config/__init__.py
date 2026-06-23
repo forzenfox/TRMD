@@ -5,6 +5,6 @@
 """
 
 from module.config.config_manager import ConfigManager
-from module.config.legacy_config import UserConfig, GlobalConfig, BaseConfig
+from module.config.legacy_config import UserConfig, BaseConfig
 
-__all__ = ["ConfigManager", "UserConfig", "GlobalConfig", "BaseConfig"]
+__all__ = ["ConfigManager", "UserConfig", "BaseConfig"]

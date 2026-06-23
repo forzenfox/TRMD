@@ -46,7 +46,9 @@ class AppContext:
         if hasattr(self, "_initialized") and self._initialized:
             return
 
-        self.data_dir = data_dir or os.path.join(os.path.expanduser("~"), ".trmd")
+        self.data_dir = data_dir or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".trmd"
+        )
         os.makedirs(self.data_dir, exist_ok=True)
 
         self.root_user_id = root_user_id
@@ -123,4 +125,25 @@ def get_context() -> Optional[AppContext]:
 
 def init_context(**kwargs) -> AppContext:
     """初始化应用上下文。"""
+    # 若未显式传入 data_dir，尝试从 config.yaml 读取
+    if "data_dir" not in kwargs or kwargs["data_dir"] is None:
+        _config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
+        )
+        try:
+            import yaml
+
+            with open(_config_path, "r", encoding="UTF-8") as _f:
+                _cfg = yaml.safe_load(_f)
+            if _cfg and isinstance(_cfg, dict) and _cfg.get("data_directory"):
+                _resolved = _cfg["data_directory"]
+                # 相对路径基于项目根目录解析
+                if not os.path.isabs(_resolved):
+                    _resolved = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        _resolved,
+                    )
+                kwargs["data_dir"] = os.path.normpath(_resolved)
+        except Exception:
+            pass
     return AppContext(**kwargs)

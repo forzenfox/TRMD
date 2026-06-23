@@ -858,7 +858,7 @@ class InteractionManager:
 
 ### 5.4 ConfigManager
 
-> **BREAKING 变更**：`config.yaml` 和 `global_config.yaml` 已合并为单一 `config.yaml`。新分组结构包含：credential、proxy、task、preference、log、repository。GlobalConfig 现在从 UserConfig 的 preference/log 分组读取，回退到 `.CONFIG.yaml` 以保持向后兼容。
+> **BREAKING 变更**：`config.yaml` 和 `global_config.yaml` 已合并为单一 `config.yaml`。新分组结构包含：credential、proxy、task、preference、log、repository。`GlobalConfig` 类已被完全移除，所有配置直接从 `UserConfig` 读取。
 
 **config.yaml 分组结构：**
 

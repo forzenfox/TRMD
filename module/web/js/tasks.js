@@ -61,9 +61,10 @@ class TaskManager {
     }
 
     try {
+      const offset = (this.page - 1) * this.pageSize;
       const params = {
-        page: this.page,
-        pageSize: this.pageSize,
+        offset: offset,
+        limit: this.pageSize,
       };
 
       if (this.filter !== 'all') {
@@ -71,9 +72,9 @@ class TaskManager {
       }
 
       const response = await api.getTasks(params);
-      this.tasks = response.tasks || [];
+      this.tasks = response.items || [];
       this.totalTasks = response.total || 0;
-      this.totalPages = response.totalPages || 1;
+      this.totalPages = Math.ceil(this.totalTasks / this.pageSize) || 1;
     } catch (error) {
       this.error = error.message;
       console.error('加载任务列表失败:', error);
@@ -111,33 +112,38 @@ class TaskManager {
    * 构建创建任务的请求体
    */
   _buildCreatePayload() {
-    const payload = {
-      type: this.createForm.taskType,
-      name: this.createForm.taskName || this._generateTaskName(),
+    const params = {};
+
+    // 辅助：将嵌套消息范围展平为后端期望的扁平字段
+    const _flattenRange = (range) => {
+      params.range_mode = range.mode;
+      if (range.mode === 'id_range') {
+        params.min_id = range.min_id;
+        params.max_id = range.max_id;
+      } else if (range.mode === 'date_range') {
+        params.start_date = range.start_date;
+        params.end_date = range.end_date;
+      } else if (range.mode === 'multiple_ids') {
+        params.message_list = range.message_list;
+      }
     };
 
-    // 根据任务类型添加不同字段
     if (this.createForm.taskType === 'download') {
-      payload.source_chat = this.createForm.sourceChat;
-      payload.message_range = this._buildMessageRange();
-      payload.type_filters = this.createForm.typeFilters;
-      if (this.createForm.savePath) {
-        payload.save_path = this.createForm.savePath;
-      }
+      params.chat_id = this.createForm.sourceChat;
+      _flattenRange(this._buildMessageRange());
     } else if (this.createForm.taskType === 'forward') {
-      payload.source_chat = this.createForm.sourceChat;
-      payload.target_chat = this.createForm.targetChat;
-      payload.message_range = this._buildMessageRange();
-      payload.type_filters = this.createForm.typeFilters;
-      payload.delete_after_upload = this.createForm.deleteAfterUpload;
+      params.chat_id = this.createForm.sourceChat;
+      params.forward_target = this.createForm.targetChat;
+      _flattenRange(this._buildMessageRange());
     } else if (this.createForm.taskType === 'upload') {
-      payload.target_chat = this.createForm.targetChat;
-      payload.files = this.createForm.selectedFiles || [];
-      payload.send_as_media_group = this.createForm.sendAsMediaGroup;
-      payload.delete_after_upload = this.createForm.deleteAfterUpload;
+      params.chat_id = this.createForm.target_chat;
+      params.file_paths = this.createForm.selectedFiles || [];
     }
 
-    return payload;
+    return {
+      task_type: this.createForm.taskType,
+      params,
+    };
   }
 
   /**
@@ -161,14 +167,14 @@ class TaskManager {
           max_id: parseInt(this.createForm.maxId),
         };
       
-      case 'id_list':
-        const items = this.createForm.rawItems
+      case 'multiple_ids':
+        const messageList = this.createForm.rawItems
           .split('\n')
           .map(line => line.trim())
           .filter(line => line.length > 0);
         return {
-          mode: 'id_list',
-          items: items,
+          mode: 'multiple_ids',
+          message_list: messageList,
         };
       
       case 'all':
@@ -360,8 +366,19 @@ class TaskManager {
    * 启动 WebSocket 连接用于任务状态更新
    */
   connectWebSocket() {
+    // 防重入：如果已有连接正在建立或已连接，先不重复创建
+    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
+      console.log('[WS] 跳过重复连接，当前状态:', this.ws.readyState);
+      return;
+    }
+    // 关闭旧连接（CLOSED 或 CLOSING 状态）
     if (this.ws) {
+      console.log('[WS] 关闭旧连接，状态:', this.ws.readyState);
       this.ws.close();
+    }
+    if (this._heartbeatTimer) {
+      clearInterval(this._heartbeatTimer);
+      this._heartbeatTimer = null;
     }
 
     const token = api.token;
@@ -376,24 +393,53 @@ class TaskManager {
       console.log('任务 WebSocket 连接已建立');
       // 发送初始心跳，触发后端进入消息循环
       this.ws.send(JSON.stringify({ type: 'ping' }));
+      // 启动定时心跳，每 25 秒发送一次保持连接活跃
+      this._heartbeatTimer = setInterval(() => {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, 25000);
     };
 
     this.ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        
+        // 处理服务器心跳
+        if (data.type === 'ping') {
+          this.ws.send(JSON.stringify({ type: 'pong' }));
+          return;
+        }
+        
+        // 处理服务器心跳响应
+        if (data.type === 'pong') {
+          return;
+        }
+        
+        // 处理连接成功消息
+        if (data.type === 'connected') {
+          console.log('WebSocket 连接已确认:', data.payload?.client_id);
+          return;
+        }
+        
+        // 处理任务状态更新
         this._handleTaskUpdate(data);
       } catch (error) {
         console.error('处理 WebSocket 消息失败:', error);
       }
     };
 
-    this.ws.onclose = () => {
-      console.log('任务 WebSocket 连接已关闭，3 秒后重连...');
+    this.ws.onclose = (event) => {
+      console.log('[WS] 连接关闭: code=' + event.code + ', reason="' + event.reason + '", wasClean=' + event.wasClean);
+      if (this._heartbeatTimer) {
+        clearInterval(this._heartbeatTimer);
+        this._heartbeatTimer = null;
+      }
       setTimeout(() => this.connectWebSocket(), 3000);
     };
 
     this.ws.onerror = (error) => {
-      console.error('任务 WebSocket 错误:', error);
+      console.error('[WS] 错误事件:', error);
     };
   }
 
@@ -402,7 +448,9 @@ class TaskManager {
    * @param {object} data - WebSocket 数据
    */
   _handleTaskUpdate(data) {
-    const { task_id, status, progress, speed, eta, message } = data;
+    // 服务端消息嵌套在 payload 中
+    const payload = data.payload || data;
+    const { task_id, status, progress, speed, eta, message } = payload;
 
     // 在任务列表中找到对应任务并更新
     const taskIndex = this.tasks.findIndex(t => t.id === task_id);
@@ -421,7 +469,7 @@ class TaskManager {
 
     // 如果详情抽屉打开的是这个任务，也更新
     if (this.selectedTask && this.selectedTask.id === task_id) {
-      this.selectedTask = { ...this.selectedTask, ...data };
+      this.selectedTask = { ...this.selectedTask, ...payload };
     }
   }
 

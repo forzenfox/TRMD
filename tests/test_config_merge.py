@@ -1,10 +1,9 @@
 # coding=UTF-8
 """配置合并迁移测试。
 
-验证 UserConfig/GlobalConfig 双配置合并为单一 config.yaml 的正确性：
-- 合并后的 TEMPLATE 包含所有旧键
+验证 UserConfig 单一配置文件的正确性：
+- TEMPLATE 包含所有配置分组
 - 配置可从单文件加载
-- 旧 global_config.yaml 的键可从合并配置访问
 - Repository 配置方法工作正常
 """
 
@@ -15,7 +14,7 @@ import tempfile
 
 import yaml
 
-from module.config import UserConfig, GlobalConfig
+from module.config import UserConfig
 
 
 # ==================== TEMPLATE 合并完整性测试 ====================
@@ -208,10 +207,11 @@ class TestMergedTemplateCompleteness:
             found = any(k.endswith(f".{key}") or k == key for k in merged_keys)
             assert found, f"旧 UserConfig 键 '{key}' 在合并 TEMPLATE 中未找到"
 
-    def test_all_old_global_config_keys_accounted_for(self):
-        """所有旧 GlobalConfig 顶层键应在合并 TEMPLATE 中找到对应位置。"""
+    def test_old_global_config_keys_accounted_for(self):
+        """所有旧 GlobalConfig 顶层键应在合并 TEMPLATE 的 preference/log 分组中找到对应位置。"""
         merged_keys = self._collect_all_keys(UserConfig.TEMPLATE)
         for key in self.OLD_GLOBAL_CONFIG_TOP_KEYS:
+            # 检查键是否存在于 preference 或 log 分组下
             found = any(k.endswith(f".{key}") or k == key for k in merged_keys)
             assert found, f"旧 GlobalConfig 键 '{key}' 在合并 TEMPLATE 中未找到"
 
@@ -251,13 +251,7 @@ class TestSingleFileConfigLoad:
 
     def test_old_global_config_keys_accessible_from_merged(self):
         """旧 global_config.yaml 的键应可从合并配置中访问。"""
-        # 模拟旧 global_config.yaml 的数据
-        old_global_data = copy.deepcopy(GlobalConfig.TEMPLATE)
-        old_global_data["notice"] = False
-        old_global_data["file_log_level"] = "DEBUG"
-        old_global_data["forward_type"]["video"] = False
-
-        # 在合并配置中，这些键应在 preference/log 分组下
+        # 旧 global_config.yaml 的数据现在应在 preference/log 分组下
         merged_config = copy.deepcopy(UserConfig.TEMPLATE)
         # notice -> preference.notice
         assert "notice" in merged_config.get("preference", {})

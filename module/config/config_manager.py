@@ -64,15 +64,12 @@ class ConfigManager:
     def __init__(
         self,
         user_config: Optional[object] = None,
-        global_config: Optional[object] = None,  # 已废弃，保留参数签名兼容
     ):
         """
         Args:
             user_config: UserConfig 实例（可选）
-            global_config: 已废弃。保留参数签名以兼容旧调用方式。
         """
         self._user_config = user_config
-        # global_config 参数已废弃，不再存储
         self._resource_limits: dict = copy.deepcopy(DEFAULT_RESOURCE_LIMITS)
         self._upload_config: dict = copy.deepcopy(DEFAULT_UPLOAD_CONFIG)
 

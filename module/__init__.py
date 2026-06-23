@@ -19,8 +19,6 @@ from module.constants import (
     SOFTWARE_FULL_NAME,
     SOFTWARE_SHORT_NAME,
     WORK_DIR,
-    GLOBAL_CONFIG_NAME,
-    GLOBAL_CONFIG_PATH,
     PLATFORM,
     INPUT_HISTORY_PATH,
     MAX_RECORD_LENGTH,
@@ -50,27 +48,12 @@ from module.logging_config import (
 
 from module.config_template import README
 
-# 保留全局配置变量（向后兼容）
-import yaml
-import os
-
-if os.path.exists(GLOBAL_CONFIG_PATH):
-    try:
-        with open(file=GLOBAL_CONFIG_PATH, mode="r", encoding="UTF-8") as f:
-            global_config = yaml.safe_load(f)
-    except Exception:
-        global_config = {}
-else:
-    global_config = {}
-
 __all__ = [
     # 常量
     "AUTHOR",
     "SOFTWARE_FULL_NAME",
     "SOFTWARE_SHORT_NAME",
     "WORK_DIR",
-    "GLOBAL_CONFIG_NAME",
-    "GLOBAL_CONFIG_PATH",
     "PLATFORM",
     "INPUT_HISTORY_PATH",
     "MAX_RECORD_LENGTH",
@@ -96,5 +79,4 @@ __all__ = [
     "via_log_level",
     # 配置
     "README",
-    "global_config",
 ]

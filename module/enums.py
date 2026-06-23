@@ -545,9 +545,6 @@ class BotMessage:
 
 
 class BotButton:
-    GITHUB: str = "📦GitHub"
-    SUBSCRIBE_CHANNEL: str = "📌订阅频道"
-    VIDEO_TUTORIAL: str = "🎬视频教程"
     OPEN_NOTICE: str = "📢启用通知"
     CLOSE_NOTICE: str = "🔕禁用通知"
     LINK_TABLE: str = "🔗链接统计表"

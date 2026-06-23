@@ -168,16 +168,16 @@ class ApiClient {
   /**
    * 获取任务列表
    * @param {object} params - 查询参数
-   * @param {number} params.page - 页码
-   * @param {number} params.pageSize - 每页数量
+   * @param {number} params.offset - 偏移量
+   * @param {number} params.limit - 每页数量（默认20）
    * @param {string} params.status - 状态过滤
    */
   async getTasks(params = {}) {
     const queryParams = new URLSearchParams();
-    if (params.page) queryParams.set('page', params.page);
-    if (params.pageSize) queryParams.set('pageSize', params.pageSize);
+    if (params.offset !== undefined) queryParams.set('offset', params.offset);
+    if (params.limit) queryParams.set('limit', params.limit);
     if (params.status) queryParams.set('status', params.status);
-    
+
     const query = queryParams.toString();
     return this.request('GET', `/api/tasks${query ? '?' + query : ''}`);
   }

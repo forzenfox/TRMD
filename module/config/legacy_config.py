@@ -10,13 +10,11 @@ import logging
 import datetime
 import subprocess
 
+import yaml
 from typing import Union, Optional
 
 from module import (
-    yaml,
     CustomDumper,
-    GLOBAL_CONFIG_NAME,
-    GLOBAL_CONFIG_PATH,
     FILE_LOG_LEVEL,
     CONSOLE_LOG_LEVEL,
     log,
@@ -139,6 +137,7 @@ class UserConfig(BaseConfig):
     FILE_NAME: str = "config.yaml"  # 配置文件名。
     PATH: str = os.path.join(DIRECTORY_NAME, FILE_NAME)
     TEMPLATE: dict = {
+        "data_directory": None,
         "credential": {
             "api_id": None,
             "api_hash": None,
@@ -213,6 +212,7 @@ class UserConfig(BaseConfig):
     BACKUP_DIRECTORY: str = "ConfigBackup"
     ABSOLUTE_BACKUP_DIRECTORY: str = os.path.join(DIRECTORY_NAME, BACKUP_DIRECTORY)
     WORK_DIRECTORY: str = os.path.join(os.getcwd(), "sessions")
+    DATA_DIRECTORY: str = os.path.join(os.getcwd(), ".trmd")
 
     @staticmethod
     def _migrate_legacy_config(config: dict) -> dict:
@@ -299,6 +299,9 @@ class UserConfig(BaseConfig):
         self.temp_directory: str = PARSE_ARGS.temp or (
             task.get("temp_directory") or UserConfig.TEMP_DIRECTORY
         )
+        self.data_directory: str = self.config.get(
+            "data_directory"
+        ) or UserConfig.DATA_DIRECTORY
 
     def get_last_history_record(self) -> None:
         """获取最近一次保存的历史配置文件。"""
@@ -514,162 +517,3 @@ class UserConfig(BaseConfig):
                 pass
 
 
-class GlobalConfig(BaseConfig):
-    """全局配置类（已废弃，保留向后兼容）。
-
-    所有配置已合并到 UserConfig 中。此类现在从 UserConfig 的
-    preference/log 分组读取原 GlobalConfig 的配置项。
-    """
-
-    FILE_NAME: str = GLOBAL_CONFIG_NAME
-    PATH: str = GLOBAL_CONFIG_PATH
-    TEMPLATE: dict = {
-        "notice": True,
-        "file_log_level": logging.getLevelName(FILE_LOG_LEVEL),
-        "console_log_level": logging.getLevelName(CONSOLE_LOG_LEVEL),
-        "export_table": {"link": False, "count": False, "upload": False},
-        "upload": {"download_upload": True, "delete": False},
-        "forward_type": {
-            "video": True,
-            "photo": True,
-            "audio": True,
-            "document": True,
-            "voice": True,
-            "text": True,
-            "animation": True,
-            "video_note": True,
-        },
-    }
-
-    def __init__(self, user_config: Optional["UserConfig"] = None):
-        """初始化 GlobalConfig。
-
-        Args:
-            user_config: UserConfig 实例。如果提供，则从 UserConfig 的
-                         preference/log 分组读取配置；否则回退到独立的
-                         .CONFIG.yaml 文件（向后兼容）。
-        """
-        self._user_config = user_config
-        self.default_upload_nesting = self.TEMPLATE.get("upload")
-        self.default_forward_type_nesting = self.TEMPLATE.get("forward_type")
-
-        if user_config is not None:
-            # 从合并后的 UserConfig 读取
-            self.config = self._build_config_from_user_config(user_config.config)
-        else:
-            # 向后兼容：从独立的 .CONFIG.yaml 读取
-            super().__init__()
-            self.load_config()
-            self.__check_params(self.config.copy())
-
-        self.download_upload: bool = self.get_nesting_config(
-            default_nesting=self.default_upload_nesting,
-            param="upload",
-            nesting_param="download_upload",
-        )
-        self.upload_delete: bool = self.get_nesting_config(
-            default_nesting=self.default_upload_nesting,
-            param="upload",
-            nesting_param="delete",
-        )
-        self.forward_type: dict = self.config.get("forward_type")
-
-    @staticmethod
-    def _build_config_from_user_config(user_config_dict: dict) -> dict:
-        """从 UserConfig 的分组结构构建兼容的扁平 GlobalConfig 字典。"""
-        preference: dict = user_config_dict.get("preference", {})
-        log_section: dict = user_config_dict.get("log", {})
-        result = {
-            "notice": preference.get("notice", True),
-            "file_log_level": log_section.get(
-                "file_log_level", logging.getLevelName(FILE_LOG_LEVEL)
-            ),
-            "console_log_level": log_section.get(
-                "console_log_level", logging.getLevelName(CONSOLE_LOG_LEVEL)
-            ),
-            "export_table": preference.get(
-                "export_table", {"link": False, "count": False, "upload": False}
-            ),
-            "upload": preference.get(
-                "upload", {"download_upload": True, "delete": False}
-            ),
-            "forward_type": preference.get(
-                "forward_type", GlobalConfig.TEMPLATE.get("forward_type")
-            ),
-        }
-        return result
-
-    def get_nesting_config(self, default_nesting, param, nesting_param):
-        return self.config.get(param, default_nesting).get(nesting_param)
-
-    def save_config(self, config: dict) -> None:
-        """保存配置。
-
-        如果关联了 UserConfig，则同步保存到 UserConfig 的分组结构中；
-        否则保存到独立的 .CONFIG.yaml 文件（向后兼容）。
-        """
-        if self._user_config is not None:
-            # 同步回 UserConfig 的分组结构
-            user_config_dict = self._user_config.config
-            if "preference" not in user_config_dict:
-                user_config_dict["preference"] = {}
-            user_config_dict["preference"]["notice"] = config.get("notice", True)
-            user_config_dict["preference"]["upload"] = config.get(
-                "upload", self.default_upload_nesting
-            )
-            user_config_dict["preference"]["forward_type"] = config.get(
-                "forward_type", self.default_forward_type_nesting
-            )
-            user_config_dict["preference"]["export_table"] = config.get(
-                "export_table", {"link": False, "count": False, "upload": False}
-            )
-            if "log" not in user_config_dict:
-                user_config_dict["log"] = {}
-            user_config_dict["log"]["file_log_level"] = config.get(
-                "file_log_level", logging.getLevelName(FILE_LOG_LEVEL)
-            )
-            user_config_dict["log"]["console_log_level"] = config.get(
-                "console_log_level", logging.getLevelName(CONSOLE_LOG_LEVEL)
-            )
-            self._user_config.save_config(user_config_dict)
-        else:
-            super().save_config(config)
-
-        self.config = config
-        self.download_upload = self.get_nesting_config(
-            default_nesting=self.default_upload_nesting,
-            param="upload",
-            nesting_param="download_upload",
-        )
-        self.upload_delete = self.get_nesting_config(
-            default_nesting=self.default_upload_nesting,
-            param="upload",
-            nesting_param="delete",
-        )
-        self.forward_type: dict = self.config.get("forward_type")
-        p = "全局配置文件已重新加载。"
-        console.log(p, style="#FF4689")
-        log.info(f"{p}{self.config}")
-
-    def __check_params(self, config: dict) -> None:
-        if config is None:
-            config = {}
-
-        # 处理父级参数。
-        self.add_missing_keys(
-            target=config,
-            template=self.TEMPLATE,
-            log_message='"{}"不在全局配置文件中,已添加。',
-        )
-        # 处理嵌套参数。
-        self.process_nesting(param_name="export_table", config=config)
-        self.process_nesting(param_name="upload", config=config)
-        self.process_nesting(param_name="forward_type", config=config)
-        # 删除父级模板中没有的字段。
-        self.remove_extra_keys(
-            target=config, template=self.TEMPLATE, log_message='"{}"不在模板中,已删除。'
-        )
-
-        if config != self.config:
-            self.config = config
-            self.save_config(self.config)
