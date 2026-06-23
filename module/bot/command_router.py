@@ -11,7 +11,7 @@ import copy
 import os
 import asyncio
 from functools import partial
-from typing import Union, Dict, List, Optional, Callable
+from typing import Union, Dict, Callable
 
 import pyrogram
 from pyrogram.types.messages_and_media import ReplyParameters
@@ -27,7 +27,6 @@ from module import (
     __version__,
     __copyright__,
     __license__,
-    console,
     log,
     SOFTWARE_FULL_NAME,
     LINK_PREVIEW_OPTIONS,
@@ -43,7 +42,6 @@ from module.utils.helpers import (
     get_valid_chat_id,
 )
 from module.enums import (
-    CalenderKeyboard,
     UploadStatus,
     DownloadType,
     BotCommandText,
@@ -53,7 +51,7 @@ from module.enums import (
     KeyWord,
 )
 from module.bot.utils import MessageHelper, TextFormatter, ValidationHelper
-from module.bot.keyboard_manager import KeyboardManager, KeyboardButtonHandler
+from module.bot.keyboard_manager import KeyboardManager
 from module.bot.state_manager import StateManager
 
 
@@ -211,7 +209,7 @@ class CommandRouter:
                 await client.send_message(
                     chat_id=message.from_user.id,
                     reply_parameters=ReplyParameters(message_id=message.id),
-                    text=f"⬇️⬇️⬇️请使用以下命令分配下载任务⬇️⬇️⬇️\n`/download https://t.me/x/x`",
+                    text="⬇️⬇️⬇️请使用以下命令分配下载任务⬇️⬇️⬇️\n`/download https://t.me/x/x`",
                     link_preview_options=LINK_PREVIEW_OPTIONS,
                 )
         elif (
@@ -631,9 +629,9 @@ class CommandRouter:
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text="❌❌❌命令语法错误❌❌❌\n"
                     "⬇️⬇️⬇️语法如下⬇️⬇️⬇️\n"
-                    f"`/listen_download 监听频道1 监听频道2 监听频道n`\n"
+                    "`/listen_download 监听频道1 监听频道2 监听频道n`\n"
                     "⬇️⬇️⬇️请使用⬇️⬇️⬇️\n"
-                    f"`/listen_download https://t.me/A https://t.me/B https://t.me/n`\n",
+                    "`/listen_download https://t.me/A https://t.me/B https://t.me/n`\n",
                 )
                 return None
             last_message: Union[pyrogram.types.Message, str, None] = None

@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 
 from module.core.task_manager import TaskManager, Task, TaskType, ItemStatus
-from module.core.file_manager import FileManager, FileInfo, UploadProgress
+from module.core.file_manager import FileManager, UploadProgress
 from module.utils.path_tool import safe_scan_directory_file
 
 log = logging.getLogger("rich")

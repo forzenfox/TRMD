@@ -4,7 +4,7 @@
 定义 API 统一响应格式、分页参数等通用模型。
 """
 
-from typing import Generic, TypeVar, Optional, Any
+from typing import Generic, TypeVar, Optional
 
 from pydantic import BaseModel
 

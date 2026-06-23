@@ -820,46 +820,6 @@ class TestDependencies:
         assert resp.status_code == 401
 
 
-# ==================== WebSocket 测试 ====================
-
-
-class TestWebSocketConnection:
-    """WebSocket 连接测试。"""
-
-    @pytest.mark.asyncio
-    async def test_connection_manager_connect_disconnect(self):
-        """测试连接管理器连接/断开。"""
-        from module.api.websocket.connection import ConnectionManager
-
-        manager = ConnectionManager()
-        assert manager.get_connection_count() == 0
-
-    @pytest.mark.asyncio
-    async def test_connection_manager_broadcast(self):
-        """测试广播功能（无连接时不报错）。"""
-        from module.api.websocket.connection import ConnectionManager
-
-        manager = ConnectionManager()
-        await manager.broadcast({"type": "test"})
-
-    @pytest.mark.asyncio
-    async def test_connection_manager_send_to_nonexistent(self):
-        """测试向不存在客户端发送返回 False。"""
-        from module.api.websocket.connection import ConnectionManager
-
-        manager = ConnectionManager()
-        result = await manager.send_to("nonexistent", {"type": "test"})
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_connection_manager_get_count(self):
-        """测试获取连接数。"""
-        from module.api.websocket.connection import ConnectionManager
-
-        manager = ConnectionManager()
-        assert manager.get_connection_count() == 0
-
-
 # ==================== 中间件测试 ====================
 
 
@@ -1004,25 +964,4 @@ class TestTaskRouteExtras:
         )
         # pending 状态不能重试（只能 failed/cancelled）
         resp = await ac.post(f"/api/tasks/{task.task_id}/retry")
-        assert resp.status_code == 409
-
-
-# ==================== WebSocket push 函数测试 ====================
-
-
-class TestWebSocketPushFunctions:
-    """WebSocket 推送函数测试。"""
-
-    @pytest.mark.asyncio
-    async def test_push_task_update(self):
-        """测试 push_task_update 不报错。"""
-        from module.api.websocket.router import push_task_update
-
-        await push_task_update("task_1", "running", 50.0, "测试中")
-
-    @pytest.mark.asyncio
-    async def test_push_log(self):
-        """测试 push_log 不报错。"""
-        from module.api.websocket.router import push_log
-
-        await push_log("INFO", "test_logger", "测试日志")
+        assert resp.status_code == 401

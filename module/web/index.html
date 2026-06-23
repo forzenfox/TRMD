@@ -456,18 +456,24 @@
           ]);
           this.loading = false;
 
-          // 连接 WebSocket
-          taskManager.connectWebSocket();
-
-          // 定期刷新最近任务（WebSocket 更新的是 taskManager.tasks，无法直接 watch）
+          // 定期刷新最近任务（30 秒）
           this._refreshInterval = setInterval(() => {
             this.loadRecentTasks();
           }, 30000);
+
+          // 定期刷新监控数据（10 秒，替代 /ws/monitor）
+          this._statsInterval = setInterval(() => {
+            this.loadStats();
+          }, 10000);
         },
 
         destroy() {
           if (this._refreshInterval) {
             clearInterval(this._refreshInterval);
+          }
+          // 清理监控定时器
+          if (this._statsInterval) {
+            clearInterval(this._statsInterval);
           }
         },
 

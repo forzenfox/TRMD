@@ -3,8 +3,7 @@
 import os
 import hashlib
 import mimetypes
-import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, Callable, Awaitable
 
 from module import log

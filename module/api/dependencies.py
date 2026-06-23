@@ -4,7 +4,7 @@
 所有受保护的 REST API 端点统一使用 require_token 依赖进行认证。
 """
 
-from fastapi import Header, Query, HTTPException, status, Depends, Request
+from fastapi import Header, Query, HTTPException, status, Request
 from typing import Optional
 
 from module.core.token_manager import TokenManager

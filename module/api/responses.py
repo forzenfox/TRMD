@@ -4,7 +4,7 @@
 提供将业务数据包装为统一 APIResponse 格式的辅助函数。
 """
 
-from typing import Optional, Any
+from typing import Any
 
 from fastapi.responses import JSONResponse
 

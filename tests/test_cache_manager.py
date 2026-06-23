@@ -2,12 +2,9 @@
 """CacheManager 模块测试用例 - 遵循设计文档 TC-001 至 TC-015"""
 
 import asyncio
-import json
 import os
-import pickle
-import sqlite3
 import tempfile
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio

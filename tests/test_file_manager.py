@@ -2,10 +2,7 @@
 # FileManager 模块单元测试。
 import os
 import pytest
-import mimetypes
-from unittest.mock import AsyncMock, MagicMock, patch
-from dataclasses import dataclass
-from typing import Literal
+from unittest.mock import AsyncMock
 
 # 确保项目根目录在 sys.path 中。
 import sys

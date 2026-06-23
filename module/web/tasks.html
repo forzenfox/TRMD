@@ -128,6 +128,23 @@
           <h1 class="text-xl font-semibold text-white">任务管理</h1>
         </div>
         <div class="flex items-center space-x-3">
+          <!-- 手动刷新按钮 -->
+          <button
+            @click="manualRefresh()"
+            class="btn btn-secondary"
+            :class="{ 'opacity-50': loading }"
+            :disabled="loading"
+            title="刷新任务列表"
+          >
+            <svg class="w-5 h-5" :class="{ 'animate-spin': loading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span>刷新</span>
+            <!-- 显示最后同步时间 -->
+            <span x-show="lastSyncTime" class="text-xs text-slate-400 ml-2 hidden lg:inline">
+              <span x-text="lastSyncTime"></span>
+            </span>
+          </button>
           <button @click="openCreateModal()" class="btn btn-primary">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
@@ -175,20 +192,20 @@
         <div class="mb-6">
           <div class="flex flex-wrap gap-2">
             <button 
-              @click="taskManager.setFilter('all')"
+              @click="setFilter('all')"
               :class="taskManager.filter === 'all' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               全部
             </button>
             <button 
-              @click="taskManager.setFilter('running')"
+              @click="setFilter('running')"
               :class="taskManager.filter === 'running' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               执行中
             </button>
             <button 
-              @click="taskManager.setFilter('queued')"
-              :class="taskManager.filter === 'queued' ? 'btn btn-primary' : 'btn btn-secondary'"
+              @click="setFilter('pending')"
+              :class="taskManager.filter === 'pending' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               排队中
             </button>
@@ -205,7 +222,7 @@
               失败
             </button>
             <button 
-              @click="taskManager.setFilter('cancelled')"
+              @click="setFilter('cancelled')"
               :class="taskManager.filter === 'cancelled' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               已取消
@@ -214,45 +231,42 @@
         </div>
 
         <!-- 加载状态 -->
-        <div x-show="taskManager.loading" class="flex items-center justify-center py-12">
+        <div x-show="loading" class="flex items-center justify-center py-12">
           <div class="spinner spinner-lg"></div>
           <span class="ml-3 text-slate-400">加载任务列表...</span>
         </div>
 
         <!-- 任务列表 -->
-        <div x-show="!taskManager.loading" class="card">
-          <div x-show="taskManager.tasks.length === 0" class="py-8 text-center">
+        <div x-show="!loading" class="card">
+          <div x-show="tasks.length === 0" class="py-8 text-center">
             <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
             </svg>
             <p class="text-slate-400 mt-2">暂无任务</p>
           </div>
 
-          <div x-show="taskManager.tasks.length > 0" class="overflow-x-auto">
+          <div x-show="tasks.length > 0" class="overflow-x-auto">
             <table class="table">
               <thead>
                 <tr>
                   <th>ID</th>
-                  <th>名称</th>
                   <th>类型</th>
                   <th>状态</th>
                   <th>进度</th>
-                  <th>速度</th>
                   <th>创建时间</th>
                   <th>操作</th>
                 </tr>
               </thead>
               <tbody>
-                <template x-for="task in taskManager.tasks" :key="task.id">
+                <template x-for="task in tasks" :key="task.id">
                   <tr>
                     <td class="font-mono text-sm" x-text="`#${task.id}`"></td>
-                    <td class="text-truncate max-w-[200px]" x-text="task.name" :title="task.name"></td>
                     <td>
-                      <span x-text="taskManager.getTypeText(task.type)"></span>
+                      <span x-text="taskManager.getTypeText(task.task_type)"></span>
                     </td>
                     <td>
-                      <span 
-                        class="badge" 
+                      <span
+                        class="badge"
                         :class="taskManager.getStatusBadgeClass(task.status)"
                         x-text="taskManager.getStatusText(task.status)"
                       ></span>
@@ -260,8 +274,8 @@
                     <td class="min-w-[140px]">
                       <div class="flex items-center gap-2">
                         <div class="progress-bar flex-1">
-                          <div 
-                            class="progress-bar-fill" 
+                          <div
+                            class="progress-bar-fill"
                             :style="`width: ${task.progress || 0}%`"
                             :class="{
                               'success': task.status === 'completed',
@@ -272,7 +286,6 @@
                         <span class="text-xs text-slate-400 w-10" x-text="`${task.progress || 0}%`"></span>
                       </div>
                     </td>
-                    <td class="text-sm text-slate-400" x-text="task.speed ? taskManager.formatSpeed(task.speed) : '-'"></td>
                     <td class="text-sm text-slate-400" x-text="taskManager.formatTime(task.created_at)"></td>
                     <td class="space-x-2">
                       <button 
@@ -297,14 +310,14 @@
                         重试
                       </button>
                       <button 
-                        @click="taskManager.viewTaskDetail(task)"
+                        @click="viewTaskDetail(task)"
                         class="btn btn-sm btn-secondary"
                       >
                         详情
                       </button>
-                      <button 
-                        x-show="task.status === 'completed' || task.status === 'cancelled' || task.status === 'failed'"
-                        @click="taskManager.deleteTask(task.id)"
+                      <button
+                        x-show="task.status === 'pending' || task.status === 'completed' || task.status === 'cancelled' || task.status === 'failed'"
+                        @click="deleteTask(task.id)"
                         class="btn btn-sm btn-error"
                       >
                         删除
@@ -343,8 +356,8 @@
     </div>
 
     <!-- 任务详情抽屉 -->
-    <div 
-      x-show="taskManager.showDetailDrawer" 
+    <div
+      x-show="showDetailDrawer"
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -352,10 +365,10 @@
       x-transition:leave-start="opacity-100"
       x-transition:leave-end="opacity-0"
       class="fixed inset-0 bg-black/50 z-50"
-      @click="taskManager.closeDetailDrawer()"
+      @click="closeDetailDrawer()"
     >
-      <div 
-        x-show="taskManager.showDetailDrawer"
+      <div
+        x-show="showDetailDrawer"
         x-transition:enter="transition ease-out duration-300"
         x-transition:enter-start="translate-x-full"
         x-transition:enter-end="translate-x-0"
@@ -365,68 +378,102 @@
         class="absolute right-0 top-0 bottom-0 w-full max-w-lg bg-slate-800 border-l border-slate-700 overflow-y-auto"
         @click.stop
       >
-        <template x-if="taskManager.selectedTask">
+        <template x-if="selectedTask">
           <div>
             <div class="drawer-header">
               <h3 class="text-lg font-semibold text-white">任务详情</h3>
-              <button @click="taskManager.closeDetailDrawer()" class="text-slate-400 hover:text-white">
+              <button @click="closeDetailDrawer()" class="text-slate-400 hover:text-white">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
                 </svg>
               </button>
             </div>
-            <div class="drawer-body space-y-4">
+            <div class="drawer-body space-y-5">
+              <!-- 任务 ID + 复制 -->
               <div>
-                <p class="text-sm text-slate-400">任务名称</p>
-                <p class="text-white" x-text="taskManager.selectedTask.name"></p>
+                <p class="text-sm text-slate-400 mb-1">任务 ID</p>
+                <div class="flex items-center gap-2">
+                  <code class="flex-1 text-sm text-primary-300 bg-slate-900 px-3 py-2 rounded font-mono break-all" x-text="selectedTask.id"></code>
+                  <button @click="navigator.clipboard.writeText(selectedTask.id)" class="btn btn-secondary btn-sm shrink-0" title="复制 ID">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                    </svg>
+                  </button>
+                </div>
               </div>
+
+              <!-- 类型 + 状态 -->
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <p class="text-sm text-slate-400">任务类型</p>
-                  <p class="text-white" x-text="taskManager.getTypeText(taskManager.selectedTask.type)"></p>
+                  <p class="text-white mt-1" x-text="taskManager.getTypeText(selectedTask.task_type)"></p>
                 </div>
                 <div>
                   <p class="text-sm text-slate-400">状态</p>
-                  <span 
-                    class="badge" 
-                    :class="taskManager.getStatusBadgeClass(taskManager.selectedTask.status)"
-                    x-text="taskManager.getStatusText(taskManager.selectedTask.status)"
+                  <span
+                    class="badge mt-1"
+                    :class="taskManager.getStatusBadgeClass(selectedTask.status)"
+                    x-text="taskManager.getStatusText(selectedTask.status)"
                   ></span>
                 </div>
               </div>
+
+              <!-- 子任务统计 -->
+              <div class="bg-slate-900/50 rounded-lg p-4 space-y-2">
+                <p class="text-xs text-slate-500 uppercase tracking-wider font-medium">子任务统计</p>
+                <div class="grid grid-cols-4 gap-3 text-center">
+                  <div>
+                    <p class="text-xl font-bold text-white" x-text="selectedTask.total_count || 0"></p>
+                    <p class="text-xs text-slate-400">总计</p>
+                  </div>
+                  <div>
+                    <p class="text-xl font-bold text-green-400" x-text="selectedTask.success_count || 0"></p>
+                    <p class="text-xs text-slate-400">成功</p>
+                  </div>
+                  <div>
+                    <p class="text-xl font-bold text-red-400" x-text="selectedTask.failed_count || 0"></p>
+                    <p class="text-xs text-slate-400">失败</p>
+                  </div>
+                  <div>
+                    <p class="text-xl font-bold text-yellow-400" x-text="(selectedTask.total_count || 0) - (selectedTask.success_count || 0) - (selectedTask.failed_count || 0)"></p>
+                    <p class="text-xs text-slate-400">待处理</p>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 进度条 -->
               <div>
-                <p class="text-sm text-slate-400">进度</p>
-                <div class="flex items-center gap-2 mt-1">
+                <p class="text-sm text-slate-400 mb-1">进度</p>
+                <div class="flex items-center gap-3">
                   <div class="progress-bar flex-1">
-                    <div 
-                      class="progress-bar-fill" 
-                      :style="`width: ${taskManager.selectedTask.progress || 0}%`"
+                    <div
+                      class="progress-bar-fill"
+                      :style="`width: ${selectedTask.progress || 0}%`"
                     ></div>
                   </div>
-                  <span class="text-sm text-slate-400" x-text="`${taskManager.selectedTask.progress || 0}%`"></span>
+                  <span class="text-sm font-medium text-white w-12 text-right" x-text="`${selectedTask.progress || 0}%`"></span>
                 </div>
               </div>
-              <div class="grid grid-cols-2 gap-4">
-                <div>
-                  <p class="text-sm text-slate-400">速度</p>
-                  <p class="text-white" x-text="taskManager.selectedTask.speed ? taskManager.formatSpeed(taskManager.selectedTask.speed) : '-'"></p>
+
+              <!-- 时间线 -->
+              <div class="bg-slate-900/50 rounded-lg p-4 space-y-2">
+                <p class="text-xs text-slate-500 uppercase tracking-wider font-medium">时间线</p>
+                <div class="space-y-1.5 text-sm">
+                  <div class="flex justify-between">
+                    <span class="text-slate-400">创建时间</span>
+                    <span class="text-white" x-text="taskManager.formatTime(selectedTask.created_at)"></span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-slate-400">最后更新</span>
+                    <span class="text-white" x-text="taskManager.formatTime(selectedTask.updated_at)"></span>
+                  </div>
                 </div>
-                <div>
-                  <p class="text-sm text-slate-400">预计剩余</p>
-                  <p class="text-white" x-text="taskManager.selectedTask.eta ? taskManager.formatETA(taskManager.selectedTask.eta) : '-'"></p>
-                </div>
               </div>
-              <div>
-                <p class="text-sm text-slate-400">创建时间</p>
-                <p class="text-white" x-text="taskManager.formatTime(taskManager.selectedTask.created_at)"></p>
-              </div>
-              <div>
-                <p class="text-sm text-slate-400">最后更新</p>
-                <p class="text-white" x-text="taskManager.formatTime(taskManager.selectedTask.updated_at)"></p>
-              </div>
-              <div x-show="taskManager.selectedTask.message">
-                <p class="text-sm text-slate-400">消息</p>
-                <p class="text-white text-sm" x-text="taskManager.selectedTask.message"></p>
+
+              <!-- 错误信息（条件显示） -->
+              <div x-show="selectedTask.message" class="bg-red-900/20 border border-red-800/50 rounded-lg p-4">
+                <p class="text-xs text-red-400 uppercase tracking-wider font-medium mb-1">错误信息</p>
+                <p class="text-sm text-red-300 break-words" x-text="selectedTask.message"></p>
               </div>
             </div>
           </div>
@@ -652,15 +699,75 @@
           rawItems: '',
         },
 
+        // Alpine 可追踪的本地数据副本（解决响应式失效）
+        tasks: [],
+        loading: false,
+        selectedTask: null,
+        showDetailDrawer: false,
+        lastSyncTime: null, // 最后同步时间显示
+
         async init() {
           const authenticated = await authManager.ensureAuthenticated();
           if (!authenticated) return;
 
           this.userName = authManager.getDisplayName();
-          await taskManager.loadTasks(true);
-          
-          // 连接 WebSocket
-          taskManager.connectWebSocket();
+
+          // 初始加载任务到 Alpine 本地数据
+          await this.refreshTasks();
+
+          // 启动智能轮询（替代固定5秒轮询）
+          taskManager.startSmartPolling();
+        },
+
+        // 手动刷新方法
+        async manualRefresh() {
+          await this.refreshTasks();
+          this.addNotification('info', '任务列表已刷新');
+        },
+
+        // 刷新任务并同步到 Alpine 响应式数据
+        async refreshTasks() {
+          this.loading = true;
+          try {
+            const params = {
+              offset: (taskManager.page - 1) * taskManager.pageSize,
+              limit: taskManager.pageSize
+            };
+            // 传递筛选状态
+            if (taskManager.filter && taskManager.filter !== 'all') {
+              params.status = taskManager.filter;
+            }
+            const result = await api.getTasks(params);
+            this.tasks = result.items || [];
+            // 同步分页信息到 taskManager（供模板读取）
+            taskManager.tasks = this.tasks;
+            taskManager.totalTasks = result.total || 0;
+            taskManager.totalPages = Math.ceil(taskManager.totalTasks / taskManager.pageSize) || 1;
+
+            // 更新最后同步时间
+            this.lastSyncTime = this._formatSyncTime();
+
+            // 触发智能轮询检查（根据任务状态决定是否启动/停止自动刷新）
+            taskManager._checkAndAdjustPolling();
+          } catch (error) {
+            console.error('加载任务列表失败:', error);
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        // 格式化同步时间显示
+        _formatSyncTime() {
+          return new Date().toLocaleTimeString('zh-CN', {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit'
+          });
+        },
+
+        // 组件销毁时清理定时器
+        destroy() {
+          taskManager.stopSmartPolling();
         },
 
         openCreateModal() {
@@ -673,12 +780,40 @@
           taskManager.closeCreateModal();
         },
 
+        viewTaskDetail(task) {
+          taskManager.viewTaskDetail(task);
+          this.selectedTask = taskManager.selectedTask;
+          this.showDetailDrawer = taskManager.showDetailDrawer;
+        },
+
+        closeDetailDrawer() {
+          taskManager.closeDetailDrawer();
+          this.showDetailDrawer = false;
+          this.selectedTask = null;
+        },
+
+        setFilter(filter) {
+          taskManager.setFilter(filter);
+          this.refreshTasks();
+        },
+
+        async deleteTask(taskId) {
+          try {
+            await taskManager.deleteTask(taskId);
+          } catch (error) {
+            this.addNotification('error', `删除失败: ${error.message}`);
+            return;
+          }
+          // 同步 Alpine 响应式数据
+          await this.refreshTasks();
+        },
+
         async handleCreateTask() {
           this.createFormError = null;
-          
+
           // 同步 Alpine createForm 到 taskManager
           Object.assign(taskManager.createForm, this.createForm);
-          
+
           // 验证表单
           const errors = taskManager.validateCreateForm();
           if (errors.length > 0) {
@@ -688,6 +823,8 @@
 
           try {
             await taskManager.createTask();
+            // 创建后立即刷新 Alpine 本地数据
+            await this.refreshTasks();
             this.addNotification('success', '任务创建成功');
             this.closeCreateModal();
           } catch (error) {

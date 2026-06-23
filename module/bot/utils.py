@@ -9,7 +9,7 @@
 """
 
 import asyncio
-from typing import Union, List, Optional
+from typing import Union, List
 
 import pyrogram
 from pyrogram.types.messages_and_media import ReplyParameters
@@ -17,9 +17,8 @@ from pyrogram.errors import FloodWait, FloodPremiumWait
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 from pyrogram.types.bots_and_keyboards import InlineKeyboardMarkup
 
-from module import console, log, LINK_PREVIEW_OPTIONS
-from module.language import _t
-from module.enums import KeyWord, BotMessage
+from module import console, LINK_PREVIEW_OPTIONS
+from module.enums import BotMessage
 
 
 class MessageHelper:

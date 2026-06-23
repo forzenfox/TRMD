@@ -4,7 +4,6 @@
 # Time:2023/10/3 1:00:03
 # File:downloader.py
 import os
-import sys
 import random
 import asyncio
 import datetime
@@ -74,7 +73,7 @@ from module.utils.path_tool import (
     validate_title,
 )
 from module.task import DownloadTask, UploadTask
-from module.utils.stdio import ProgressBar, Base64Image, MetaData
+from module.utils.stdio import ProgressBar, MetaData
 from module.uploader import TelegramUploader
 from module.utils.helpers import (
     is_docker,
@@ -1333,7 +1332,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                         client=client,
                         message=message,
                         last_message_id=last_message.id,
-                        text=safe_message(f"😅😅😅没有找到任何有效的消息😅😅😅"),
+                        text=safe_message("😅😅😅没有找到任何有效的消息😅😅😅"),
                     )
                     return None
                 invalid_id: list = []
@@ -1528,7 +1527,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                                 chat_id=message.from_user.id,
                                 reply_parameters=ReplyParameters(message_id=message.id),
                                 link_preview_options=LINK_PREVIEW_OPTIONS,
-                                text=f"✅新增`监听下载频道`频道:\n",
+                                text="✅新增`监听下载频道`频道:\n",
                             )
                         )
                     last_message: Union[pyrogram.types.Message, None] = (
@@ -2884,9 +2883,9 @@ class TelegramRestrictedMediaDownloader(Bot):
                     .get("delete", False)
                 ):
                     console.log(
-                        f"在使用转发(/forward)、监听转发(/listen_forward)、上传(/upload)、递归上传(/upload_r)时:\n"
-                        f'当检测到"受限转发"时,自动采用"下载后上传"的方式,并在完成后删除本地文件。\n'
-                        f"如需关闭,前往机器人[帮助页面]->[设置]->[上传设置]进行修改。\n",
+                        "在使用转发(/forward)、监听转发(/listen_forward)、上传(/upload)、递归上传(/upload_r)时:\n"
+                        '当检测到"受限转发"时,自动采用"下载后上传"的方式,并在完成后删除本地文件。\n'
+                        "如需关闭,前往机器人[帮助页面]->[设置]->[上传设置]进行修改。\n",
                         style="#FF4689",
                     )
         self.is_running = True

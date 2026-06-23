@@ -10,11 +10,9 @@
 使用 mock 模拟 Pyrogram 客户端，不实际连接 Telegram。
 """
 
-import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
-import pyrogram
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 from pyrogram.errors import FloodWait
 

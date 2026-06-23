@@ -1,8 +1,8 @@
 /**
  * 任务管理逻辑模块
- * 
+ *
  * 处理任务列表、创建、操作（启动/取消/重试/删除）
- * WebSocket 实时更新任务状态
+ * 通过定时轮询获取最新任务状态
  */
 
 class TaskManager {
@@ -14,8 +14,15 @@ class TaskManager {
     this.selectedTask = null;
     this.showDetailDrawer = false;
     this.showCreateModal = false;
-    this.ws = null;
-    
+    this._pollTimer = null;
+
+    // 智能轮询相关属性
+    this._smartPollTimer = null;
+    this._smartPollInterval = 10000; // 10秒间隔
+    this.lastSyncTime = null;
+    this._consecutiveErrors = 0; // 连续错误计数
+    this._maxConsecutiveErrors = 3; // 最大连续错误次数
+
     // 分页
     this.page = 1;
     this.pageSize = 20;
@@ -75,9 +82,24 @@ class TaskManager {
       this.tasks = response.items || [];
       this.totalTasks = response.total || 0;
       this.totalPages = Math.ceil(this.totalTasks / this.pageSize) || 1;
+
+      // 重置连续错误计数
+      this._consecutiveErrors = 0;
+
+      // 更新最后同步时间
+      this.lastSyncTime = new Date();
     } catch (error) {
       this.error = error.message;
       console.error('加载任务列表失败:', error);
+
+      // 增加连续错误计数
+      this._consecutiveErrors++;
+
+      // 连续错误达到阈值，停止智能轮询
+      if (this._consecutiveErrors >= this._maxConsecutiveErrors) {
+        console.warn(`连续${this._maxConsecutiveErrors}次请求失败，停止自动刷新`);
+        this.stopSmartPolling();
+      }
     } finally {
       this.loading = false;
     }
@@ -363,115 +385,101 @@ class TaskManager {
   }
 
   /**
-   * 启动 WebSocket 连接用于任务状态更新
+   * 启动定时轮询任务列表（兼容旧接口，内部委托给智能轮询）
+   * @param {number} interval - 轮询间隔（毫秒），已废弃，保留兼容性
+   * @deprecated 使用 startSmartPolling() 替代
    */
-  connectWebSocket() {
-    // 防重入：如果已有连接正在建立或已连接，先不重复创建
-    if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
-      console.log('[WS] 跳过重复连接，当前状态:', this.ws.readyState);
-      return;
-    }
-    // 关闭旧连接（CLOSED 或 CLOSING 状态）
-    if (this.ws) {
-      console.log('[WS] 关闭旧连接，状态:', this.ws.readyState);
-      this.ws.close();
-    }
-    if (this._heartbeatTimer) {
-      clearInterval(this._heartbeatTimer);
-      this._heartbeatTimer = null;
-    }
-
-    const token = api.token;
-    if (!token) return;
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/tasks?token=${token}`;
-
-    this.ws = new WebSocket(wsUrl);
-
-    this.ws.onopen = () => {
-      console.log('任务 WebSocket 连接已建立');
-      // 发送初始心跳，触发后端进入消息循环
-      this.ws.send(JSON.stringify({ type: 'ping' }));
-      // 启动定时心跳，每 25 秒发送一次保持连接活跃
-      this._heartbeatTimer = setInterval(() => {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ type: 'ping' }));
-        }
-      }, 25000);
-    };
-
-    this.ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // 处理服务器心跳
-        if (data.type === 'ping') {
-          this.ws.send(JSON.stringify({ type: 'pong' }));
-          return;
-        }
-        
-        // 处理服务器心跳响应
-        if (data.type === 'pong') {
-          return;
-        }
-        
-        // 处理连接成功消息
-        if (data.type === 'connected') {
-          console.log('WebSocket 连接已确认:', data.payload?.client_id);
-          return;
-        }
-        
-        // 处理任务状态更新
-        this._handleTaskUpdate(data);
-      } catch (error) {
-        console.error('处理 WebSocket 消息失败:', error);
-      }
-    };
-
-    this.ws.onclose = (event) => {
-      console.log('[WS] 连接关闭: code=' + event.code + ', reason="' + event.reason + '", wasClean=' + event.wasClean);
-      if (this._heartbeatTimer) {
-        clearInterval(this._heartbeatTimer);
-        this._heartbeatTimer = null;
-      }
-      setTimeout(() => this.connectWebSocket(), 3000);
-    };
-
-    this.ws.onerror = (error) => {
-      console.error('[WS] 错误事件:', error);
-    };
+  startPolling(interval = 5000) {
+    console.warn('startPolling() 已废弃，请使用 startSmartPolling()');
+    this.startSmartPolling();
   }
 
   /**
-   * 处理任务状态更新
-   * @param {object} data - WebSocket 数据
+   * 停止定时轮询（兼容旧接口）
+   * @deprecated 使用 stopSmartPolling() 替代
    */
-  _handleTaskUpdate(data) {
-    // 服务端消息嵌套在 payload 中
-    const payload = data.payload || data;
-    const { task_id, status, progress, speed, eta, message } = payload;
+  stopPolling() {
+    this.stopSmartPolling();
+  }
 
-    // 在任务列表中找到对应任务并更新
-    const taskIndex = this.tasks.findIndex(t => t.id === task_id);
-    if (taskIndex !== -1) {
-      const task = this.tasks[taskIndex];
-      task.status = status;
-      task.progress = progress || task.progress;
-      task.speed = speed || task.speed;
-      task.eta = eta || task.eta;
-      task.message = message || task.message;
-      task.updated_at = new Date().toISOString();
+  /**
+   * 检查是否存在活跃任务（运行中/排队中/等待中）
+   * @returns {boolean}
+   */
+  hasActiveTasks() {
+    const activeStatuses = ['pending', 'queued', 'running'];
+    return this.tasks.some(task => activeStatuses.includes(task.status));
+  }
 
-      // 触发 Alpine.js 响应式更新
-      this.tasks = [...this.tasks];
-    }
+  /**
+   * 核心决策逻辑：根据任务状态调整轮询策略
+   */
+  _checkAndAdjustPolling() {
+    const hasActive = this.hasActiveTasks();
 
-    // 如果详情抽屉打开的是这个任务，也更新
-    if (this.selectedTask && this.selectedTask.id === task_id) {
-      this.selectedTask = { ...this.selectedTask, ...payload };
+    if (hasActive && !this._smartPollTimer) {
+      // 有活跃任务且未在轮询 → 启动智能轮询
+      console.log('检测到活跃任务，启动智能轮询（间隔:', this._smartPollInterval, 'ms）');
+      this._smartPollTimer = setInterval(async () => {
+        await this.loadTasks();
+        // 每次加载后重新检查状态
+        this._checkAndAdjustPolling();
+      }, this._smartPollInterval);
+    } else if (!hasActive && this._smartPollTimer) {
+      // 无活跃任务且在轮询 → 停止轮询
+      console.log('所有任务已静止，停止自动刷新');
+      this.stopSmartPolling();
     }
   }
+
+  /**
+   * 启动智能轮询
+   * 根据当前任务状态决定是否启动自动刷新
+   */
+  startSmartPolling() {
+    // 先清除可能存在的旧定时器
+    this.stopSmartPolling();
+
+    // 重置错误计数
+    this._consecutiveErrors = 0;
+
+    // 立即执行一次检查
+    this._checkAndAdjustPolling();
+
+    // 页面不可见时暂停轮询，节省资源
+    document.addEventListener('visibilitychange', this._handleVisibilityChange);
+  }
+
+  /**
+   * 停止智能轮询
+   */
+  stopSmartPolling() {
+    if (this._smartPollTimer) {
+      clearInterval(this._smartPollTimer);
+      this._smartPollTimer = null;
+      console.log('智能轮询已停止');
+    }
+
+    // 移除可见性监听
+    document.removeEventListener('visibilitychange', this._handleVisibilityChange);
+  }
+
+  /**
+   * 处理页面可见性变化
+   */
+  _handleVisibilityChange = () => {
+    if (document.hidden) {
+      // 页面隐藏 → 暂停轮询
+      console.log('页面隐藏，暂停智能轮询');
+      this.stopSmartPolling();
+    } else {
+      // 页面显示 → 立即刷新 + 重新评估
+      console.log('页面显示，立即刷新并评估轮询策略');
+      this.loadTasks().then(() => {
+        this._checkAndAdjustPolling();
+      });
+    }
+  };
 
   /**
    * 显示通知

@@ -547,7 +547,6 @@ class TaskManager:
 
     async def retry_task(self, task_id: str):
         """重试任务。"""
-        from datetime import datetime
 
         async with self._lock:
             task = self._tasks.get(task_id)

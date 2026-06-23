@@ -16,7 +16,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import pickle
 import sqlite3
 import time

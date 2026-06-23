@@ -680,3 +680,8 @@ body {
 .slide-leave-to {
   transform: translateY(-1rem);
 }
+
+/* ==================== 动画辅助类 ==================== */
+.animate-spin {
+  animation: spin 1s linear infinite;
+}

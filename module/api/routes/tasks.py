@@ -4,7 +4,6 @@
 提供任务 CRUD、开始/取消/重试等操作。
 """
 
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Query
@@ -25,7 +24,6 @@ from module.core.task_manager import (
     TaskType,
     TaskStatus,
     InvalidStateTransition,
-    TaskNotFoundError as CoreTaskNotFoundError,
 )
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
@@ -252,11 +250,12 @@ async def delete_task(
         raise TaskNotFoundError(task_id)
 
     if task.status not in (
+        TaskStatus.PENDING,
         TaskStatus.COMPLETED,
         TaskStatus.FAILED,
         TaskStatus.CANCELLED,
     ):
-        raise TaskConflictError("只能删除已完成、失败或已取消的任务")
+        raise TaskConflictError("只能删除等待中、已完成、失败或已取消的任务")
 
     # 从内存中删除
     task_manager._tasks.pop(task_id, None)

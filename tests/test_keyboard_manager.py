@@ -11,7 +11,7 @@
 from unittest.mock import MagicMock, AsyncMock
 
 import pytest
-from pyrogram.types.bots_and_keyboards import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types.bots_and_keyboards import InlineKeyboardMarkup
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 
 from module.bot.keyboard_manager import KeyboardManager, KeyboardButtonHandler

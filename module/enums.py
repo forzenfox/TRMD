@@ -3,16 +3,10 @@
 # Software:PyCharm
 # Time:2024/7/2 0:59
 # File:enums.py
-import os
-import re
-import sys
-import time
 
 from dataclasses import dataclass
-from typing import Union, Optional, Callable, Any
+from typing import Union, Optional
 
-from module import console, log
-from module.language import _t
 
 
 class LinkType:

@@ -10,7 +10,6 @@ import datetime
 import calendar
 from typing import Union, Optional
 
-import pyrogram
 from pyrogram.types.bots_and_keyboards import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,

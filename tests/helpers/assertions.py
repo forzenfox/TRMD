@@ -5,7 +5,7 @@
 提供常用的断言函数，简化测试代码。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 
 def assert_success_response(

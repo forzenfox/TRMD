@@ -17,7 +17,6 @@
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
-import pyrogram
 
 from module.bot.command_router import CommandRouter
 from module.bot.state_manager import StateManager

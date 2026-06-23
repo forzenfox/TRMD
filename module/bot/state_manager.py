@@ -10,7 +10,6 @@
 
 from typing import Union, Optional
 
-import pyrogram
 from pyrogram.handlers import MessageHandler
 
 from module.enums import DownloadType

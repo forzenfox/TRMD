@@ -10,13 +10,12 @@
 使用 mock 模拟 Pyrogram 客户端，不实际连接 Telegram。
 """
 
-import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 
 from module.bot.commands import BotCommands
-from module.interaction_manager import InteractionManager, BatchStep
+from module.interaction_manager import InteractionManager
 from module.core.token_manager import TokenManager
 
 

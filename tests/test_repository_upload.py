@@ -11,7 +11,6 @@
 """
 
 import os
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
@@ -20,14 +19,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from module.core.file_manager import (
-    FileInfo,
     UploadResult,
     FileManager,
 )
 from module.core.repository_db import (
     RepositoryDB,
-    RepositoryFile,
-    RepositorySource,
 )
 from module.core.repository_manager import RepositoryManager
 

@@ -15,7 +15,6 @@ import pyrogram
 from pyrogram.crypto import aes
 from pyrogram.qrlogin import QRLogin
 from pyrogram import raw, types, utils
-from pyrogram.errors.exceptions import PhoneNumberInvalid
 from pyrogram.raw.core import TLObject
 from pyrogram.session.session import Result
 from pyrogram.session import Auth, Session

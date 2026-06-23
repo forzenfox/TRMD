@@ -11,7 +11,7 @@
 import logging
 import time
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request
 from starlette.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)

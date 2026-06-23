@@ -3,55 +3,30 @@
 # Software:PyCharm
 # Time:2025/1/24 21:27
 # File:bot.py
-import os
-import copy
 import asyncio
 import datetime
-import calendar
-from functools import partial
 from typing import List, Dict, Union, Optional, Callable
 
 import pyrogram
-from pyrogram.types.messages_and_media import ReplyParameters
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler
 from pyrogram.errors import FloodWait, FloodPremiumWait
 from pyrogram.errors.exceptions.bad_request_400 import (
-    MessageNotModified,
     AccessTokenInvalid,
 )
 from pyrogram.types.bots_and_keyboards import (
     BotCommand,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
     CallbackQuery,
 )
 
 from module import (
-    __version__,
-    __copyright__,
-    __license__,
     console,
     log,
-    SOFTWARE_FULL_NAME,
     LINK_PREVIEW_OPTIONS,
 )
 from module.language import _t
-from module.utils.stdio import MetaData
-from module.task import UploadTask
-from module.utils.path_tool import safe_scan_directory_file
-from module.utils.helpers import (
-    parse_link,
-    safe_index,
-    safe_message,
-    is_allow_upload,
-    get_valid_chat_id,
-)
 from module.enums import (
     CalenderKeyboard,
-    UploadStatus,
-    DownloadType,
     BotCommandText,
-    BotMessage,
     BotCallbackText,
     BotButton,
     KeyWord,
@@ -378,7 +353,7 @@ class Bot:
             self.bot_commands = BotCommands(
                 token_manager=ctx.token_manager,
                 interaction_manager=ctx.interaction_manager,
-                webui_base_url=f"http://localhost:8000",
+                webui_base_url="http://localhost:8000",
             )
 
         # 注册 /web 命令

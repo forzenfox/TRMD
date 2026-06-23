@@ -11,7 +11,7 @@ import datetime
 import subprocess
 
 import yaml
-from typing import Union, Optional
+from typing import Union
 
 from module import (
     CustomDumper,

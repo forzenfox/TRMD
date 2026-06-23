@@ -5,13 +5,11 @@
 覆盖 Token 生成、验证、刷新、撤销、清理、持久化等场景。
 """
 
-import hmac
 import os
 import sqlite3
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest

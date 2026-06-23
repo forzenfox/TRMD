@@ -1,7 +1,6 @@
 # coding=UTF-8
 """文件相关 Pydantic 数据模型。"""
 
-from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel

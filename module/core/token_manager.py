@@ -11,7 +11,6 @@ import secrets
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)

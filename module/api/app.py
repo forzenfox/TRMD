@@ -6,13 +6,11 @@
 
 import os
 import logging
-from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from module.api.routes.router import api_router
-from module.api.websocket.router import websocket_router
 from module.api.middleware import setup_middleware
 from module.api.exceptions import setup_exception_handlers
 
@@ -71,9 +69,6 @@ def create_app(
 
     # 注册 REST 路由
     app.include_router(api_router, prefix="/api")
-
-    # 注册 WebSocket 路由
-    app.include_router(websocket_router)
 
     # 根路径：重定向到登录页（保留 token 参数）
     from fastapi.responses import RedirectResponse

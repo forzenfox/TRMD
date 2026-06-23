@@ -79,7 +79,7 @@ class TelegramUploader:
         file_total_parts: int = upload_task.file_total_parts
         if not missing_parts:
             # 所有分片都已上传,准备发送消息。
-            log.info(f"所有分片已上传完成,正在发送消息...")
+            log.info("所有分片已上传完成,正在发送消息...")
         else:
             log.info(f"需要上传的分片:{len(missing_parts)}/{file_total_parts}")
         # 上传缺失的分片。
@@ -219,12 +219,12 @@ class TelegramUploader:
                     try:
                         media_group = await upload_task.get_media_group()
                         if not media_group:
-                            log.info(f"[Upload Worker]警告:media_group为空。")
+                            log.info("[Upload Worker]警告:media_group为空。")
                             continue
 
                         media_group_id = media_group[0].media_group_id
                         if not media_group_id:
-                            log.info(f"[Upload Worker]警告:media_group_id为空。")
+                            log.info("[Upload Worker]警告:media_group_id为空。")
                             # 如果不是媒体组，则作为单条消息发送。
                             await self.send_media(media, upload_task)
                             continue
