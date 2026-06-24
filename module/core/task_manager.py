@@ -300,6 +300,14 @@ class TaskManager:
             for item_row in item_rows:
                 task.items.append(self._row_to_item(item_row))
 
+        # 恢复排队中的任务到队列（防止重启后排队任务丢失）
+        queued_ids = [
+            t.task_id for t in self._tasks.values() if t.status == TaskStatus.QUEUED
+        ]
+        if queued_ids:
+            self._task_queue.extend(queued_ids)
+            log.info(f"已恢复 {len(queued_ids)} 个排队任务: {queued_ids}")
+
         conn.close()
 
     def _row_to_task(self, row) -> Task:
@@ -579,6 +587,21 @@ class TaskManager:
         if status:
             return [t for t in self._tasks.values() if t.status == status]
         return list(self._tasks.values())
+
+    async def delete_task(self, task_id: str):
+        """删除任务及其所有子任务（同时从内存和数据库中删除）。"""
+        async with self._lock:
+            # 从内存移除
+            self._tasks.pop(task_id, None)
+            # 从数据库删除
+            if self._db_path != ":memory:":
+                conn = sqlite3.connect(self._db_path)
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM task_items WHERE task_id = ?", (task_id,))
+                cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
+                conn.commit()
+                conn.close()
+            log.info(f"任务已删除: {task_id}")
 
     async def add_items(self, task_id: str, items: list[TaskItem]):
         """添加子任务项。"""

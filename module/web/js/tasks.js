@@ -31,6 +31,13 @@ class TaskManager {
 
     // 创建任务表单
     this.createForm = this._resetCreateForm();
+
+    // 资源告警状态（P0-2: 前端资源保护增强）
+    this.showResourceAlert = false;
+    this.resourceAlertType = null;       // 'blocked' | 'warning'
+    this.resourceAlertMessage = '';
+    this.resourceSuggestion = '';
+    this.resourceEstimate = null;
   }
 
   /**
@@ -50,7 +57,7 @@ class TaskManager {
       rawItems: '',
       typeFilters: [], // video, photo, document, audio, etc.
       savePath: '',
-      deleteAfterUpload: false,
+      deleteAfterUpload: true,  // 默认上传后删除本地文件（符合设计文档 4.2.1.3）
       sendAsMediaGroup: false,
     };
   }
@@ -106,26 +113,60 @@ class TaskManager {
   }
 
   /**
-   * 创建新任务
+   * 创建新任务（P0-2: 增加资源预检和告警）
    */
   async createTask() {
     try {
       const payload = this._buildCreatePayload();
+
+      // 【P0-2】下载/转发任务需要先估算大小并进行资源保护检查
+      if (['download', 'forward'].includes(payload.task_type)) {
+        const precheckResult = await this._precheckResourceLimits(payload);
+
+        if (precheckResult.blocked) {
+          // 显示禁止弹窗
+          this._showResourceAlert('blocked', precheckResult);
+          return;  // 阻止创建
+        }
+
+        if (precheckResult.warning) {
+          // 显示告警弹窗并等待用户确认
+          const confirmed = await this._showWarningConfirmation(precheckResult);
+          if (!confirmed) {
+            return;  // 用户取消
+          }
+        }
+
+        // 将估算结果附加到 payload（供后端二次校验）
+        if (precheckResult.estimate) {
+          payload.params.estimated_size = precheckResult.estimate.total_size_bytes || 0;
+          payload.params.size_human = precheckResult.estimate.total_size_human || '';
+        }
+      }
+
       const task = await api.createTask(payload);
-      
+
       // 关闭弹窗，重置表单
       this.showCreateModal = false;
       this.createForm = this._resetCreateForm();
-      
+
       // 重新加载任务列表
       await this.loadTasks(true);
-      
+
       // 显示成功通知
       this._notify('success', '任务创建成功');
-      
+
       return task;
     } catch (error) {
-      this._notify('error', `创建任务失败: ${error.message}`);
+      // 处理后端返回的 TaskSizeExceeded / TaskSizeWarning 异常
+      const errorMsg = error.message || '';
+      if (errorMsg.includes('超出限制') || errorMsg.includes('超过') ||
+          errorMsg.includes('InsufficientDiskSpace') || errorMsg.includes('TaskSizeExceeded')) {
+        this._notify('error', `无法创建任务: ${errorMsg}`);
+        return;
+      }
+
+      this._notify('error', `创建任务失败: ${errorMsg}`);
       throw error;
     }
   }
@@ -166,6 +207,140 @@ class TaskManager {
       task_type: this.createForm.taskType,
       params,
     };
+  }
+
+  // ==================== P0-2: 资源预检方法 ====================
+
+  /**
+   * 预检任务资源限制
+   * @param {Object} payload - 创建任务的 payload
+   * @returns {Promise<Object>} { blocked, warning, estimate, message }
+   */
+  async _precheckResourceLimits(payload) {
+    try {
+      const chatId = payload.params.chat_id;
+      if (!chatId) {
+        return { blocked: false, warning: false, message: '缺少频道信息' };
+      }
+
+      // 调用后端估算 API
+      const rangeParams = this._extractRangeParams(payload);
+      const estimate = await api.estimateMessages(chatId, rangeParams);
+
+      // 资源保护检查
+      return this._checkSizeThresholds(estimate);
+
+    } catch (error) {
+      console.warn('资源预检失败，跳过预检:', error);
+      // 预检失败不阻止创建，由后端兜底
+      return { blocked: false, warning: false, estimate: null };
+    }
+  }
+
+  /**
+   * 从 payload 提取消息范围参数
+   * @param {Object} payload - 创建任务的 payload
+   * @returns {Object} 范围参数
+   */
+  _extractRangeParams(payload) {
+    const params = payload.params || {};
+
+    return {
+      mode: params.range_mode || 'id_range',
+      min_id: params.min_id,
+      max_id: params.max_id,
+      start_date: params.start_date,
+      end_date: params.end_date,
+      message_list: params.message_list,
+      type_filters: this.createForm.typeFilters || [],
+    };
+  }
+
+  /**
+   * 检查任务大小是否超过阈值
+   * @param {Object} estimate - 估算结果
+   * @returns {Object} 检查结果
+   */
+  _checkSizeThresholds(estimate) {
+    if (!estimate || !estimate.total_size_bytes) {
+      return { blocked: false, warning: false, estimate, message: '' };
+    }
+
+    const sizeGB = estimate.total_size_bytes / (1024 ** 3);
+    const warningThreshold = 5;   // GB - 告警阈值
+    const maxThreshold = 10;      // GB - 禁止阈值
+
+    if (sizeGB > maxThreshold) {
+      return {
+        blocked: true,
+        warning: false,
+        estimate,
+        message: `任务总量 ${sizeGB.toFixed(1)} GB 超过 ${maxThreshold} GB 上限`,
+        suggestion: '建议：缩小消息 ID 范围、缩小日期范围或使用类型过滤',
+      };
+    }
+
+    if (sizeGB > warningThreshold) {
+      return {
+        blocked: false,
+        warning: true,
+        estimate,
+        message: `任务总量 ${sizeGB.toFixed(1)} GB 超过 ${warningThreshold} GB 告警阈值`,
+        suggestion: '确认你的服务器磁盘有足够空间且知晓该任务可能消耗较多带宽',
+      };
+    }
+
+    return { blocked: false, warning: false, estimate, message: '' };
+  }
+
+  /**
+   * 显示资源告警/禁止弹窗
+   * @param {string} type - 'blocked' | 'warning'
+   * @param {Object} result - 检查结果
+   */
+  _showResourceAlert(type, result) {
+    this.resourceAlertType = type;
+    this.resourceAlertMessage = result.message;
+    this.resourceSuggestion = result.suggestion || '';
+    this.resourceEstimate = result.estimate || null;
+    this.showResourceAlert = true;
+  }
+
+  /**
+   * 显示告警确认对话框
+   * @param {Object} result - 检查结果
+   * @returns {Promise<boolean>} 用户是否确认
+   */
+  async _showWarningConfirmation(result) {
+    // ✅ 使用自定义 ConfirmDialog 组件（P2-3）
+    const message = `
+      <p class="font-medium mb-2">${result.message}</p>
+      <div class="bg-gray-50 border border-gray-200 rounded p-3 my-2 text-xs space-y-1">
+        <p><strong>消息总数:</strong> ${result.estimate?.message_count || '未知'} 条</p>
+        <p><strong>预估大小:</strong> ${result.estimate?.total_size_human || '未知'}</p>
+        <p><strong>预估耗时:</strong> 约 ${Math.round((result.estimate?.estimated_duration_seconds || 0) / 60)} 分钟</p>
+      </div>
+      ${result.suggestion ? `<p class="text-red-600 font-medium mt-2">${result.suggestion}</p>` : ''}
+    `;
+
+    return window.confirmDialog.show({
+      title: '资源告警',
+      message: message,
+      type: 'warning',
+      confirmText: '确认创建任务',
+      cancelText: '返回修改',
+    });
+  }
+
+  /**
+   * 关闭资源告警弹窗
+   */
+  closeResourceAlert() {
+    this.showResourceAlert = false;
+    this.resourceAlertType = null;
+    this.resourceAlertMessage = '';
+    this.resourceSuggestion = '';
+    this.resourceEstimate = null;
   }
 
   /**
@@ -273,7 +448,16 @@ class TaskManager {
    * @param {string} taskId - 任务 ID
    */
   async deleteTask(taskId) {
-    if (!confirm('确定要删除此任务吗？此操作不可撤销。')) {
+    // ✅ 使用自定义 ConfirmDialog 组件（P2-3）
+    const confirmed = await window.confirmDialog.show({
+      title: '删除任务',
+      message: '<p>确定要删除此任务吗？</p><p class="text-red-600 text-xs mt-2">此操作不可撤销。</p>',
+      type: 'danger',
+      confirmText: '确认删除',
+      cancelText: '取消',
+    });
+
+    if (!confirmed) {
       return;
     }
 
@@ -611,6 +795,83 @@ class TaskManager {
     }
   }
 }
+
+/**
+ * 通用确认对话框组件 - 替代原生 confirm() (P2-3)
+ *
+ * 特性:
+ * - 支持 HTML 富文本内容
+ * - 支持自定义按钮文案和样式
+ * - 支持 Promise 化调用
+ * - 与项目暗色主题一致
+ */
+class ConfirmDialog {
+  constructor() {
+    this.visible = false;
+    this.title = '';
+    this.message = '';
+    this.type = 'warning';       // 'warning' | 'danger' | 'info'
+    this.confirmText = '确认';
+    this.cancelText = '取消';
+    this.showCancel = true;
+    this.resolvePromise = null;   // Promise resolve 函数
+
+    // 图标配置
+    this.icons = {
+      warning: '⚠️',
+      danger: '❌',
+      info: 'ℹ️',
+    };
+  }
+
+  /**
+   * 显示确认对话框
+   * @param {Object} options - 配置选项
+   * @returns {Promise<boolean>} 用户是否点击确认
+   */
+  show(options = {}) {
+    // 配置合并
+    this.title = options.title || '请确认';
+    this.message = options.message || '';
+    this.type = options.type || 'warning';
+    this.confirmText = options.confirmText || '确认';
+    this.cancelText = options.cancelText || '取消';
+    this.showCancel = options.showCancel !== false;
+
+    // 显示弹窗
+    this.visible = true;
+
+    // 返回 Promise
+    return new Promise((resolve) => {
+      this.resolvePromise = resolve;
+    });
+  }
+
+  /**
+   * 用户点击确认
+   */
+  onConfirm() {
+    this.visible = false;
+    if (this.resolvePromise) {
+      this.resolvePromise(true);
+      this.resolvePromise = null;
+    }
+  }
+
+  /**
+   * 用户点击取消/关闭
+   */
+  onCancel() {
+    this.visible = false;
+    if (this.resolvePromise) {
+      this.resolvePromise(false);
+      this.resolvePromise = null;
+    }
+  }
+}
+
+// 创建全局单例实例
+window.confirmDialog = new ConfirmDialog();
 
 // 创建单例实例
 const taskManager = new TaskManager();

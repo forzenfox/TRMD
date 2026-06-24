@@ -212,7 +212,41 @@ class Monitor:
             except Exception:
                 pass
 
+        # 获取 Telegram Client 连接状态
+        result["client_status"] = self._get_client_status()
+
         return result
+
+    def _get_client_status(self) -> dict:
+        """检查 Telegram Client 的连接状态。"""
+        try:
+            from module.integration import get_context
+
+            ctx = get_context()
+            if ctx is None or ctx.client is None:
+                return {
+                    "connected": False,
+                    "status": "not_initialized",
+                    "bot_connected": False,
+                }
+            client = ctx.client
+            is_conn = getattr(client, "is_connected", False)
+            return {
+                "connected": is_conn,
+                "status": "connected" if is_conn else "disconnected",
+                "bot_connected": self._check_bot_connected(ctx),
+            }
+        except Exception as e:
+            log.warning("获取 Client 状态失败: %s", e)
+            return {"connected": False, "status": "error", "bot_connected": False}
+
+    @staticmethod
+    def _check_bot_connected(ctx) -> bool:
+        """检查 Bot Client 是否已启动（通过 TaskExecutor 是否存在间接判断）。"""
+        try:
+            return ctx.task_executor is not None
+        except Exception:
+            return False
 
     def get_monitor_stats(self, task_manager=None) -> dict:
         """获取完整监控统计（系统资源 + 任务统计）。

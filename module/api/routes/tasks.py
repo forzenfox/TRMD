@@ -4,11 +4,14 @@
 提供任务 CRUD、开始/取消/重试等操作。
 """
 
+import asyncio
+import logging
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request, Query
 
-from module.api.dependencies import require_token, get_task_manager
+from module.api.dependencies import require_token, get_task_manager, get_task_executor
 from module.api.responses import json_response, error_json_response
 from module.api.models.task import TaskCreate, TaskOut
 from module.api.exceptions import (
@@ -27,6 +30,49 @@ from module.core.task_manager import (
 )
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
+logger = logging.getLogger(__name__)
+
+# 匹配纯数字 ID
+_RE_NUMERIC_ID = re.compile(r"^\d+$")
+
+
+def _get_client(request: Request):
+    """获取 Telegram Client 实例（从 AppContext 单例读取）。"""
+    try:
+        from module.integration import get_context
+        ctx = get_context()
+        return ctx.client if ctx else None
+    except Exception:
+        return None
+
+
+async def _resolve_chat_id(client, channel_input: str) -> Optional[int]:
+    """将用户输入的频道标识解析为数字 chat_id。
+
+    支持格式：
+    - 纯数字 ID 直接返回
+    - @username 通过 client.get_chat 解析
+    - https://t.me/channel 通过 client.get_chat 解析
+    """
+    text = (channel_input or "").strip()
+    if not text:
+        return None
+
+    # 纯数字 ID 直接返回
+    if _RE_NUMERIC_ID.match(text):
+        return int(text)
+
+    # 需要通过 Telegram API 解析 URL/username
+    if client is None:
+        logger.warning("Telegram Client 未连接，无法解析频道: %s", text)
+        return None
+
+    try:
+        chat = await client.get_chat(text)
+        return int(chat.id)
+    except Exception as e:
+        logger.warning("解析频道失败: %s → %s", text, e)
+        return None
 
 
 def _task_to_out(task: Task) -> TaskOut:
@@ -139,20 +185,22 @@ async def create_task(
 
     # 提取参数
     params = body.params
-    chat_id = params.get("chat_id", 0)
-    # 将 chat_id 转为 int（可能是 URL 字符串）
-    if isinstance(chat_id, str):
-        try:
-            chat_id = int(chat_id.split("/")[-1])
-        except (ValueError, IndexError):
-            chat_id = 0
+    client = _get_client(request)
 
-    target_chat_id = params.get("forward_target")
-    if isinstance(target_chat_id, str):
-        try:
-            target_chat_id = int(target_chat_id.split("/")[-1])
-        except (ValueError, IndexError):
-            target_chat_id = None
+    # 解析源频道（支持 URL/用户名/纯数字）
+    chat_id = await _resolve_chat_id(client, params.get("chat_id", ""))
+    if chat_id is None or chat_id == 0:
+        return error_json_response(
+            code=400, message="无效的源频道，请输入频道链接、@username 或数字 ID", status_code=400
+        )
+
+    # 解析目标频道（转发任务需要）
+    target_chat_id = await _resolve_chat_id(client, params.get("forward_target"))
+    # forward 任务必须提供有效目标频道
+    if task_type == TaskType.FORWARD and (target_chat_id is None or target_chat_id == 0):
+        return error_json_response(
+            code=400, message="转发任务需要有效的目标频道", status_code=400
+        )
 
     # 范围模式处理
     range_mode = params.get("range_mode")
@@ -186,11 +234,16 @@ async def start_task(
     request: Request,
     token: str = Depends(require_token),
     task_manager: TaskManager = Depends(get_task_manager),
+    executor = Depends(get_task_executor),
 ):
-    """开始/排队任务。"""
+    """开始/排队任务，并触发 TaskExecutor 异步执行。"""
     try:
         started = await task_manager.start_task(task_id)
         task = await task_manager.get_task(task_id)
+
+        # 触发 TaskExecutor 异步执行任务（不阻塞 API 响应）
+        asyncio.create_task(executor.execute_task(task))
+
         return json_response(
             data=_task_to_out(task).model_dump(),
             message="任务已开始" if started else "任务已加入队列",
@@ -257,6 +310,45 @@ async def delete_task(
     ):
         raise TaskConflictError("只能删除等待中、已完成、失败或已取消的任务")
 
-    # 从内存中删除
-    task_manager._tasks.pop(task_id, None)
+    # 从内存和数据库中永久删除
+    await task_manager.delete_task(task_id)
     return json_response(data=None, message="任务记录已删除")
+
+
+@router.get("/{task_id}/logs")
+async def get_task_logs(
+    task_id: str,
+    request: Request,
+    token: str = Depends(require_token),
+    task_manager: TaskManager = Depends(get_task_manager),
+):
+    """获取任务执行日志。
+
+    返回任务的执行日志列表和错误信息，用于调试和监控。
+    """
+    task = await task_manager.get_task(task_id)
+    if not task:
+        raise TaskNotFoundError(task_id)
+
+    # 获取日志数据（Task 类当前无 logs 字段，返回空列表）
+    logs = getattr(task, 'logs', [])
+
+    # 收集子任务的错误信息作为补充日志
+    item_logs = []
+    for item in task.items:
+        if item.error_reason:
+            item_logs.append({
+                "item_id": item.item_id,
+                "status": item.status.value,
+                "error": item.error_reason,
+            })
+
+    return json_response(data={
+        "task_id": task_id,
+        "logs": logs,
+        "item_logs": item_logs,
+        "error_reason": task.error_reason,
+        "status": task.status.value,
+        "total_logs": len(logs),
+        "total_item_errors": len(item_logs),
+    })

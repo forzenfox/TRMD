@@ -295,16 +295,16 @@
                       >
                         启动
                       </button>
-                      <button 
+                      <button
                         x-show="task.status === 'running' || task.status === 'queued'"
-                        @click="taskManager.cancelTask(task.id)"
+                        @click="cancelTask(task.id)"
                         class="btn btn-sm btn-warning"
                       >
                         取消
                       </button>
-                      <button 
+                      <button
                         x-show="task.status === 'failed'"
-                        @click="taskManager.retryTask(task.id)"
+                        @click="retryTask(task.id)"
                         class="btn btn-sm btn-primary"
                       >
                         重试
@@ -482,7 +482,7 @@
     </div>
 
     <!-- 创建任务弹窗 -->
-    <div 
+    <div
       x-show="showCreateModal"
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
@@ -493,7 +493,7 @@
       class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       @click="closeCreateModal()"
     >
-      <div 
+      <div
         x-show="showCreateModal"
         x-transition:enter="transition ease-out duration-300"
         x-transition:enter-start="opacity-0 scale-95"
@@ -536,8 +536,8 @@
             <!-- 任务名称 -->
             <div class="form-group">
               <label class="form-label">任务名称（可选）</label>
-              <input 
-                type="text" 
+              <input
+                type="text"
                 x-model="createForm.taskName"
                 class="form-input"
                 placeholder="留空将自动生成"
@@ -547,8 +547,8 @@
             <!-- 源频道 -->
             <div class="form-group" x-show="createForm.taskType !== 'upload'">
               <label class="form-label">源频道</label>
-              <input 
-                type="text" 
+              <input
+                type="text"
                 x-model="createForm.sourceChat"
                 class="form-input"
                 placeholder="@username 或 https://t.me/xxx"
@@ -559,8 +559,8 @@
             <!-- 目标频道 -->
             <div class="form-group" x-show="createForm.taskType !== 'download'">
               <label class="form-label">目标频道</label>
-              <input 
-                type="text" 
+              <input
+                type="text"
                 x-model="createForm.targetChat"
                 class="form-input"
                 placeholder="@username 或 https://t.me/xxx"
@@ -592,15 +592,15 @@
 
               <!-- ID 范围 -->
               <div x-show="createForm.messageRangeMode === 'id_range'" class="flex gap-3">
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   x-model="createForm.minId"
                   class="form-input flex-1"
                   placeholder="最小 ID"
                   min="1"
                 >
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   x-model="createForm.maxId"
                   class="form-input flex-1"
                   placeholder="最大 ID"
@@ -616,7 +616,7 @@
 
               <!-- ID 列表 -->
               <div x-show="createForm.messageRangeMode === 'id_list'">
-                <textarea 
+                <textarea
                   x-model="createForm.rawItems"
                   class="form-input form-textarea"
                   placeholder="每行一个消息 ID 或链接"
@@ -639,8 +639,8 @@
               <div class="flex flex-wrap gap-3">
                 <template x-for="option in configManager.getDownloadTypeOptions()" :key="option.value">
                   <label class="flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
+                    <input
+                      type="checkbox"
                       :value="option.value"
                       @change="configManager.toggleDownloadType(option.value)"
                       :checked="configManager.isDownloadTypeSelected(option.value)"
@@ -666,6 +666,155 @@
             创建任务
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- P0-2: 资源保护告警弹窗 -->
+    <div
+      x-show="taskManager.showResourceAlert"
+      x-transition.enter="transition ease-out duration-300"
+      x-transition.enter-start="opacity-0"
+      x-transition.enter-end="opacity-100"
+      x-transition.leave="transition ease-in duration-200"
+      x-transition.leave-start="opacity-100"
+      x-transition.leave-end="opacity-0"
+      class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-50"
+    >
+      <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6 border border-slate-700
+            x-transition:enter="transition ease-out duration-300"
+            x-transition:enter-start="opacity-0 scale-95"
+            x-transition:enter-end="opacity-100 scale-100">
+
+        <!-- 标题 -->
+        <div class="flex items-center mb-4">
+          <span class="text-2xl mr-3"
+                x-text="taskManager.resourceAlertType === 'blocked' ? '❌' : '⚠️'"></span>
+          <h3 class="text-lg font-semibold text-white"
+              x-text="taskManager.resourceAlertType === 'blocked' ? '任务超出限制' : '资源告警'"></h3>
+        </div>
+
+        <!-- 告警内容 -->
+        <div class="space-y-3 mb-6 text-sm text-slate-300">
+          <p class="font-medium text-white"
+             x-text="taskManager.resourceAlertMessage"></p>
+
+          <!-- 估算详情 -->
+          <div x-show="taskManager.resourceEstimate"
+               class="bg-slate-900/50 border border-slate-600 rounded-lg p-3 space-y-1">
+            <p><span class="font-medium text-slate-400">消息总数:</span>
+               <span x-text="taskManager.resourceEstimate?.message_count || '未知'"></span> 条</p>
+            <p><span class="font-medium text-slate-400">预估大小:</span>
+               <span x-text="taskManager.resourceEstimate?.total_size_human || '未知'"></span></p>
+            <p><span class="font-medium text-slate-400">预估耗时:</span>
+               约 <span x-text="Math.round((taskManager.resourceEstimate?.estimated_duration_seconds || 0) / 60)"></span> 分钟</p>
+          </div>
+
+          <!-- 建议 -->
+          <p x-show="taskManager.resourceSuggestion"
+             class="text-red-400 font-medium text-xs"
+             x-text="taskManager.resourceSuggestion"></p>
+        </div>
+
+        <!-- 操作按钮 -->
+        <div class="flex justify-end space-x-3">
+          <!-- 告警模式：返回修改 + 确认创建 -->
+          <template x-if="taskManager.resourceAlertType === 'warning'">
+            <div class="flex space-x-3">
+              <button @click="taskManager.closeResourceAlert()"
+                      class="px-4 py-2 border border-slate-600 rounded-md text-sm font-medium
+                             text-slate-300 bg-slate-700 hover:bg-slate-600 focus:outline-none
+                             focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500">
+                返回修改
+              </button>
+              <button @click="taskManager.closeResourceAlert(); taskManager.createTask()"
+                      class="px-4 py-2 border border-transparent rounded-md text-sm font-medium
+                             text-white bg-blue-600 hover:bg-blue-700 focus:outline-none
+                             focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500">
+                确认创建
+              </button>
+            </div>
+          </template>
+
+          <!-- 禁止模式：仅关闭按钮 -->
+          <template x-if="taskManager.resourceAlertType === 'blocked'">
+            <button @click="taskManager.closeResourceAlert()"
+                    class="px-4 py-2 border border-transparent rounded-md text-sm font-medium
+                           text-white bg-blue-600 hover:bg-blue-700 focus:outline-none
+                           focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500 w-full">
+              我知道了
+            </button>
+          </template>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用确认对话框组件 (P2-3: 替代原生 confirm) -->
+  <div x-data="confirmDialog"
+       x-show="confirmDialog.visible"
+       x-transition.enter="transition ease-out duration-300"
+       x-transition.enter-start="opacity-0"
+       x-transition.enter-end="opacity-100"
+       x-transition.leave="transition ease-in duration-200"
+       x-transition.leave-start="opacity-100"
+       x-transition.leave-end="opacity-0"
+       class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50">
+
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6
+          x-transition:enter="transition ease-out duration-300"
+          x-transition:enter-start="opacity-0 scale-95"
+          x-transition:enter-end="opacity-100 scale-100">
+
+      <!-- 标题栏 -->
+      <div class="flex items-center mb-4">
+        <span class="text-2xl mr-3"
+              x-text="confirmDialog.icons[confirmDialog.type] || ''"></span>
+        <h3 class="text-lg font-semibold text-gray-900 flex-1"
+            x-text="confirmDialog.title"></h3>
+
+        <!-- 关闭按钮 -->
+        <button @click="confirmDialog.onCancel()"
+                class="text-gray-400 hover:text-gray-600 transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+
+      <!-- 消息内容（支持 HTML） -->
+      <div class="mb-6 text-sm text-gray-600 whitespace-pre-wrap"
+           x-html="confirmDialog.message">
+      </div>
+
+      <!-- 操作按钮 -->
+      <div class="flex justify-end space-x-3">
+        <!-- 取消按钮 -->
+        <button x-show="confirmDialog.showCancel"
+                @click="confirmDialog.onCancel()"
+                class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium 
+                       text-gray-700 bg-white hover:bg-gray-50 focus:outline-none 
+                       focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+          <span x-text="confirmDialog.cancelText"></span>
+        </button>
+
+        <!-- 确认按钮（根据 type 变色） -->
+        <template x-if="confirmDialog.type === 'danger'">
+          <button @click="confirmDialog.onConfirm()"
+                  class="px-4 py-2 border border-transparent rounded-md text-sm font-medium 
+                         text-white bg-red-600 hover:bg-red-700 focus:outline-none 
+                         focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors">
+            <span x-text="confirmDialog.confirmText"></span>
+          </button>
+        </template>
+
+        <template x-if="confirmDialog.type !== 'danger'">
+          <button @click="confirmDialog.onConfirm()"
+                  class="px-4 py-2 border border-transparent rounded-md text-sm font-medium 
+                         text-white bg-blue-600 hover:bg-blue-700 focus:outline-none 
+                         focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
+            <span x-text="confirmDialog.confirmText"></span>
+          </button>
+        </template>
       </div>
     </div>
   </div>
@@ -805,6 +954,36 @@
             return;
           }
           // 同步 Alpine 响应式数据
+          await this.refreshTasks();
+        },
+
+        async startTask(taskId) {
+          try {
+            await taskManager.startTask(taskId);
+            this.addNotification('success', '任务已启动');
+          } catch (error) {
+            this.addNotification('error', `启动失败: ${error.message}`);
+          }
+          await this.refreshTasks();
+        },
+
+        async cancelTask(taskId) {
+          try {
+            await taskManager.cancelTask(taskId);
+            this.addNotification('success', '任务已取消');
+          } catch (error) {
+            this.addNotification('error', `取消失败: ${error.message}`);
+          }
+          await this.refreshTasks();
+        },
+
+        async retryTask(taskId) {
+          try {
+            await taskManager.retryTask(taskId);
+            this.addNotification('success', '任务已重试');
+          } catch (error) {
+            this.addNotification('error', `重试失败: ${error.message}`);
+          }
           await this.refreshTasks();
         },
 

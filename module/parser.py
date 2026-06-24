@@ -76,13 +76,6 @@ class TelegramRestrictedMediaDownloaderArgumentParser(ArgumentParser):
             help="设置运行模式",
         )
         self.add_argument(
-            "-wo",
-            "--web-only",
-            action="store_true",
-            default=False,
-            help="仅启动 WebUI，不启动 Telegram 客户端",
-        )
-        self.add_argument(
             "-p",
             "--port",
             type=int,

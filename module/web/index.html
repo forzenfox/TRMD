@@ -133,6 +133,12 @@
           <h1 class="text-xl font-semibold text-white">Dashboard</h1>
         </div>
         <div class="flex items-center space-x-3">
+          <!-- Client 状态指示器 -->
+          <div class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium"
+               :class="clientStatusClass">
+            <span class="w-2 h-2 rounded-full" :class="{'animate-pulse': clientStatus.status === 'not_initialized', 'bg-green-400': clientStatus.status === 'connected', 'bg-red-400': clientStatus.status === 'disconnected', 'bg-yellow-400': clientStatus.status === 'not_initialized', 'bg-slate-400': clientStatus.status === 'error'}"></span>
+            <span x-text="clientStatusText"></span>
+          </div>
           <!-- 刷新按钮 -->
           <button @click="refreshAll" class="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700" title="刷新">
             <svg class="w-5 h-5" :class="{'animate-spin': loading}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -444,6 +450,13 @@
         },
         recentTasks: [],
 
+        // Client 连接状态
+        clientStatus: {
+          connected: false,
+          status: 'not_initialized',
+          bot_connected: false,
+        },
+
         async init() {
           // 验证认证
           const authenticated = await authManager.ensureAuthenticated();
@@ -495,6 +508,10 @@
               failedTasks: status.failed_tasks || 0,
               loaded: true,
             };
+            // 提取 Client 连接状态
+            if (status.client_status) {
+              this.clientStatus = status.client_status;
+            }
           } catch (error) {
             console.error('加载资源状态失败:', error);
             this.stats.loaded = true;
@@ -504,8 +521,8 @@
         async loadRecentTasks() {
           this.tasksLoading = true;
           try {
-            const response = await api.getTasks({ page: 1, pageSize: 5 });
-            this.recentTasks = response.tasks || [];
+            const response = await api.getTasks({ offset: 0, limit: 5 });
+            this.recentTasks = response.items || [];
           } catch (error) {
             console.error('加载最近任务失败:', error);
           } finally {
@@ -546,6 +563,26 @@
             unitIndex++;
           }
           return `${size.toFixed(1)} ${units[unitIndex]}`;
+        },
+
+        get clientStatusClass() {
+          const map = {
+            connected: 'bg-green-500/15 text-green-400',
+            disconnected: 'bg-red-500/15 text-red-400',
+            not_initialized: 'bg-yellow-500/15 text-yellow-400',
+            error: 'bg-slate-500/15 text-slate-400',
+          };
+          return map[this.clientStatus.status] || map.error;
+        },
+
+        get clientStatusText() {
+          const map = {
+            connected: 'Telegram 已连接',
+            disconnected: '连接断开',
+            not_initialized: '等待客户端...',
+            error: '状态未知',
+          };
+          return map[this.clientStatus.status] || map.error;
         },
 
         formatSpeed(bytesPerSecond) {

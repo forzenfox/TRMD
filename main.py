@@ -45,12 +45,9 @@ if __name__ == '__main__':
     if web_port is None:
         web_port = PARSE_ARGS.web if (PARSE_ARGS.web is not None and PARSE_ARGS.web > 0) else 8000
 
-    # 仅启动 WebUI（不启动 Telegram 客户端）
-    if PARSE_ARGS.web_only:
-        _run_web_api(port=web_port)
-
-    # 核心下载器模式（同时后台启动 Web API）
-    else:
-        _start_web_api_background(port=web_port)
-        trmd = TelegramRestrictedMediaDownloader()
-        trmd.run()
+    # 启动 Web API（后台线程）+ Telegram 客户端（主线程）
+    _start_web_api_background(port=web_port)
+    # RepositorySync / TaskExecutor 在 downloader.py 中延迟初始化
+    # （需等待 Pyrogram Client 启动后才可创建）
+    trmd = TelegramRestrictedMediaDownloader()
+    trmd.run()

@@ -4,7 +4,7 @@
 提供统一的配置管理接口。
 """
 
-from module.config.config_manager import ConfigManager
+from module.core.config_manager import ConfigManager  # noqa: F401
 from module.config.legacy_config import UserConfig, BaseConfig
 
 __all__ = ["ConfigManager", "UserConfig", "BaseConfig"]

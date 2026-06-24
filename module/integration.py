@@ -16,6 +16,9 @@ from module.core.token_manager import TokenManager
 from module.core.task_manager import TaskManager
 from module.core.cache_manager import CacheManager
 from module.core.file_manager import FileManager
+from module.core.repository_db import RepositoryDB
+from module.core.repository_sync import RepositorySync
+from module.core.config_manager import ConfigManager
 from module.interaction_manager import InteractionManager
 
 log = logging.getLogger("rich")
@@ -63,6 +66,15 @@ class AppContext:
         self.cache_manager = self._init_cache_manager()
         self.file_manager = self._init_file_manager()
         self.interaction_manager = self._init_interaction_manager()
+        self.config_manager = self._init_config_manager()
+        self.repository_db = self._init_repository_db()
+        self.repository_sync = None  # 延迟初始化，需要 client
+
+        # 延迟初始化（需在 client 启动后调用 init_task_executor）
+        self.task_executor = None
+
+        # Telegram Client（延迟注入，client 启动后设置）
+        self.client = None
 
         # 全部初始化成功后才标记，避免部分失败导致单例残缺
         self._initialized = True
@@ -105,12 +117,70 @@ class AppContext:
         log.info("InteractionManager 已初始化")
         return im
 
+    def _init_config_manager(self) -> ConfigManager:
+        """初始化 ConfigManager。"""
+        cm = ConfigManager(user_config=None)
+        log.info("ConfigManager 已初始化")
+        return cm
+
+    def _init_repository_db(self) -> RepositoryDB:
+        """初始化 RepositoryDB。"""
+        db_path = os.path.join(self.data_dir, "repository.db")
+        repo_db = RepositoryDB(db_path=db_path)
+        log.info(f"RepositoryDB 已初始化，数据库路径: {db_path}")
+        return repo_db
+
+    def init_repository_sync(self, client) -> None:
+        """延迟初始化并启动 RepositorySync。
+
+        需在 Pyrogram Client 启动后调用。
+
+        Args:
+            client: 已启动的 Pyrogram Client 实例
+        """
+        if self.repository_sync is not None:
+            log.warning("RepositorySync 已经初始化，跳过重复启动")
+            return
+
+        self.repository_sync = RepositorySync(
+            repository_db=self.repository_db,
+            config_manager=self.config_manager,
+        )
+        self.repository_sync.start()
+        log.info("RepositorySync 已初始化并启动")
+
+    def stop_repository_sync(self) -> None:
+        """停止 RepositorySync 同步任务。"""
+        if self.repository_sync is not None and self.repository_sync.is_running:
+            self.repository_sync.stop()
+            log.info("RepositorySync 已停止")
+
+    def init_task_executor(self, client, downloader=None, uploader=None):
+        """初始化任务执行器（需在 client 启动后调用）。
+
+        Args:
+            client: Pyrogram Client 实例
+            downloader: 下载器实例（可选，不传则走降级方案）
+            uploader: 上传器实例（可选）
+        """
+        from module.core.task_executor import TaskExecutor
+
+        self.task_executor = TaskExecutor(
+            task_manager=self.task_manager,
+            file_manager=self.file_manager,
+            client=client,
+            downloader=downloader,
+            uploader=uploader,
+        )
+        log.info("TaskExecutor 已初始化")
+
     def get_webui_url(self, token: str) -> str:
         """生成 WebUI 访问链接。"""
         return f"http://{self.web_host}:{self.web_port}?token={token}"
 
     def cleanup(self):
         """清理资源。"""
+        self.stop_repository_sync()
         if hasattr(self, "_initialized"):
             self._initialized = False
             AppContext._instance = None

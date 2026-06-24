@@ -62,6 +62,15 @@
     <!-- 登录表单 -->
     <div class="bg-slate-800 rounded-lg shadow-lg p-6 border border-slate-700">
       <form @submit.prevent="handleLogin" class="space-y-4">
+        <!-- 自动登录提示 -->
+        <div x-show="loading && token" x-transition class="mb-4 bg-blue-900/20 border border-blue-700 text-blue-300 px-4 py-3 rounded-lg text-sm flex items-center">
+          <svg class="animate-spin -ml-1 mr-3 h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          正在自动验证 Token...
+        </div>
+
         <!-- Token 输入 -->
         <div>
           <label for="token" class="block text-sm font-medium text-slate-300 mb-2">
@@ -152,11 +161,20 @@
           // 从 URL 获取重定向地址
           const params = new URLSearchParams(window.location.search);
           this.redirectUrl = params.get('redirect') || '/web/index.html';
-          
+
           // 优先从全局变量读取 token（api.js 在 _cleanUrlToken 前保存）
           const urlToken = window.__urlToken || params.get('token');
           if (urlToken) {
+            // ✅ 自动填入输入框（保持用户体验：用户能看到 token）
             this.token = urlToken;
+
+            // ✅ 新增：延迟 500ms 后自动触发登录
+            // 延迟原因：
+            // 1. 让用户看到"正在自动登录..."的提示
+            // 2. 避免 Alpine.js 渲染竞态问题
+            setTimeout(() => {
+              this.handleLogin();
+            }, 500);
           }
         },
 
@@ -166,6 +184,10 @@
           this.loading = true;
           this.error = null;
 
+          // 检测是否为自动登录模式（用于失败处理）
+          const isAutoLogin = !!window.__urlToken ||
+                               new URLSearchParams(window.location.search).has('token');
+
           try {
             // 设置 Token
             api.setToken(this.token, true);
@@ -174,9 +196,17 @@
             await api.getMe();
 
             // 登录成功，跳转
+            console.log('[Auto-Login] 认证成功，即将跳转...');
             window.location.href = this.redirectUrl;
           } catch (error) {
             this.error = error.message || 'Token 验证失败，请检查后重试';
+
+            // 自动登录失败时，清除标记让用户手动重试（避免循环）
+            if (isAutoLogin) {
+              console.warn('[Auto-Login] 自动登录失败:', error.message);
+              window.__urlToken = null;
+            }
+
             api.clearToken();
           } finally {
             this.loading = false;

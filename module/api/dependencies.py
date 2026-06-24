@@ -82,7 +82,7 @@ def get_config_manager(request: Request):
     cm = request.app.state.config_manager
     if cm is None:
         # 延迟导入，避免循环依赖
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         cm = ConfigManager()
         request.app.state.config_manager = cm
@@ -92,3 +92,16 @@ def get_config_manager(request: Request):
 def get_monitor(request: Request):
     """获取 Monitor 实例。"""
     return getattr(request.app.state, "monitor", None)
+
+
+def get_task_executor(request: Request):
+    """获取 TaskExecutor 实例。"""
+    return request.app.state.task_executor
+
+
+def get_cache_manager():
+    """获取 CacheManager 实例（从 AppContext 单例读取）。"""
+    from module.integration import get_context
+
+    ctx = get_context()
+    return ctx.cache_manager if ctx else None

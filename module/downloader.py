@@ -2855,6 +2855,24 @@ class TelegramRestrictedMediaDownloader(Bot):
         await self.app.client.start(use_qr=False)
         self.my_id = await get_my_id(self.app.client)
         self.pb.progress.start()  # v1.1.8修复登录输入手机号不显示文本问题。
+
+        # 统一注入 User Client 到 AppContext（供 Web API 立即可用）
+        try:
+            from module.integration import get_context
+            _ctx = get_context()
+            if _ctx:
+                _ctx.client = self.app.client
+        except Exception as _inject_err:
+            log.warning(f"Client 注入 AppContext 失败（非致命）: {_inject_err}")
+
+        # 启动仓库自动同步（延迟初始化，client 已就绪）
+        try:
+            from module.integration import get_context
+            _ctx = get_context()
+            if _ctx and hasattr(_ctx, "repository_db") and _ctx.repository_sync is None:
+                _ctx.init_repository_sync(self.app.client)
+        except Exception as _sync_err:
+            log.warning(f"仓库同步器启动失败（非致命）: {_sync_err}")
         if self.app.bot_token is not None:
             result = await self.start_bot(
                 self.app,
@@ -2877,6 +2895,16 @@ class TelegramRestrictedMediaDownloader(Bot):
                 self._init_repository_manager()
                 if self.repository_manager is not None:
                     self.uploader.repository_manager = self.repository_manager
+                # 初始化 TaskExecutor（桥接 Web API 任务执行）
+                from module.integration import get_context
+
+                _ctx = get_context()
+                if _ctx:
+                    _ctx.init_task_executor(
+                        client=self.app.client,
+                        downloader=self,
+                        uploader=getattr(self, "uploader", None),
+                    )
                 if (
                     self.app.config.get("preference", {})
                     .get("upload", {})
@@ -2905,6 +2933,14 @@ class TelegramRestrictedMediaDownloader(Bot):
                 )
         # 等待所有任务完成。
         await self.queue.join()
+        # 停止 Bot Client（如果已启动）
+        if hasattr(self, "bot") and self.bot is not None and self.bot.is_connected:
+            try:
+                await self.bot.stop()
+                log.info("Bot Client 已停止")
+            except Exception as _bot_stop_err:
+                log.warning(f"Bot Client 停止异常: {_bot_stop_err}")
+        # 停止 User Client
         await self.app.client.stop() if self.app.client.is_connected else None
 
     def run(self) -> None:

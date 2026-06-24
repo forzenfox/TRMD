@@ -60,6 +60,8 @@ def create_app(
     app.state.file_manager = file_manager or (ctx.file_manager if ctx else None)
     app.state.config_manager = config_manager
     app.state.monitor = monitor or Monitor()
+    # TaskExecutor 由 downloader 在 client 启动后延迟初始化，此处先挂载 None
+    app.state.task_executor = getattr(ctx, "task_executor", None) if ctx else None
 
     # 注册中间件
     setup_middleware(app)

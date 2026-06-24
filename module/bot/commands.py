@@ -16,7 +16,7 @@ import logging
 import re
 from typing import Optional
 
-from module.config.config_manager import ConfigManager
+from module.core.config_manager import ConfigManager
 from module.core.token_manager import TokenManager
 from module.interaction_manager import InteractionManager, BatchStep
 
