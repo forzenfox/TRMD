@@ -1,11 +1,21 @@
 # Telegram Bot 交互体验增强设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader
-> **文档版本**: v6.0
+> **文档版本**: v7.1
 > **创建日期**: 2026-06-12
-> **更新日期**: 2026-06-21
+> **更新日期**: 2026-06-24
 > **作者**: SOLO
-> **状态**: 待审核
+> **状态**: 已实现（部分功能待集成）
+
+---
+
+## 变更记录
+
+| 版本 | 日期 | 变更内容 | 状态 |
+|------|------|----------|------|
+| v7.1 | 2026-06-24 | 1. **移除 --web-only 模式**（功能残缺、无真实使用场景）<br>2. 集成 TaskExecutor 使 Web 任务可实际执行<br>3. 启用 RepositorySync 仓库自动同步<br>4. 修复 Dashboard 分页参数 bug<br>5. 清理所有 mock 数据降级分支和条件判断 | 已实现 |
+| v7.0 | 2026-06-24 | 1. WebSocket 方案改为 REST API 轮询<br>2. Monitor 页面合并至 Dashboard，日志查看功能移除<br>3. Bot 命令体系补充完整命令列表（20+ 命令）<br>4. 文件结构更新：移除 websocket/ 目录和 monitor.html<br>5. 新增 task_executor.py、chats.py、chat.py 等组件说明<br>6. Bot 命令模块化：bot/ 目录结构说明 | 已实现 |
+| v6.0 | 2026-06-21 | 初始设计文档：WebUI + Bot 增强方案 | 已审核 |
 
 ---
 
@@ -162,23 +172,63 @@
 
 ---
 
-## 三、Bot 端设计（轻量级）
+## 三、Bot 端设计
 
 ### 3.1 命令体系
 
-Bot 端只保留简单命令，复杂操作引导到 WebUI：
+Bot 端提供完整的下载、转发、上传、监听功能，同时支持 WebUI 引导：
+
+#### 3.1.1 基础命令
 
 | 命令 | 功能 | 复杂度 |
 |------|------|--------|
-| `/start` | 欢迎信息 + WebUI 地址 | 低 |
-| `/help` | 帮助信息 | 低 |
-| `/download <链接>` | 单条链接下载 | 低 |
-| `/forward <源> <目标> <起始> <结束>` | 单条转发（原有格式保留） | 中 |
-| `/upload <文件> <目标>` | 单文件上传（原有格式保留） | 中 |
-| `/status` | 查看当前任务状态 | 低 |
+| `/start` | 欢迎信息 + 使用说明 | 低 |
+| `/help` | 展示可用命令及详细说明 | 低 |
+| `/exit` | 退出软件 | 低 |
+
+#### 3.1.2 下载命令
+
+| 命令 | 功能 | 示例 | 复杂度 |
+|------|------|------|--------|
+| `/download` | 分配新的下载任务（多种使用方式见说明） | `/download https://t.me/x 起始ID 结束ID` | 中 |
+| `/download_chat` | 下载指定频道（支持内联键盘自定义内容过滤） | `/download_chat 频道链接` | 中 |
+| `/listen_download` | 实时监听该链接的最新消息（视频和图片）进行下载 | `/listen_download https://t.me/A https://t.me/B ...` | 中 |
+
+#### 3.1.3 转发命令
+
+| 命令 | 功能 | 示例 | 复杂度 |
+|------|------|------|--------|
+| `/forward` | 从源频道转发至目标频道（支持 ID 范围或链接） | `/forward https://t.me/A https://t.me/B 1 100` | 中 |
+| `/listen_forward` | 实时监听该链接的最新消息（任意消息）进行转发 | `/listen_forward 源频道 目标频道` | 中 |
+
+#### 3.1.4 上传命令
+
+| 命令 | 功能 | 示例 | 复杂度 |
+|------|------|------|--------|
+| `/upload` | 上传本地的文件到指定频道 | `/upload 本地文件路径 目标频道` | 中 |
+| `/upload_r` | 递归上传文件夹（包含子文件夹）到指定频道 | `/upload_r 本地文件夹 目标频道` | 中 |
+
+#### 3.1.5 监控与状态命令
+
+| 命令 | 功能 | 复杂度 |
+|------|------|--------|
+| `/table` | 在终端输出当前下载的统计信息 | 低 |
+| `/listen_info` | 查看当前已经创建的监听任务 | 低 |
+| `/cancel` | 取消当前正在进行的交互流程 | 低 |
+
+#### 3.1.6 WebUI 相关命令（新增）
+
+| 命令 | 功能 | 复杂度 |
+|------|------|--------|
 | `/web` | 获取 WebUI 访问链接（带 Token，1 小时有效期） | 低 |
 | `/web_revoke` | 撤销所有已生成的 WebUI Token | 低 |
-| `/batch` | 进入批量操作模式（简化版） | 中 |
+| `/batch` | 进入批量操作模式（简化版，多步引导） | 中 |
+| `/status` | 查看当前任务状态概要（复杂操作请前往 WebUI） | 低 |
+
+#### 3.1.7 仓库模式命令（新增）
+
+| 命令 | 功能 | 复杂度 |
+|------|------|--------|
 | `/setup_repository` | 设置仓库频道（支持频道 ID、用户名、链接、邀请链接） | 中 |
 
 ### 3.2 `/web` 命令
@@ -251,9 +301,13 @@ Bot: 📁 媒体组上传功能请使用 WebUI 操作
 |------|------|------|
 | **后端框架** | FastAPI | 异步高性能，与 PRD 技术栈一致 |
 | **前端** | 原生 HTML + Alpine.js + Tailwind CSS | 轻量无构建，易于集成 |
-| **实时通信** | WebSocket | 任务进度实时推送 |
+| **实时通信** | REST API 轮询 | 前端定时请求获取最新状态（任务列表 5s、监控数据 10s），简化架构 |
 | **认证** | URL Token（1 小时有效期） | Bot `/web` 命令生成，链接自动携带，无需手动输入 |
 | **数据库** | SQLite | 轻量，无外部依赖 |
+
+> **设计变更说明（v7.0）**: 原 WebSocket 实时推送方案已改为 REST API 定时轮询。
+> 理由：简化架构复杂度，避免 WebSocket 连接管理和断线重连逻辑；
+> 轮询间隔采用智能策略（有活跃任务时 5s/10s，无活跃任务时停止轮询）。
 
 ### 4.2 功能模块
 
@@ -520,14 +574,16 @@ resource_limits:
 | **代理配置** | 代理开关、类型、地址、认证 |
 | **通知配置** | 完成通知、错误通知开关 |
 
-#### 4.2.4 监控面板
+#### 4.2.4 系统监控（已合并至 Dashboard）
 
-| 功能 | 描述 |
-|------|------|
-| **实时统计** | 下载/上传速度、任务数、文件数 |
-| **任务列表** | 进行中/已完成/失败任务 |
-| **日志查看** | 实时日志流，支持过滤 |
-| **系统状态** | CPU、内存、磁盘使用率 |
+> **设计变更（v7.0）**: 原设计的独立 Monitor 页面已取消，监控功能合并到 Dashboard 页面。
+> 日志查看功能已移除，用户可通过 Bot `/status` 命令或终端日志查看任务状态。
+
+| 功能 | 描述 | 所在页面 |
+|------|------|----------|
+| **实时统计** | 下载/上传速度、任务数、文件数 | Dashboard |
+| **任务列表** | 进行中/已完成/失败任务 | Dashboard + Tasks |
+| **系统状态** | CPU、内存、磁盘使用率 | Dashboard |
 
 ### 4.3 页面设计
 
@@ -540,11 +596,10 @@ resource_limits:
 │          │                                              │
 │  Sidebar │              Main Content                    │
 │          │                                              │
-│  - 任务   │  ┌──────────────────────────────────────┐  │
+│  - 首页   │  ┌──────────────────────────────────────┐  │
+│  - 任务   │  │                                      │  │
 │  - 文件   │  │                                      │  │
 │  - 配置   │  │                                      │  │
-│  - 监控   │  │                                      │  │
-│  - 日志   │  │                                      │  │
 │          │  │                                      │  │
 │          │  └──────────────────────────────────────┘  │
 │          │                                              │
@@ -553,30 +608,30 @@ resource_limits:
 
 #### 4.3.2 核心页面
 
-| 页面 | 功能 |
-|------|------|
-| **Dashboard** | 概览统计、快速操作入口 |
-| **Tasks** | 任务列表、创建任务、任务详情 |
-| **Files** | 文件浏览、选择、上传 |
-| **Settings** | 配置管理 |
-| **Monitor** | 实时监控、日志查看 |
+| 页面 | 文件 | 功能 |
+|------|------|------|
+| **Dashboard** | index.html | 概览统计、系统状态、快速操作入口、最近任务 |
+| **Tasks** | tasks.html | 任务列表、创建任务、任务详情、任务操作 |
+| **Files** | files.html | 文件浏览、选择、上传、媒体组配置 |
+| **Settings** | config.html | 配置管理（基础/下载/上传/代理/仓库） |
+
+> **设计变更说明（v7.0）**: 原 Monitor 页面已合并至 Dashboard，日志查看功能移除。
 
 ### 4.4 API 设计
 
 #### 4.4.1 认证机制
 
-所有 API 接口（包括 WebSocket）均需携带 Token 进行认证：
+所有 API 接口均需携带 Token 进行认证：
 
 **认证流程：**
 1. 用户通过 Bot `/web` 命令获取带 Token 的访问链接（`?token=xxx`）
 2. URL Token 仅用于首次进入页面
 3. 首次访问成功后，WebUI 通过 `Set-Cookie` 下发 **HttpOnly Cookie**
 4. 后续 AJAX/Fetch 请求使用 `Authorization: Bearer xxx` Header
-5. WebSocket 连接使用 URL 参数传递 Token
 
 | 方式 | 说明 |
 |------|------|
-| **URL 参数** | `?token=xxx`，仅用于首次页面访问和 WebSocket 连接 |
+| **URL 参数** | `?token=xxx`，仅用于首次页面访问 |
 | **HttpOnly Cookie** | 首次验证后自动下发，防止 XSS 泄露 |
 | **请求头** | `Authorization: Bearer xxx`，用于 AJAX/Fetch 请求 |
 
@@ -619,18 +674,34 @@ Token 无效或过期时，所有接口返回 `401 Unauthorized`。
 | `/api/monitor/stats` | GET | 获取监控统计 | Token |
 | `/api/resource/status` | GET | 获取资源状态（磁盘/内存/并发数） | Token |
 
-#### 4.4.3 WebSocket
+#### 4.4.3 实时数据更新策略（轮询）
 
-| 端点 | 功能 | 认证 | 断线重连 |
-|------|------|------|---------|
-| `/ws/tasks` | 任务状态实时推送 | Token（URL 参数） | 自动重连，重发最后状态 |
-| `/ws/monitor` | 监控数据实时推送 | Token（URL 参数） | 自动重连 |
-| `/ws/logs` | 日志实时推送 | Token（URL 参数） | 自动重连 |
+> **设计变更（v7.0）**: 原 WebSocket 实时推送方案已改为 REST API 定时轮询。
 
-**WebSocket Token 续期：**
-- 长任务执行期间 Token 可能过期，WebSocket 连接保持活跃
-- 连接建立后，Token 过期不影响已建立的 WebSocket 连接
-- 断线重连时需携带新的有效 Token
+**轮询策略：**
+
+| 数据类型 | API 端点 | 轮询间隔 | 触发条件 |
+|----------|----------|----------|----------|
+| 任务列表 | `GET /api/tasks?status=...` | 5 秒 | 存在 pending/running/queued 状态任务 |
+| 监控统计 | `GET /api/monitor/stats` | 10 秒 | Dashboard 页面活跃 |
+| 资源状态 | `GET /api/monitor/resource/status` | 10 秒 | Dashboard 页面活跃 |
+
+**智能轮询优化：**
+- 有活跃任务（pending/running/queued）时启动任务列表轮询
+- 所有任务静止（completed/failed/cancelled）时自动停止轮询
+- 页面不可见（切换标签页/最小化）时暂停轮询
+- 页面重新可见时立即刷新一次并重新评估轮询需求
+- 连续请求失败超过 3 次时停止轮询，避免无效请求
+
+**对比原 WebSocket 方案：**
+
+| 维度 | WebSocket（原方案） | REST 轮询（当前方案） |
+|------|---------------------|---------------------|
+| 实时性 | 毫秒级 | 秒级（5-10s） |
+| 架构复杂度 | 高（连接管理、断线重连、心跳） | 低（标准 HTTP 请求） |
+| 服务端资源 | 长连接占用 | 按需响应 |
+| 浏览器兼容性 | 需考虑代理/防火墙限制 | 无特殊要求 |
+| 适用场景 | 高频实时更新（聊天、协作） | 低频状态查询（任务监控） |
 
 ---
 
@@ -1167,10 +1238,11 @@ module/
 │   ├── file_manager.py      # 文件管理器
 │   ├── config_manager.py    # 配置管理器
 │   ├── interaction.py       # 交互状态管理
-│   ├── monitor.py           # 任务监控
+│   ├── monitor.py           # 任务监控（已集成至 Dashboard）
 │   ├── repository_db.py     # [新增] 仓库数据库管理（三张表 CRUD）
 │   ├── repository_manager.py # [新增] 仓库频道编排器（去重/分发/回调）
-│   └── repository_sync.py   # [新增] 仓库增量同步器（可选）
+│   ├── repository_sync.py   # [新增] 仓库增量同步器（可选，未启用）
+│   └── task_executor.py     # [新增] 任务执行器（已定义，待集成）
 │
 ├── api/                     # [新增] Web API 层
 │   ├── __init__.py
@@ -1180,31 +1252,36 @@ module/
 │   │   ├── files.py
 │   │   ├── config.py
 │   │   ├── monitor.py
+│   │   ├── chats.py         # 频道与消息分析
 │   │   └── auth.py
-│   ├── models/              # 数据模型
-│   │   ├── task.py
-│   │   ├── file.py
-│   │   └── config.py
-│   └── websocket/           # WebSocket 处理
-│       ├── tasks.py
-│       └── monitor.py
+│   └── models/              # 数据模型
+│       ├── task.py
+│       ├── file.py
+│       ├── config.py
+│       └── chat.py          # 频道模型
 │
 ├── web/                     # [新增] WebUI 前端
 │   ├── static/
 │   │   ├── css/
 │   │   ├── js/
-│   │   └── img/
+│   │   └── vendor/         # 第三方库（Tailwind, Alpine.js）
 │   └── templates/
-│       ├── index.html
-│       ├── tasks.html
-│       ├── files.html
-│       ├── settings.html
-│       └── monitor.html
+│       ├── index.html       # Dashboard（含系统监控）
+│       ├── tasks.html       # 任务管理
+│       ├── files.html       # 文件管理
+│       ├── config.html      # 系统配置
+│       └── login.html       # 登录页
 │
-├── bot.py                   # [修改] 简化命令，添加 WebUI 引导
+├── bot/                     # [新增] Bot 命令模块化
+│   ├── __init__.py
+│   ├── bot.py               # Bot 主程序 + 原有命令（download/forward/upload/listen 等）
+│   ├── commands.py          # WebUI 相关命令（web/web_revoke/batch/status/cancel/repository）
+│   └── command_router.py    # 命令路由分发
+│
+├── downloader.py            # [修改] 核心下载器（保留原有功能）
 ├── uploader.py              # [修改] 支持媒体组上传
-├── enums.py                 # [修改] 添加新枚举
-└── language.py              # [修改] 添加新文案
+├── integration.py           # [新增] AppContext 全局上下文
+└── enums.py                 # [修改] 添加新枚举
 ```
 
 ### 6.2 与现有代码的集成

@@ -59,17 +59,18 @@ class TestTaskModel:
             task_id="task_001",
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(100, 200),
+            params={"message_range_start": 100, "message_range_end": 200},
             status=TaskStatus.PENDING,
         )
         assert task.task_id == "task_001"
         assert task.task_type == TaskType.DOWNLOAD
         assert task.chat_id == -1001234567890
-        assert task.message_range == (100, 200)
+        assert task.params.get("message_range_start") == 100
+        assert task.params.get("message_range_end") == 200
         assert task.status == TaskStatus.PENDING
         assert task.items == []
         assert task.retry_count == 0
-        assert task.total_size == 0
+        assert task.total_size_bytes == 0
 
     def test_create_forward_task(self):
         """测试创建转发任务。"""
@@ -77,14 +78,17 @@ class TestTaskModel:
             task_id="task_002",
             task_type=TaskType.FORWARD,
             chat_id=-1001234567890,
-            target_chat_id=-1009876543210,
-            message_range=(1, 50),
+            params={
+                "target_chat_id": -1009876543210,
+                "message_range_start": 1,
+                "message_range_end": 50,
+                "delete_after_upload": True,
+            },
             status=TaskStatus.PENDING,
-            delete_after_upload=True,
         )
         assert task.task_type == TaskType.FORWARD
-        assert task.target_chat_id == -1009876543210
-        assert task.delete_after_upload is True
+        assert task.params.get("target_chat_id") == -1009876543210
+        assert task.params.get("delete_after_upload") is True
 
     def test_create_upload_task(self):
         """测试创建上传任务。"""
@@ -92,11 +96,11 @@ class TestTaskModel:
             task_id="task_003",
             task_type=TaskType.UPLOAD,
             chat_id=-1001234567890,
-            file_paths=["/path/to/file1.mp4", "/path/to/file2.mp4"],
+            params={"file_paths": ["/path/to/file1.mp4", "/path/to/file2.mp4"]},
             status=TaskStatus.PENDING,
         )
         assert task.task_type == TaskType.UPLOAD
-        assert len(task.file_paths) == 2
+        assert len(task.params.get("file_paths")) == 2
 
     def test_task_progress_calculation(self):
         """测试任务进度计算。"""
@@ -107,10 +111,10 @@ class TestTaskModel:
             status=TaskStatus.PENDING,
         )
         task.items = [
-            TaskItem(item_id="1", status=ItemStatus.SUCCESS),
-            TaskItem(item_id="2", status=ItemStatus.SUCCESS),
-            TaskItem(item_id="3", status=ItemStatus.FAILED),
-            TaskItem(item_id="4", status=ItemStatus.PENDING),
+            TaskItem(id="1", task_id="", status=ItemStatus.SUCCESS),
+            TaskItem(id="2", task_id="", status=ItemStatus.SUCCESS),
+            TaskItem(id="3", task_id="", status=ItemStatus.FAILED),
+            TaskItem(id="4", task_id="", status=ItemStatus.PENDING),
         ]
         assert task.success_count == 2
         assert task.failed_count == 1
@@ -139,35 +143,36 @@ class TestTaskItemModel:
     def test_create_task_item(self):
         """测试创建子任务项。"""
         item = TaskItem(
-            item_id="msg_100",
-            message_id=100,
+            id="msg_100",
+            task_id="",
+            source_id=100,
             status=ItemStatus.PENDING,
             file_size=1024 * 1024,  # 1MB
         )
-        assert item.item_id == "msg_100"
-        assert item.message_id == 100
+        assert item.id == "msg_100"
+        assert item.source_id == 100
         assert item.status == ItemStatus.PENDING
         assert item.file_size == 1048576
-        assert item.error_reason is None
+        assert item.error_message is None
         assert item.retry_count == 0
 
     def test_task_item_mark_success(self):
         """测试标记子任务成功。"""
-        item = TaskItem(item_id="msg_100", status=ItemStatus.PENDING)
+        item = TaskItem(id="msg_100", task_id="", status=ItemStatus.PENDING)
         item.mark_success()
         assert item.status == ItemStatus.SUCCESS
 
     def test_task_item_mark_failed(self):
         """测试标记子任务失败。"""
-        item = TaskItem(item_id="msg_100", status=ItemStatus.RUNNING)
+        item = TaskItem(id="msg_100", task_id="", status=ItemStatus.RUNNING)
         item.mark_failed(reason="FloodWait")
         assert item.status == ItemStatus.FAILED
-        assert item.error_reason == "FloodWait"
+        assert item.error_message == "FloodWait"
         assert item.retry_count == 1
 
     def test_task_item_mark_skipped(self):
         """测试标记子任务跳过。"""
-        item = TaskItem(item_id="msg_100", status=ItemStatus.PENDING)
+        item = TaskItem(id="msg_100", task_id="", status=ItemStatus.PENDING)
         item.mark_skipped(reason="已存在")
         assert item.status == ItemStatus.SKIPPED
 
@@ -175,27 +180,37 @@ class TestTaskItemModel:
         """测试可重试判定。"""
         # FloodWait 可重试
         item1 = TaskItem(
-            item_id="msg_100", status=ItemStatus.FAILED, error_reason="FloodWait"
+            id="msg_100",
+            task_id="",
+            status=ItemStatus.FAILED,
+            error_message="FloodWait",
         )
         assert item1.can_retry() is True
 
         # 网络超时 可重试
         item2 = TaskItem(
-            item_id="msg_101", status=ItemStatus.FAILED, error_reason="TimeoutError"
+            id="msg_101",
+            task_id="",
+            status=ItemStatus.FAILED,
+            error_message="TimeoutError",
         )
         assert item2.can_retry() is True
 
         # 消息已删除 不可重试
         item3 = TaskItem(
-            item_id="msg_102",
+            id="msg_102",
+            task_id="",
             status=ItemStatus.FAILED,
-            error_reason="MESSAGE_ID_INVALID",
+            error_message="MESSAGE_ID_INVALID",
         )
         assert item3.can_retry() is False
 
         # 无权限 不可重试
         item4 = TaskItem(
-            item_id="msg_103", status=ItemStatus.FAILED, error_reason="CHAT_FORBIDDEN"
+            id="msg_103",
+            task_id="",
+            status=ItemStatus.FAILED,
+            error_message="CHAT_FORBIDDEN",
         )
         assert item4.can_retry() is False
 
@@ -214,7 +229,7 @@ class TestCreateTask:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(100, 200),
+            params={"message_range_start": 100, "message_range_end": 200},
         )
         assert task.task_type == TaskType.DOWNLOAD
         assert task.chat_id == -1001234567890
@@ -227,13 +242,16 @@ class TestCreateTask:
         task = await task_manager.create_task(
             task_type=TaskType.FORWARD,
             chat_id=-1001234567890,
-            target_chat_id=-1009876543210,
-            message_range=(1, 50),
-            delete_after_upload=True,
+            params={
+                "target_chat_id": -1009876543210,
+                "message_range_start": 1,
+                "message_range_end": 50,
+                "delete_after_upload": True,
+            },
         )
         assert task.task_type == TaskType.FORWARD
-        assert task.target_chat_id == -1009876543210
-        assert task.delete_after_upload is True
+        assert task.params.get("target_chat_id") == -1009876543210
+        assert task.params.get("delete_after_upload") is True
 
     @pytest.mark.asyncio
     async def test_create_upload_task(self, task_manager):
@@ -244,10 +262,10 @@ class TestCreateTask:
             task = await task_manager.create_task(
                 task_type=TaskType.UPLOAD,
                 chat_id=-1001234567890,
-                file_paths=[file_path],
+                params={"file_paths": [file_path]},
             )
             assert task.task_type == TaskType.UPLOAD
-            assert len(task.file_paths) == 1
+            assert len(task.params.get("file_paths")) == 1
 
     @pytest.mark.asyncio
     async def test_create_task_persisted(self, task_manager, db_path):
@@ -255,10 +273,10 @@ class TestCreateTask:
         await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         conn = sqlite3.connect(db_path)
-        cursor = conn.execute("SELECT COUNT(*) FROM tasks")
+        cursor = conn.execute("SELECT COUNT(*) FROM tm_tasks")
         count = cursor.fetchone()[0]
         conn.close()
         assert count == 1
@@ -278,7 +296,7 @@ class TestTaskStateTransitions:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         assert task.status == TaskStatus.PENDING
         await task_manager.start_task(task.task_id)
@@ -291,12 +309,12 @@ class TestTaskStateTransitions:
         task1 = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         task2 = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(11, 20),
+            params={"message_range_start": 11, "message_range_end": 20},
         )
         await task_manager.start_task(task1.task_id)
         await task_manager.start_task(task2.task_id)
@@ -304,7 +322,7 @@ class TestTaskStateTransitions:
         task3 = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(21, 30),
+            params={"message_range_start": 21, "message_range_end": 30},
         )
         await task_manager.start_task(task3.task_id)
         assert task3.status == TaskStatus.QUEUED
@@ -315,7 +333,7 @@ class TestTaskStateTransitions:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
         await task_manager.complete_task(task.task_id)
@@ -327,7 +345,7 @@ class TestTaskStateTransitions:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
         await task_manager.fail_task(task.task_id, reason="测试失败")
@@ -339,7 +357,7 @@ class TestTaskStateTransitions:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
         await task_manager.cancel_task(task.task_id)
@@ -351,7 +369,7 @@ class TestTaskStateTransitions:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
         await task_manager.complete_task(task.task_id)
@@ -364,19 +382,19 @@ class TestTaskStateTransitions:
         task1 = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         task2 = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(11, 20),
+            params={"message_range_start": 11, "message_range_end": 20},
         )
         await task_manager.start_task(task1.task_id)
         await task_manager.start_task(task2.task_id)
         task3 = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(21, 30),
+            params={"message_range_start": 21, "message_range_end": 30},
         )
         await task_manager.start_task(task3.task_id)
         assert task3.status == TaskStatus.QUEUED
@@ -398,7 +416,7 @@ class TestRetryLogic:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
         await task_manager.fail_task(task.task_id, reason="网络超时")
@@ -413,7 +431,7 @@ class TestRetryLogic:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
         await task_manager.cancel_task(task.task_id)
@@ -426,7 +444,7 @@ class TestRetryLogic:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
         with pytest.raises(InvalidStateTransition):
@@ -437,28 +455,28 @@ class TestRetryLogic:
         """测试子任务级别重试判定。"""
         # FloodWait 可重试
         item = TaskItem(
-            item_id="msg_100",
+            id="msg_100",
+            task_id="",
             status=ItemStatus.FAILED,
-            error_reason="FloodWait",
-            max_retries=3,
+            error_message="FloodWait",
         )
         assert item.can_retry() is True
 
         # 消息被删除 不可重试
         item2 = TaskItem(
-            item_id="msg_101",
+            id="msg_101",
+            task_id="",
             status=ItemStatus.FAILED,
-            error_reason="MESSAGE_ID_INVALID",
-            max_retries=3,
+            error_message="MESSAGE_ID_INVALID",
         )
         assert item2.can_retry() is False
 
         # 达到最大重试次数 不可重试
         item3 = TaskItem(
-            item_id="msg_102",
+            id="msg_102",
+            task_id="",
             status=ItemStatus.FAILED,
-            error_reason="TimeoutError",
-            max_retries=3,
+            error_message="TimeoutError",
         )
         item3.retry_count = 3
         assert item3.can_retry() is False
@@ -478,10 +496,13 @@ class TestResourceProtection:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
-            estimated_size=3 * 1024 * 1024 * 1024,  # 3GB
+            params={
+                "message_range_start": 1,
+                "message_range_end": 10,
+                "estimated_size": 3 * 1024 * 1024 * 1024,
+            },
         )
-        assert task.estimated_size == 3 * 1024 * 1024 * 1024
+        assert task.params.get("estimated_size") == 3 * 1024 * 1024 * 1024
         assert task_manager.check_size_threshold(3 * 1024 * 1024 * 1024) == "ok"
 
     @pytest.mark.asyncio
@@ -535,12 +556,12 @@ class TestTaskList:
         await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.create_task(
             task_type=TaskType.UPLOAD,
             chat_id=-1001234567890,
-            file_paths=["/tmp/test.mp4"],
+            params={"file_paths": ["/tmp/test.mp4"]},
         )
         tasks = await task_manager.list_tasks()
         assert len(tasks) == 2
@@ -551,12 +572,12 @@ class TestTaskList:
         task1 = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(11, 20),
+            params={"message_range_start": 11, "message_range_end": 20},
         )
         await task_manager.start_task(task1.task_id)
         await task_manager.complete_task(task1.task_id)
@@ -570,7 +591,7 @@ class TestTaskList:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         fetched = await task_manager.get_task(task.task_id)
         assert fetched is not None
@@ -597,11 +618,11 @@ class TestTaskItemManagement:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         items = [
-            TaskItem(item_id="msg_1", message_id=1, status=ItemStatus.PENDING),
-            TaskItem(item_id="msg_2", message_id=2, status=ItemStatus.PENDING),
+            TaskItem(id="msg_1", task_id="", source_id=1, status=ItemStatus.PENDING),
+            TaskItem(id="msg_2", task_id="", source_id=2, status=ItemStatus.PENDING),
         ]
         await task_manager.add_items(task.task_id, items)
         fetched_task = await task_manager.get_task(task.task_id)
@@ -613,9 +634,9 @@ class TestTaskItemManagement:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 5),
+            params={"message_range_start": 1, "message_range_end": 5},
         )
-        item = TaskItem(item_id="msg_1", message_id=1, status=ItemStatus.PENDING)
+        item = TaskItem(id="msg_1", task_id="", source_id=1, status=ItemStatus.PENDING)
         await task_manager.add_items(task.task_id, [item])
         await task_manager.update_item_status(task.task_id, "msg_1", ItemStatus.SUCCESS)
         fetched_task = await task_manager.get_task(task.task_id)
@@ -627,13 +648,13 @@ class TestTaskItemManagement:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 5),
+            params={"message_range_start": 1, "message_range_end": 5},
         )
         items = [
-            TaskItem(item_id="msg_1", message_id=1, status=ItemStatus.SUCCESS),
-            TaskItem(item_id="msg_2", message_id=2, status=ItemStatus.FAILED),
-            TaskItem(item_id="msg_3", message_id=3, status=ItemStatus.SUCCESS),
-            TaskItem(item_id="msg_4", message_id=4, status=ItemStatus.FAILED),
+            TaskItem(id="msg_1", task_id="", source_id=1, status=ItemStatus.SUCCESS),
+            TaskItem(id="msg_2", task_id="", source_id=2, status=ItemStatus.FAILED),
+            TaskItem(id="msg_3", task_id="", source_id=3, status=ItemStatus.SUCCESS),
+            TaskItem(id="msg_4", task_id="", source_id=4, status=ItemStatus.FAILED),
         ]
         await task_manager.add_items(task.task_id, items)
         failed = await task_manager.get_failed_items(task.task_id)
@@ -656,7 +677,7 @@ class TestPersistenceAndRecovery:
         task = await tm1.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
         task_id = task.task_id
         await tm1.start_task(task_id)
@@ -676,12 +697,12 @@ class TestPersistenceAndRecovery:
         task1 = await tm1.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(1, 10),
+            params={"message_range_start": 1, "message_range_end": 10},
         )
-        task2 = await tm1.create_task(
+        _ = await tm1.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            message_range=(11, 20),
+            params={"message_range_start": 11, "message_range_end": 20},
         )
         await tm1.start_task(task1.task_id)
         # task1 未完成，task2 未启动

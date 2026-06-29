@@ -5,15 +5,51 @@
 """
 
 import logging
+import re
 
 from fastapi import APIRouter, Depends, Query, Request
 
 from module.api.dependencies import get_cache_manager, require_token
 from module.api.responses import json_response, error_json_response
-from module.api.models.chat import ChatOut, MessageRangeRequest, MessageEstimateOut
+from module.api.models.chat import (
+    MessageRangeRequest,
+    MessageEstimateOut,
+    MessageEstimateRequest,
+    MessageAnalyzeRequest,
+)
 
 router = APIRouter(prefix="/chats", tags=["频道"])
 logger = logging.getLogger(__name__)
+
+_RE_NUMERIC_ID = re.compile(r"^\d+$")
+
+
+async def _resolve_chat_id(request: Request, channel_input: str):
+    """将用户输入的频道标识解析为数字 chat_id（复用 tasks.py 逻辑）。"""
+    text = (channel_input or "").strip()
+    if not text:
+        return None
+    if _RE_NUMERIC_ID.match(text):
+        return int(text)
+
+    # 获取 Telegram Client
+    try:
+        from module.integration import get_context
+        ctx = get_context()
+        client = ctx.client if ctx else None
+    except Exception:
+        client = None
+
+    if client is None:
+        logger.warning("Telegram Client 未连接，无法解析频道: %s", text)
+        return None
+
+    try:
+        chat = await client.get_chat(text)
+        return int(chat.id)
+    except Exception as e:
+        logger.warning("解析频道失败: %s → %s", text, e)
+        return None
 
 
 def _get_client(request: Request):
@@ -85,10 +121,9 @@ async def list_chats(
         return json_response(data=[])
 
 
-@router.post("/{chat_id}/messages/estimate")
+@router.post("/messages/estimate")
 async def estimate_messages(
-    chat_id: str,
-    body: MessageRangeRequest,
+    body: MessageEstimateRequest,
     request: Request,
     token: str = Depends(require_token),
     cache_manager=Depends(get_cache_manager),
@@ -98,13 +133,27 @@ async def estimate_messages(
     从 TelegramClient 获取消息历史进行估算。
     验证消息范围参数。支持缓存以减少 Telegram API 调用。
     """
-    # 验证消息范围参数
-    is_valid, errors = body.validate_for_mode()
+    # 解析 chat_id（支持 URL/@username/数字ID）
+    chat_id = await _resolve_chat_id(request, body.chat_id)
+    if chat_id is None:
+        return error_json_response("无法解析频道标识，请检查输入")
+
+    # 转换为 MessageRangeRequest 用于验证
+    range_req = MessageRangeRequest(
+        range_mode=body.range_mode,
+        min_id=body.min_id,
+        max_id=body.max_id,
+        start_date=body.start_date,
+        end_date=body.end_date,
+        message_list=body.message_list,
+        download_type=body.type_filters,
+    )
+    is_valid, errors = range_req.validate_for_mode()
     if not is_valid:
         return error_json_response("消息范围参数无效", "; ".join(errors))
 
     client = _get_client(request)
-    params = body.model_dump()  # 用于缓存键
+    params = body.model_dump(exclude={"chat_id"})  # 用于缓存键
 
     if cache_manager:
         async def fetch_estimate():
@@ -120,7 +169,7 @@ async def estimate_messages(
 
         try:
             result = await cache_manager.get_message_stats(
-                chat_id=chat_id,
+                chat_id=str(chat_id),
                 params=params,
                 estimator=fetch_estimate,
             )
@@ -148,10 +197,9 @@ async def estimate_messages(
         return error_json_response("估算失败", str(e))
 
 
-@router.post("/{chat_id}/messages/analyze")
+@router.post("/messages/analyze")
 async def analyze_messages(
-    chat_id: str,
-    body: MessageRangeRequest,
+    body: MessageAnalyzeRequest,
     request: Request,
     token: str = Depends(require_token),
 ):
@@ -159,6 +207,11 @@ async def analyze_messages(
 
     从 TelegramClient 遍历消息进行精确分析。
     """
+    # 解析 chat_id（支持 URL/@username/数字ID）
+    chat_id = await _resolve_chat_id(request, body.chat_id)
+    if chat_id is None:
+        return error_json_response("无法解析频道标识，请检查输入")
+
     client = _get_client(request)
     try:
         # 获取精确消息数

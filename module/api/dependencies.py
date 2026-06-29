@@ -95,8 +95,18 @@ def get_monitor(request: Request):
 
 
 def get_task_executor(request: Request):
-    """获取 TaskExecutor 实例。"""
-    return request.app.state.task_executor
+    """获取 TaskExecutor 实例。
+
+    TaskExecutor 由 downloader 在 client 启动后延迟初始化，
+    app.state.task_executor 可能为 None，需回退到 AppContext 获取。
+    """
+    executor = getattr(request.app.state, "task_executor", None)
+    if executor is not None:
+        return executor
+    from module.integration import get_context
+
+    ctx = get_context()
+    return ctx.task_executor if ctx else None
 
 
 def get_cache_manager():

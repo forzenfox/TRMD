@@ -15,8 +15,9 @@ import shutil
 import logging
 import asyncio
 from enum import Enum
-from typing import Optional
+from typing import Optional, Union
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 
 log = logging.getLogger("rich")
 
@@ -63,15 +64,29 @@ class ItemStatus(Enum):
 
 @dataclass
 class TaskItem:
-    """子任务项，对应一条消息或一个本地文件。"""
+    """子任务项，对应一条消息或一个本地文件（设计文档 §3.2）。"""
 
-    item_id: str
-    message_id: Optional[int] = None
+    id: str
+    task_id: str
     status: ItemStatus = ItemStatus.PENDING
+    source_id: Optional[Union[int, str]] = None
+    source_link: Optional[str] = None
+    target_id: Optional[Union[int, str]] = None
+    file_path: Optional[str] = None
     file_size: int = 0
-    error_reason: Optional[str] = None
+    file_sha256: Optional[str] = None
+    telegram_file_id: Optional[str] = None
+    file_unique_id: Optional[str] = None
+    uploaded_message_id: Optional[int] = None
     retry_count: int = 0
-    max_retries: int = 3
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    last_progress_bytes: int = 0
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    extra: dict = field(default_factory=dict)
+
+    # ---- 辅助方法 ----
 
     def mark_success(self):
         """标记为成功。"""
@@ -80,69 +95,64 @@ class TaskItem:
     def mark_failed(self, reason: str):
         """标记为失败。"""
         self.status = ItemStatus.FAILED
-        self.error_reason = reason
+        self.error_message = reason
         self.retry_count += 1
 
     def mark_skipped(self, reason: str):
         """标记为跳过。"""
         self.status = ItemStatus.SKIPPED
-        self.error_reason = reason
+        self.error_message = reason
 
     def can_retry(self) -> bool:
         """判断是否可重试。"""
-        if self.retry_count >= self.max_retries:
+        if self.retry_count >= 3:
             return False
-        # 不可重试的错误类型
         non_retryable = [
             "MESSAGE_ID_INVALID",
             "CHAT_FORBIDDEN",
             "USER_BANNED",
             "CHANNEL_PRIVATE",
         ]
-        if self.error_reason and any(nr in self.error_reason for nr in non_retryable):
+        if self.error_message and any(nr in self.error_message for nr in non_retryable):
             return False
         return True
 
 
-# 不可重试错误的判定函数
-_NON_RETRYABLE_KEYWORDS = [
-    "MESSAGE_ID_INVALID",
-    "CHAT_FORBIDDEN",
-    "USER_BANNED",
-    "CHANNEL_PRIVATE",
-]
-
-
 @dataclass
 class Task:
-    """任务，对应一个下载/转发/上传操作。"""
+    """任务，对应一个下载/转发/上传操作（设计文档 §3.1）。"""
 
     task_id: str
     task_type: TaskType
     chat_id: int
     status: TaskStatus = TaskStatus.PENDING
-    target_chat_id: Optional[int] = None
-    message_range: Optional[tuple] = None
-    file_paths: list = field(default_factory=list)
     items: list = field(default_factory=list)
-    estimated_size: int = 0
-    total_size: int = 0
+    total_size_bytes: int = 0
     retry_count: int = 0
-    max_retries: int = 3
-    delete_after_upload: bool = True
-    error_reason: Optional[str] = None
+    max_retry_count: int = 5
+    error_message: Optional[str] = None
     created_at: Optional[str] = None
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    params: dict = field(default_factory=dict)
+    total_items: int = 0
+    success_items: int = 0
+    failed_items: int = 0
+    skipped_items: int = 0
+    extra: dict = field(default_factory=dict)
 
     @property
     def success_count(self) -> int:
         """成功子任务数。"""
+        if self.success_items > 0 or self.completed_at:
+            return self.success_items
         return sum(1 for item in self.items if item.status == ItemStatus.SUCCESS)
 
     @property
     def failed_count(self) -> int:
         """失败子任务数。"""
+        if self.failed_items > 0 or self.completed_at:
+            return self.failed_items
         return sum(1 for item in self.items if item.status == ItemStatus.FAILED)
 
     @property
@@ -238,193 +248,306 @@ class TaskManager:
         self._init_db()
         self._load_tasks_from_db()
 
+    @contextmanager
+    def _db_connection(self):
+        """数据库连接上下文管理器。"""
+        if self._db_path == ":memory:":
+            yield None
+            return
+
+        conn = sqlite3.connect(self._db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
     def _init_db(self):
         """初始化数据库表。"""
-        conn = sqlite3.connect(self._db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY,
-                task_type TEXT NOT NULL,
-                chat_id INTEGER NOT NULL,
-                target_chat_id INTEGER,
-                message_range_start INTEGER,
-                message_range_end INTEGER,
-                file_paths TEXT,
-                status TEXT NOT NULL,
-                estimated_size INTEGER DEFAULT 0,
-                total_size INTEGER DEFAULT 0,
-                retry_count INTEGER DEFAULT 0,
-                max_retries INTEGER DEFAULT 3,
-                delete_after_upload INTEGER DEFAULT 1,
-                error_reason TEXT,
-                created_at TEXT,
-                started_at TEXT,
-                completed_at TEXT
+        if self._db_path == ":memory:":
+            return
+
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+
+            # tm_tasks 任务主表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tm_tasks (
+                    id TEXT PRIMARY KEY,
+                    task_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    params TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    total_items INTEGER DEFAULT 0,
+                    success_items INTEGER DEFAULT 0,
+                    failed_items INTEGER DEFAULT 0,
+                    skipped_items INTEGER DEFAULT 0,
+                    total_size_bytes INTEGER DEFAULT 0,
+                    error_message TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    max_retry_count INTEGER DEFAULT 5,
+                    extra TEXT DEFAULT '{}'
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_tasks_status ON tm_tasks(status)"
             )
-        """)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS task_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id TEXT NOT NULL,
-                item_id TEXT NOT NULL,
-                message_id INTEGER,
-                status TEXT NOT NULL,
-                file_size INTEGER DEFAULT 0,
-                error_reason TEXT,
-                retry_count INTEGER DEFAULT 0,
-                max_retries INTEGER DEFAULT 3,
-                FOREIGN KEY (task_id) REFERENCES tasks(task_id)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_tasks_created_at ON tm_tasks(created_at)"
             )
-        """)
-        conn.commit()
-        conn.close()
+
+            # tm_task_items 子任务表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tm_task_items (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    source_id TEXT,
+                    source_link TEXT,
+                    target_id TEXT,
+                    file_path TEXT,
+                    file_size INTEGER DEFAULT 0,
+                    file_sha256 TEXT,
+                    telegram_file_id TEXT,
+                    file_unique_id TEXT,
+                    uploaded_message_id INTEGER,
+                    retry_count INTEGER DEFAULT 0,
+                    error_code TEXT,
+                    error_message TEXT,
+                    last_progress_bytes INTEGER DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    extra TEXT DEFAULT '{}',
+                    FOREIGN KEY (task_id) REFERENCES tm_tasks(id)
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_task_items_task_id ON tm_task_items(task_id)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_task_items_status ON tm_task_items(status)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_task_items_sha256 ON tm_task_items(file_sha256)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_task_items_file_unique_id ON tm_task_items(file_unique_id)"
+            )
+
+            # tm_task_events 任务事件表
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tm_task_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id TEXT NOT NULL,
+                    item_id TEXT,
+                    event_type TEXT NOT NULL,
+                    message TEXT,
+                    payload TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tm_task_events_task_id ON tm_task_events(task_id)"
+            )
+
+            conn.commit()
 
     def _load_tasks_from_db(self):
         """从数据库加载未完成的任务。"""
         if self._db_path == ":memory:":
             return
-        conn = sqlite3.connect(self._db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM tasks")
-        rows = cursor.fetchall()
 
-        for row in rows:
-            task = self._row_to_task(row)
-            self._tasks[task.task_id] = task
-            # 加载子任务
-            cursor.execute(
-                "SELECT * FROM task_items WHERE task_id = ?", (task.task_id,)
-            )
-            item_rows = cursor.fetchall()
-            for item_row in item_rows:
-                task.items.append(self._row_to_item(item_row))
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tm_tasks")
+            rows = cursor.fetchall()
 
-        # 恢复排队中的任务到队列（防止重启后排队任务丢失）
-        queued_ids = [
-            t.task_id for t in self._tasks.values() if t.status == TaskStatus.QUEUED
-        ]
-        if queued_ids:
-            self._task_queue.extend(queued_ids)
-            log.info(f"已恢复 {len(queued_ids)} 个排队任务: {queued_ids}")
+            for row in rows:
+                task = self._row_to_task(row)
+                self._tasks[task.task_id] = task
+                # 加载子任务
+                cursor.execute(
+                    "SELECT * FROM tm_task_items WHERE task_id = ?", (task.task_id,)
+                )
+                item_rows = cursor.fetchall()
+                for item_row in item_rows:
+                    task.items.append(self._row_to_item(item_row))
 
-        conn.close()
+            # 恢复排队中的任务到队列（防止重启后排队任务丢失）
+            queued_ids = [
+                t.task_id for t in self._tasks.values() if t.status == TaskStatus.QUEUED
+            ]
+            if queued_ids:
+                self._task_queue.extend(queued_ids)
+                log.info(f"已恢复 {len(queued_ids)} 个排队任务: {queued_ids}")
 
     def _row_to_task(self, row) -> Task:
         """将数据库行转换为 Task。"""
         import json
 
-        file_paths = []
-        if row[6]:
-            try:
-                file_paths = json.loads(row[6])
-            except (json.JSONDecodeError, TypeError):
-                file_paths = []
+        # tm_tasks 列: 0=id, 1=task_type, 2=status, 3=params, 4=created_at,
+        #               5=started_at, 6=completed_at, 7=total_items, 8=success_items,
+        #               9=failed_items, 10=skipped_items, 11=total_size_bytes,
+        #               12=error_message, 13=retry_count, 14=max_retry_count, 15=extra
 
-        message_range = None
-        if row[4] is not None and row[5] is not None:
-            message_range = (row[4], row[5])
+        params = {}
+        if row[3]:
+            try:
+                params = json.loads(row[3])
+            except (json.JSONDecodeError, TypeError):
+                params = {}
+
+        extra = {}
+        if len(row) > 15 and row[15]:
+            try:
+                extra = json.loads(row[15])
+            except (json.JSONDecodeError, TypeError):
+                extra = {}
 
         return Task(
             task_id=row[0],
             task_type=TaskType(row[1]),
-            chat_id=row[2],
-            target_chat_id=row[3],
-            message_range=message_range,
-            file_paths=file_paths,
-            status=TaskStatus(row[7]),
-            estimated_size=row[8] or 0,
-            total_size=row[9] or 0,
-            retry_count=row[10] or 0,
-            max_retries=row[11] or 3,
-            delete_after_upload=bool(row[12]),
-            error_reason=row[13],
-            created_at=row[14],
-            started_at=row[15],
-            completed_at=row[16],
+            chat_id=params.get("chat_id", 0),
+            params=params,
+            status=TaskStatus(row[2]),
+            total_size_bytes=row[11] or 0,
+            retry_count=row[13] or 0,
+            max_retry_count=row[14] or 5,
+            error_message=row[12],
+            created_at=row[4],
+            started_at=row[5],
+            completed_at=row[6],
+            total_items=row[7] or 0,
+            success_items=row[8] or 0,
+            failed_items=row[9] or 0,
+            skipped_items=row[10] or 0,
+            extra=extra,
         )
 
     def _row_to_item(self, row) -> TaskItem:
         """将数据库行转换为 TaskItem。"""
+        import json
+
+        # tm_task_items 列: 0=id, 1=task_id, 2=status, 3=source_id, 4=source_link,
+        #                   5=target_id, 6=file_path, 7=file_size, 8=file_sha256,
+        #                   9=telegram_file_id, 10=file_unique_id, 11=uploaded_message_id,
+        #                   12=retry_count, 13=error_code, 14=error_message,
+        #                   15=last_progress_bytes, 16=created_at, 17=updated_at, 18=extra
+
+        extra = {}
+        if len(row) > 18 and row[18]:
+            try:
+                extra = json.loads(row[18])
+            except (json.JSONDecodeError, TypeError):
+                extra = {}
+
         return TaskItem(
-            item_id=row[2],
-            message_id=row[3],
-            status=ItemStatus(row[4]),
-            file_size=row[5] or 0,
-            error_reason=row[6],
-            retry_count=row[7] or 0,
-            max_retries=row[8] or 3,
+            id=row[0],
+            task_id=row[1],
+            status=ItemStatus(row[2]),
+            source_id=row[3],
+            source_link=row[4],
+            target_id=row[5],
+            file_path=row[6],
+            file_size=row[7] or 0,
+            file_sha256=row[8],
+            telegram_file_id=row[9],
+            file_unique_id=row[10],
+            uploaded_message_id=row[11],
+            retry_count=row[12] or 0,
+            error_code=row[13],
+            error_message=row[14],
+            last_progress_bytes=row[15] or 0,
+            created_at=row[16],
+            updated_at=row[17],
+            extra=extra,
         )
 
     def _save_task(self, task: Task):
-        """保存任务到数据库。"""
+        """保存任务到数据库（tm_tasks 表）。"""
         if self._db_path == ":memory:":
             return
         import json
 
-        conn = sqlite3.connect(self._db_path)
-        cursor = conn.cursor()
-        file_paths_json = json.dumps(task.file_paths) if task.file_paths else None
-        msg_start = task.message_range[0] if task.message_range else None
-        msg_end = task.message_range[1] if task.message_range else None
+        task.params["chat_id"] = task.chat_id
 
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO tasks
-            (task_id, task_type, chat_id, target_chat_id, message_range_start,
-             message_range_end, file_paths, status, estimated_size, total_size,
-             retry_count, max_retries, delete_after_upload, error_reason,
-             created_at, started_at, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                task.task_id,
-                task.task_type.value,
-                task.chat_id,
-                task.target_chat_id,
-                msg_start,
-                msg_end,
-                file_paths_json,
-                task.status.value,
-                task.estimated_size,
-                task.total_size,
-                task.retry_count,
-                task.max_retries,
-                int(task.delete_after_upload),
-                task.error_reason,
-                task.created_at,
-                task.started_at,
-                task.completed_at,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            params_json = json.dumps(task.params) if task.params else "{}"
+            extra_json = json.dumps(task.extra) if task.extra else "{}"
+
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO tm_tasks
+                (id, task_type, status, params, created_at, started_at, completed_at,
+                 total_items, success_items, failed_items, skipped_items,
+                 total_size_bytes, error_message, retry_count, max_retry_count, extra)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    task.task_id,
+                    task.task_type.value,
+                    task.status.value,
+                    params_json,
+                    task.created_at,
+                    task.started_at,
+                    task.completed_at,
+                    len(task.items),
+                    task.success_count,
+                    task.failed_count,
+                    task.skipped_items,
+                    task.total_size_bytes,
+                    task.error_message,
+                    task.retry_count,
+                    task.max_retry_count,
+                    extra_json,
+                ),
+            )
+            conn.commit()
 
     def _save_item(self, task_id: str, item: TaskItem):
-        """保存子任务到数据库。"""
+        """保存子任务到数据库（tm_task_items 表）。"""
         if self._db_path == ":memory:":
             return
-        conn = sqlite3.connect(self._db_path)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT OR REPLACE INTO task_items
-            (task_id, item_id, message_id, status, file_size, error_reason, retry_count, max_retries)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-            (
-                task_id,
-                item.item_id,
-                item.message_id,
-                item.status.value,
-                item.file_size,
-                item.error_reason,
-                item.retry_count,
-                item.max_retries,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        import json
+
+        extra_json = json.dumps(item.extra) if item.extra else "{}"
+
+        with self._db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO tm_task_items
+                (id, task_id, status, source_id, source_link, target_id, file_path,
+                 file_size, file_sha256, telegram_file_id, file_unique_id,
+                 uploaded_message_id, retry_count, error_code, error_message,
+                 last_progress_bytes, created_at, updated_at, extra)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    item.id,
+                    task_id,
+                    item.status.value,
+                    str(item.source_id) if item.source_id is not None else None,
+                    item.source_link,
+                    str(item.target_id) if item.target_id is not None else None,
+                    item.file_path,
+                    item.file_size,
+                    item.file_sha256,
+                    item.telegram_file_id,
+                    item.file_unique_id,
+                    item.uploaded_message_id,
+                    item.retry_count,
+                    item.error_code,
+                    item.error_message,
+                    item.last_progress_bytes,
+                    item.created_at,
+                    item.updated_at,
+                    extra_json,
+                ),
+            )
+            conn.commit()
 
     def _validate_transition(self, current: TaskStatus, target: TaskStatus):
         """验证状态转换是否合法。"""
@@ -448,11 +571,7 @@ class TaskManager:
         self,
         task_type: TaskType,
         chat_id: int,
-        target_chat_id: Optional[int] = None,
-        message_range: Optional[tuple] = None,
-        file_paths: Optional[list] = None,
-        estimated_size: int = 0,
-        delete_after_upload: bool = True,
+        params: Optional[dict] = None,
     ) -> Task:
         """创建任务。"""
         from datetime import datetime
@@ -462,12 +581,8 @@ class TaskManager:
             task_id=task_id,
             task_type=task_type,
             chat_id=chat_id,
-            target_chat_id=target_chat_id,
-            message_range=message_range,
-            file_paths=file_paths or [],
-            estimated_size=estimated_size,
-            delete_after_upload=delete_after_upload,
-            max_retries=self._max_retries,
+            params=params or {},
+            max_retry_count=self._max_retries,
             created_at=datetime.now().isoformat(),
         )
         async with self._lock:
@@ -530,7 +645,7 @@ class TaskManager:
 
             self._validate_transition(task.status, TaskStatus.FAILED)
             task.status = TaskStatus.FAILED
-            task.error_reason = reason
+            task.error_message = reason
             self._save_task(task)
             log.warning(f"任务失败: {task_id} - {reason}")
 
@@ -564,7 +679,7 @@ class TaskManager:
             self._validate_transition(task.status, TaskStatus.PENDING)
             task.status = TaskStatus.PENDING
             task.retry_count += 1
-            task.error_reason = None
+            task.error_message = None
             task.started_at = None
             task.completed_at = None
 
@@ -572,7 +687,7 @@ class TaskManager:
             for item in task.items:
                 if item.status == ItemStatus.FAILED and item.can_retry():
                     item.status = ItemStatus.PENDING
-                    item.error_reason = None
+                    item.error_message = None
                     self._save_item(task_id, item)
 
             self._save_task(task)
@@ -595,20 +710,28 @@ class TaskManager:
             self._tasks.pop(task_id, None)
             # 从数据库删除
             if self._db_path != ":memory:":
-                conn = sqlite3.connect(self._db_path)
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM task_items WHERE task_id = ?", (task_id,))
-                cursor.execute("DELETE FROM tasks WHERE task_id = ?", (task_id,))
-                conn.commit()
-                conn.close()
+                with self._db_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "DELETE FROM tm_task_items WHERE task_id = ?", (task_id,)
+                    )
+                    cursor.execute("DELETE FROM tm_tasks WHERE id = ?", (task_id,))
+                    conn.commit()
             log.info(f"任务已删除: {task_id}")
 
     async def add_items(self, task_id: str, items: list[TaskItem]):
         """添加子任务项。"""
+        from datetime import datetime
+
+        now = datetime.now().isoformat()
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 raise TaskNotFoundError(f"任务不存在: {task_id}")
+            for item in items:
+                item.task_id = task_id
+                item.created_at = now
+                item.updated_at = now
             task.items.extend(items)
             for item in items:
                 self._save_item(task_id, item)
@@ -622,18 +745,37 @@ class TaskManager:
         error_reason: Optional[str] = None,
     ):
         """更新子任务状态。"""
+        from datetime import datetime
+
+        now = datetime.now().isoformat()
         async with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 raise TaskNotFoundError(f"任务不存在: {task_id}")
             for item in task.items:
-                if item.item_id == item_id:
+                if item.id == item_id:
                     item.status = status
+                    item.updated_at = now
                     if error_reason:
-                        item.error_reason = error_reason
+                        item.error_message = error_reason
                     self._save_item(task_id, item)
                     self._save_task(task)
                     break
+
+    async def update_file_paths(self, task_id: str, file_paths: list[str]):
+        """更新任务的已下载文件路径列表。
+
+        Args:
+            task_id: 任务 ID
+            file_paths: 已下载文件的完整路径列表
+        """
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                raise TaskNotFoundError(f"任务不存在: {task_id}")
+            task.params["file_paths"] = file_paths
+            self._save_task(task)
+            log.info(f"任务 {task_id} 文件路径已更新: {len(file_paths)} 个文件")
 
     async def get_failed_items(self, task_id: str) -> list[TaskItem]:
         """获取失败的子任务。"""
@@ -659,7 +801,7 @@ class TaskManager:
             return "warning"
         return "ok"
 
-    def check_disk_space(self) -> bool:
+    def check_disk_space(self, estimated_size: int = 0) -> bool:
         """检查磁盘空间是否充足。
 
         返回 True 表示空间充足，False 表示空间不足。
@@ -669,7 +811,8 @@ class TaskManager:
             project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
             usage = shutil.disk_usage(project_dir)
             free_gb = usage.free / (1024 * 1024 * 1024)
-            return free_gb >= self._min_disk_space_gb
+            estimated_gb = estimated_size / (1024 * 1024 * 1024)
+            return free_gb >= (self._min_disk_space_gb + estimated_gb)
         except OSError:
             log.warning("无法获取磁盘使用信息")
             return True  # 无法获取时默认允许

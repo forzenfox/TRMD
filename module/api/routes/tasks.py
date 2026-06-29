@@ -40,6 +40,7 @@ def _get_client(request: Request):
     """获取 Telegram Client 实例（从 AppContext 单例读取）。"""
     try:
         from module.integration import get_context
+
         ctx = get_context()
         return ctx.client if ctx else None
     except Exception:
@@ -84,10 +85,12 @@ def _task_to_out(task: Task) -> TaskOut:
         progress=task.progress,
         created_at=task.created_at,
         updated_at=task.started_at or task.completed_at or task.created_at,
-        message=task.error_reason,
+        message=task.error_message,
         success_count=task.success_count,
         failed_count=task.failed_count,
         total_count=len(task.items),
+        file_paths=task.params.get("file_paths", []),
+        params=task.params,
     )
 
 
@@ -158,12 +161,13 @@ async def create_task(
     task_manager: TaskManager = Depends(get_task_manager),
 ):
     """创建任务。"""
-    # 检查磁盘空间
-    if not task_manager.check_disk_space():
-        raise InsufficientDiskSpace()
-
     # 检查任务大小（如果 params 中有估算大小）
     estimated_size = body.params.get("estimated_size", 0)
+
+    # 检查磁盘空间
+    if not task_manager.check_disk_space(estimated_size):
+        raise InsufficientDiskSpace()
+
     size_result = task_manager.check_size_threshold(estimated_size)
     if size_result == "exceeded":
         raise TaskSizeExceeded()
@@ -191,13 +195,17 @@ async def create_task(
     chat_id = await _resolve_chat_id(client, params.get("chat_id", ""))
     if chat_id is None or chat_id == 0:
         return error_json_response(
-            code=400, message="无效的源频道，请输入频道链接、@username 或数字 ID", status_code=400
+            code=400,
+            message="无效的源频道，请输入频道链接、@username 或数字 ID",
+            status_code=400,
         )
 
     # 解析目标频道（转发任务需要）
     target_chat_id = await _resolve_chat_id(client, params.get("forward_target"))
     # forward 任务必须提供有效目标频道
-    if task_type == TaskType.FORWARD and (target_chat_id is None or target_chat_id == 0):
+    if task_type == TaskType.FORWARD and (
+        target_chat_id is None or target_chat_id == 0
+    ):
         return error_json_response(
             code=400, message="转发任务需要有效的目标频道", status_code=400
         )
@@ -214,15 +222,31 @@ async def create_task(
     file_paths = params.get("file_paths", [])
     delete_after = params.get("delete_after_upload", True)
 
+    # 构建任务扩展参数（用于持久化存储，供 UI 展示和执行参考）
+    task_params = {
+        "chat_id": chat_id,
+        "target_chat_id": target_chat_id,
+        "message_range_start": message_range[0] if message_range else None,
+        "message_range_end": message_range[1] if message_range else None,
+        "file_paths": file_paths,
+        "delete_after_upload": delete_after,
+        "estimated_size": estimated_size,
+        "range_mode": range_mode,
+        "filter_types": params.get("filter_types", []),
+        "min_id": params.get("min_id"),
+        "max_id": params.get("max_id"),
+        "date_start": params.get("date_start"),
+        "date_end": params.get("date_end"),
+        "message_ids": params.get("message_ids", []),
+    }
+    # 移除 None 值和空列表，保持干净
+    task_params = {k: v for k, v in task_params.items() if v is not None and v != []}
+
     # 创建任务
     task = await task_manager.create_task(
         task_type=task_type,
         chat_id=chat_id,
-        target_chat_id=target_chat_id,
-        message_range=message_range,
-        file_paths=file_paths,
-        estimated_size=estimated_size,
-        delete_after_upload=delete_after,
+        params=task_params,
     )
 
     return json_response(data=_task_to_out(task).model_dump(), status_code=201)
@@ -234,7 +258,7 @@ async def start_task(
     request: Request,
     token: str = Depends(require_token),
     task_manager: TaskManager = Depends(get_task_manager),
-    executor = Depends(get_task_executor),
+    executor=Depends(get_task_executor),
 ):
     """开始/排队任务，并触发 TaskExecutor 异步执行。"""
     try:
@@ -331,24 +355,28 @@ async def get_task_logs(
         raise TaskNotFoundError(task_id)
 
     # 获取日志数据（Task 类当前无 logs 字段，返回空列表）
-    logs = getattr(task, 'logs', [])
+    logs = getattr(task, "logs", [])
 
     # 收集子任务的错误信息作为补充日志
     item_logs = []
     for item in task.items:
-        if item.error_reason:
-            item_logs.append({
-                "item_id": item.item_id,
-                "status": item.status.value,
-                "error": item.error_reason,
-            })
+        if item.error_message:
+            item_logs.append(
+                {
+                    "item_id": item.id,
+                    "status": item.status.value,
+                    "error": item.error_message,
+                }
+            )
 
-    return json_response(data={
-        "task_id": task_id,
-        "logs": logs,
-        "item_logs": item_logs,
-        "error_reason": task.error_reason,
-        "status": task.status.value,
-        "total_logs": len(logs),
-        "total_item_errors": len(item_logs),
-    })
+    return json_response(
+        data={
+            "task_id": task_id,
+            "logs": logs,
+            "item_logs": item_logs,
+            "error_message": task.error_message,
+            "status": task.status.value,
+            "total_logs": len(logs),
+            "total_item_errors": len(item_logs),
+        }
+    )

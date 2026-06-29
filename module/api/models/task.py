@@ -36,3 +36,4 @@ class TaskOut(BaseModel):
     success_count: int = 0
     failed_count: int = 0
     total_count: int = 0
+    params: dict = Field(default_factory=dict)

@@ -112,6 +112,25 @@ class MessageRangeRequest(BaseModel):
         return []
 
 
+class MessageEstimateRequest(BaseModel):
+    """消息估算请求体（包含 chat_id）。"""
+
+    chat_id: str  # 用户原始输入（URL/@username/数字ID）
+    range_mode: Literal["id_range", "date_range", "multiple_ids", "all"] = "all"
+    min_id: Optional[int] = None
+    max_id: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    message_list: Optional[list[str]] = None
+    type_filters: Optional[list[str]] = None
+
+
+class MessageAnalyzeRequest(MessageEstimateRequest):
+    """消息精确分析请求体（复用估算请求字段）。"""
+
+    pass
+
+
 class MessageEstimateOut(BaseModel):
     """消息估算响应数据。"""
 

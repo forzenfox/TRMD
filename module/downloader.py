@@ -464,9 +464,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                 u_s: str = "禁用" if param else "开启"
                 u_p: str = ""
                 if _param == "delete":
-                    u_p: str = (
-                        f'遇到"受限转发"时,下载后上传并"删除上传完成的本地文件"的行为已{u_s}。'
-                    )
+                    u_p: str = f'遇到"受限转发"时,下载后上传并"删除上传完成的本地文件"的行为已{u_s}。'
                 elif _param == "download_upload":
                     u_p: str = f'遇到"受限转发"时,下载后上传已{u_s}。'
                 console.log(u_p, style="#FF4689")
@@ -810,9 +808,9 @@ class TelegramRestrictedMediaDownloader(Bot):
                 current_index = step_sequence.index(current_step)
                 next_index = (current_index + 1) % len(step_sequence)
                 new_step = step_sequence[next_index]
-                self.download_chat_filter[chat_id]["date_range"][
-                    "adjust_step"
-                ] = new_step
+                self.download_chat_filter[chat_id]["date_range"]["adjust_step"] = (
+                    new_step
+                )
                 current_date = datetime.datetime.fromtimestamp(
                     self.download_chat_filter[chat_id]["date_range"][f"{dtype}_date"]
                 ).strftime("%Y-%m-%d %H:%M:%S")
@@ -1522,31 +1520,31 @@ class TelegramRestrictedMediaDownloader(Bot):
                     link, self.listen_download_chat, self.listen_download
                 ):
                     if not last_message:
-                        last_message: Union[pyrogram.types.Message, str, None] = (
-                            await client.send_message(
-                                chat_id=message.from_user.id,
-                                reply_parameters=ReplyParameters(message_id=message.id),
-                                link_preview_options=LINK_PREVIEW_OPTIONS,
-                                text="✅新增`监听下载频道`频道:\n",
-                            )
+                        last_message: Union[
+                            pyrogram.types.Message, str, None
+                        ] = await client.send_message(
+                            chat_id=message.from_user.id,
+                            reply_parameters=ReplyParameters(message_id=message.id),
+                            link_preview_options=LINK_PREVIEW_OPTIONS,
+                            text="✅新增`监听下载频道`频道:\n",
                         )
-                    last_message: Union[pyrogram.types.Message, None] = (
-                        await self.safe_edit_message(
-                            client=client,
-                            message=message,
-                            last_message_id=last_message.id,
-                            text=safe_message(f"{last_message.text}\n{link}"),
-                            reply_markup=InlineKeyboardMarkup(
+                    last_message: Union[
+                        pyrogram.types.Message, None
+                    ] = await self.safe_edit_message(
+                        client=client,
+                        message=message,
+                        last_message_id=last_message.id,
+                        text=safe_message(f"{last_message.text}\n{link}"),
+                        reply_markup=InlineKeyboardMarkup(
+                            [
                                 [
-                                    [
-                                        InlineKeyboardButton(
-                                            BotButton.LOOKUP_LISTEN_INFO,
-                                            callback_data=BotCallbackText.LOOKUP_LISTEN_INFO,
-                                        )
-                                    ]
+                                    InlineKeyboardButton(
+                                        BotButton.LOOKUP_LISTEN_INFO,
+                                        callback_data=BotCallbackText.LOOKUP_LISTEN_INFO,
+                                    )
                                 ]
-                            ),
-                        )
+                            ]
+                        ),
                     )
                     p = f'已新增监听下载,频道链接:"{link}"。'
                     console.log(p, style="#FF4689")
@@ -2370,6 +2368,131 @@ class TelegramRestrictedMediaDownloader(Bot):
             self.pb.progress.remove_task(task_id=task_id)
         return link, file_name
 
+    async def download_range(
+        self,
+        chat_id: int,
+        start_id: int = 1,
+        end_id: int = -1,
+        task_id: str = None,
+        progress_callback: Callable = None,
+    ) -> list[str]:
+        """按消息 ID 范围下载媒体文件（Web API 任务执行入口）。
+
+        Args:
+            chat_id: 频道/聊天 ID。
+            start_id: 起始消息 ID。
+            end_id: 结束消息 ID，-1 表示不限。
+            task_id: 任务 ID，用于进度回调。
+            progress_callback: 进度回调函数，签名 (task_id, item_id, status, error=None)。
+
+        Returns:
+            成功下载的文件路径列表。
+        """
+        from module.core.task_manager import ItemStatus
+
+        # 支持的媒体类型列表
+        supported_types = [
+            attr
+            for attr in dir(DownloadType())
+            if not attr.startswith("_") and getattr(DownloadType(), attr)
+        ]
+
+        downloaded_files: list[str] = []
+
+        for msg_id in range(start_id, end_id + 1) if end_id > 0 else [start_id]:
+            item_id = f"{task_id}_msg_{msg_id}" if task_id else f"msg_{msg_id}"
+
+            try:
+                # 获取消息
+                message = await self.app.client.get_messages(chat_id, msg_id)
+
+                if not message:
+                    if progress_callback:
+                        await progress_callback(
+                            task_id, item_id, ItemStatus.FAILED, "MESSAGE_NOT_FOUND"
+                        )
+                    continue
+
+                # 检查是否有支持的媒体类型
+                valid_dtype = next(
+                    (t for t in supported_types if getattr(message, t, None)), None
+                )
+
+                if not valid_dtype or not message.media:
+                    if progress_callback:
+                        await progress_callback(
+                            task_id, item_id, ItemStatus.SKIPPED, "无媒体内容"
+                        )
+                    continue
+
+                # 通知开始下载
+                if progress_callback:
+                    await progress_callback(task_id, item_id, ItemStatus.RUNNING)
+
+                # 获取保存路径
+                temp_file_path = self.app.get_temp_file_path(message, valid_dtype)
+                file_name = split_path(temp_file_path).get("file_name", f"{msg_id}.dat")
+                save_directory = self.env_save_directory(message)
+                os.makedirs(save_directory, exist_ok=True)
+                final_path = os.path.join(save_directory, file_name)
+
+                # 检查文件是否已存在（去重）
+                media_obj = getattr(message, valid_dtype)
+                sever_file_size = getattr(media_obj, "file_size", 0) or 0
+
+                if is_file_duplicate(
+                    save_directory=save_directory, sever_file_size=sever_file_size
+                ):
+                    log.info(f"文件已存在，跳过: {file_name}")
+                    downloaded_files.append(final_path)
+                    if progress_callback:
+                        await progress_callback(task_id, item_id, ItemStatus.SUCCESS)
+                    continue
+
+                # 执行下载
+                downloaded = 0
+                chunk_size = 1024 * 1024
+                temp_path = f"{final_path}.temp"
+                mode = "wb"
+
+                with open(file=temp_path, mode=mode) as f:
+                    while True:
+                        try:
+                            async for chunk in self.app.client.stream_media(
+                                message=message, offset=downloaded // chunk_size
+                            ):
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                            break
+                        except FileReferenceExpired:
+                            log.warning(
+                                f"文件引用已过期，重新获取消息: msg_id={msg_id}"
+                            )
+                            message = await self.app.client.get_messages(
+                                chat_id=chat_id, message_ids=msg_id
+                            )
+                        except (FloodWait, FloodPremiumWait) as e:
+                            log.warning(f"下载限流，等待 {e.value} 秒")
+                            await asyncio.sleep(e.value)
+
+                # 移动到最终路径
+                result = safe_replace(origin_file=temp_path, overwrite_file=final_path)
+                if result.get("e_code"):
+                    log.warning(result["e_code"])
+
+                log.info(f"下载完成: {file_name} ({downloaded} bytes)")
+                downloaded_files.append(final_path)
+
+                if progress_callback:
+                    await progress_callback(task_id, item_id, ItemStatus.SUCCESS)
+
+            except Exception as e:
+                log.error(f"下载失败: msg_id={msg_id}, error={e}")
+                if progress_callback:
+                    await progress_callback(task_id, item_id, ItemStatus.FAILED, str(e))
+
+        return downloaded_files
+
     async def download_chat(
         self, chat_id: str, callback_query: pyrogram.types.CallbackQuery
     ) -> Union[list, None]:
@@ -2859,6 +2982,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         # 统一注入 User Client 到 AppContext（供 Web API 立即可用）
         try:
             from module.integration import get_context
+
             _ctx = get_context()
             if _ctx:
                 _ctx.client = self.app.client
@@ -2868,6 +2992,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         # 启动仓库自动同步（延迟初始化，client 已就绪）
         try:
             from module.integration import get_context
+
             _ctx = get_context()
             if _ctx and hasattr(_ctx, "repository_db") and _ctx.repository_sync is None:
                 _ctx.init_repository_sync(self.app.client)

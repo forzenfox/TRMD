@@ -76,7 +76,7 @@ class RequestLogMiddleware:
         request = Request(scope)
         await self.app(scope, receive, send)
         # 注意：在 __call__ 中无法直接获取 Response，这里仅记录请求信息
-        logger.info("%s %s", request.method, request.url.path)
+        logger.debug("%s %s", request.method, request.url.path)
 
 
 class SecurityHeadersMiddleware:

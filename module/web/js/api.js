@@ -260,11 +260,26 @@ class ApiClient {
 
   /**
    * 估算消息数量
-   * @param {string} chatId - 频道 ID
+   * @param {string} chatId - 频道 ID（URL/@username/数字ID）
    * @param {object} payload - 估算参数
    */
   async estimateMessages(chatId, payload) {
-    return this.request('POST', `/api/chats/${chatId}/messages/estimate`, payload);
+    return this.request('POST', '/api/chats/messages/estimate', {
+      chat_id: chatId,
+      ...payload,
+    });
+  }
+
+  /**
+   * 精确分析消息
+   * @param {string} chatId - 频道 ID（URL/@username/数字ID）
+   * @param {object} payload - 分析参数
+   */
+  async analyzeMessages(chatId, payload) {
+    return this.request('POST', '/api/chats/messages/analyze', {
+      chat_id: chatId,
+      ...payload,
+    });
   }
 
   // ==================== 配置相关 API ====================

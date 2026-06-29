@@ -506,7 +506,7 @@
       >
         <div class="modal-header">
           <h3 class="modal-title text-white">创建新任务</h3>
-          <button @click="taskManager.closeCreateModal()" class="text-slate-400 hover:text-white">
+          <button @click="closeCreateModal()" class="text-slate-400 hover:text-white">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
@@ -659,7 +659,7 @@
           </form>
         </div>
         <div class="modal-footer">
-          <button @click="taskManager.closeCreateModal()" class="btn btn-secondary">
+          <button @click="closeCreateModal()" class="btn btn-secondary">
             取消
           </button>
           <button @click="handleCreateTask()" class="btn btn-primary">
@@ -672,15 +672,15 @@
     <!-- P0-2: 资源保护告警弹窗 -->
     <div
       x-show="taskManager.showResourceAlert"
-      x-transition.enter="transition ease-out duration-300"
-      x-transition.enter-start="opacity-0"
-      x-transition.enter-end="opacity-100"
-      x-transition.leave="transition ease-in duration-200"
-      x-transition.leave-start="opacity-100"
-      x-transition.leave-end="opacity-0"
+      x-transition:enter="transition ease-out duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-200"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
       class="fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-50"
     >
-      <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6 border border-slate-700
+      <div class="bg-slate-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-6 border border-slate-700"
             x-transition:enter="transition ease-out duration-300"
             x-transition:enter-start="opacity-0 scale-95"
             x-transition:enter-end="opacity-100 scale-100">
@@ -750,17 +750,17 @@
   </div>
 
   <!-- 通用确认对话框组件 (P2-3: 替代原生 confirm) -->
-  <div x-data="confirmDialog"
-       x-show="confirmDialog.visible"
-       x-transition.enter="transition ease-out duration-300"
-       x-transition.enter-start="opacity-0"
-       x-transition.enter-end="opacity-100"
-       x-transition.leave="transition ease-in duration-200"
-       x-transition.leave-start="opacity-100"
-       x-transition.leave-end="opacity-0"
+  <div x-data="{ dialog: window.confirmDialog }"
+       x-show="dialog.visible"
+       x-transition:enter="transition ease-out duration-300"
+       x-transition:enter-start="opacity-0"
+       x-transition:enter-end="opacity-100"
+       x-transition:leave="transition ease-in duration-200"
+       x-transition:leave-start="opacity-100"
+       x-transition:leave-end="opacity-0"
        class="fixed inset-0 z-[70] flex items-center justify-center bg-black bg-opacity-50">
 
-    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6
+    <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6"
           x-transition:enter="transition ease-out duration-300"
           x-transition:enter-start="opacity-0 scale-95"
           x-transition:enter-end="opacity-100 scale-100">
@@ -768,12 +768,12 @@
       <!-- 标题栏 -->
       <div class="flex items-center mb-4">
         <span class="text-2xl mr-3"
-              x-text="confirmDialog.icons[confirmDialog.type] || ''"></span>
+              x-text="dialog.icons[dialog.type] || ''"></span>
         <h3 class="text-lg font-semibold text-gray-900 flex-1"
-            x-text="confirmDialog.title"></h3>
+            x-text="dialog.title"></h3>
 
         <!-- 关闭按钮 -->
-        <button @click="confirmDialog.onCancel()"
+        <button @click="dialog.onCancel()"
                 class="text-gray-400 hover:text-gray-600 transition-colors">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
@@ -783,36 +783,36 @@
 
       <!-- 消息内容（支持 HTML） -->
       <div class="mb-6 text-sm text-gray-600 whitespace-pre-wrap"
-           x-html="confirmDialog.message">
+           x-html="dialog.message">
       </div>
 
       <!-- 操作按钮 -->
       <div class="flex justify-end space-x-3">
         <!-- 取消按钮 -->
-        <button x-show="confirmDialog.showCancel"
-                @click="confirmDialog.onCancel()"
+        <button x-show="dialog.showCancel"
+                @click="dialog.onCancel()"
                 class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium 
                        text-gray-700 bg-white hover:bg-gray-50 focus:outline-none 
                        focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
-          <span x-text="confirmDialog.cancelText"></span>
+          <span x-text="dialog.cancelText"></span>
         </button>
 
         <!-- 确认按钮（根据 type 变色） -->
-        <template x-if="confirmDialog.type === 'danger'">
-          <button @click="confirmDialog.onConfirm()"
+        <template x-if="dialog.type === 'danger'">
+          <button @click="dialog.onConfirm()"
                   class="px-4 py-2 border border-transparent rounded-md text-sm font-medium 
                          text-white bg-red-600 hover:bg-red-700 focus:outline-none 
                          focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors">
-            <span x-text="confirmDialog.confirmText"></span>
+            <span x-text="dialog.confirmText"></span>
           </button>
         </template>
 
-        <template x-if="confirmDialog.type !== 'danger'">
-          <button @click="confirmDialog.onConfirm()"
+        <template x-if="dialog.type !== 'danger'">
+          <button @click="dialog.onConfirm()"
                   class="px-4 py-2 border border-transparent rounded-md text-sm font-medium 
                          text-white bg-blue-600 hover:bg-blue-700 focus:outline-none 
                          focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
-            <span x-text="confirmDialog.confirmText"></span>
+            <span x-text="dialog.confirmText"></span>
           </button>
         </template>
       </div>
@@ -864,8 +864,31 @@
           // 初始加载任务到 Alpine 本地数据
           await this.refreshTasks();
 
+          // 解析 URL 参数，自动打开创建弹窗
+          this._handleUrlParams();
+
           // 启动智能轮询（替代固定5秒轮询）
           taskManager.startSmartPolling();
+        },
+
+        /**
+         * 处理 URL 参数，支持从 Dashboard 快捷操作跳转
+         * 支持参数: ?action=create&type=download|forward|upload
+         */
+        _handleUrlParams() {
+          const params = new URLSearchParams(window.location.search);
+          const action = params.get('action');
+          const type = params.get('type');
+
+          if (action === 'create') {
+            // 设置任务类型
+            if (type && ['download', 'forward', 'upload'].includes(type)) {
+              this.createForm.taskType = type;
+              taskManager.createForm.taskType = type;
+            }
+            // 打开创建弹窗
+            this.openCreateModal();
+          }
         },
 
         // 手动刷新方法
@@ -1029,6 +1052,11 @@
         app.__x.getUnobservedData().addNotification(type, message);
       }
     };
+
+    // 在 Alpine 启动时，将 ConfirmDialog 包装为响应式对象
+    document.addEventListener('alpine:init', () => {
+      window.confirmDialog = Alpine.reactive(window.confirmDialog);
+    });
   </script>
 
   <!-- Alpine.js (本地) - 必须在组件函数定义之后加载 -->

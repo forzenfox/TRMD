@@ -70,79 +70,112 @@ class TaskExecutor:
             log.error(f"任务 {task.task_id} 执行失败: {e}")
             await self._task_manager.fail_task(task.task_id, str(e))
 
+    def _resolve_message_ids(self, task: Task) -> list[int]:
+        """根据任务 params 中的 range_mode 解析消息 ID 列表。"""
+        range_mode = task.params.get("range_mode", "id_range")
+
+        if range_mode == "message_list":
+            message_ids = task.params.get("message_ids", [])
+            if not message_ids:
+                raise ValueError(f"任务 {task.task_id} message_list 模式缺少 message_ids 参数")
+            return message_ids
+
+        # id_range 模式或默认
+        start = task.params.get("min_id") or task.params.get("message_range_start")
+        end = task.params.get("max_id") or task.params.get("message_range_end")
+        if start is None:
+            raise ValueError(f"下载任务 {task.task_id} 缺少消息范围参数（message_range）")
+        return list(range(int(start), (int(end) if end else int(start)) + 1))
+
     async def _execute_download(self, task: Task) -> None:
         """执行下载任务。"""
         chat_id = task.chat_id
-        message_range = task.message_range
+        message_ids = self._resolve_message_ids(task)
+        filter_types = task.params.get("filter_types", [])
+        downloaded_files: list[str] = []
+
+        if not message_ids:
+            raise ValueError(
+                f"下载任务 {task.task_id} 缺少消息范围参数（message_range）"
+            )
 
         # 如果已有下载器，调用其下载方法
         if self._downloader:
-            await self._downloader.download_range(
+            downloaded_files = await self._downloader.download_range(
                 chat_id=chat_id,
-                start_id=message_range[0] if message_range else 1,
-                end_id=message_range[1] if message_range else -1,
+                start_id=message_ids[0],
+                end_id=message_ids[-1],
                 task_id=task.task_id,
                 progress_callback=self._on_item_progress,
             )
-            return
-
-        # 降级方案：手动逐个下载
-        if message_range:
-            start_id, end_id = message_range
         else:
-            start_id, end_id = 1, 100  # 默认范围
-
-        # 为每个消息创建子任务项
-        if not task.items:
-            for msg_id in range(start_id, end_id + 1):
-                item_id = f"{task.task_id}_msg_{msg_id}"
-                task.items.append(self._create_item(task, item_id, message_id=msg_id))
-
-        # 逐个下载
-        for item in task.items:
-            if item.status in (ItemStatus.SUCCESS, ItemStatus.SKIPPED):
-                continue
-
-            await self._task_manager.update_item_status(
-                task.task_id, item.item_id, ItemStatus.RUNNING
-            )
-
-            try:
-                # 下载单条消息
-                message = await self._client.get_messages(chat_id, item.message_id)
-                if message and message.media:
-                    # 记录成功
-                    await self._task_manager.update_item_status(
-                        task.task_id, item.item_id, ItemStatus.SUCCESS
+            # 降级方案：手动逐个下载
+            # 为每个消息创建子任务项并持久化到数据库
+            if not task.items:
+                new_items = []
+                for msg_id in message_ids:
+                    item_id = f"{task.task_id}_msg_{msg_id}"
+                    new_items.append(
+                        self._create_item(task, item_id, message_id=msg_id)
                     )
-                else:
-                    await self._task_manager.update_item_status(
-                        task.task_id,
-                        item.item_id,
-                        ItemStatus.FAILED,
-                        "MESSAGE_NOT_FOUND",
-                    )
-            except Exception as e:
+                await self._task_manager.add_items(task.task_id, new_items)
+
+            # 逐个下载
+            for item in task.items:
+                if item.status in (ItemStatus.SUCCESS, ItemStatus.SKIPPED):
+                    continue
+
                 await self._task_manager.update_item_status(
-                    task.task_id, item.item_id, ItemStatus.FAILED, str(e)
+                    task.task_id, item.id, ItemStatus.RUNNING
                 )
+
+                try:
+                    # 下载单条消息
+                    message = await self._client.get_messages(chat_id, item.source_id)
+                    if message and message.media:
+                        # 类型过滤：检查消息媒体类型是否匹配 filter_types
+                        if filter_types:
+                            media_type = self._get_media_type(message)
+                            if media_type and media_type not in filter_types:
+                                await self._task_manager.update_item_status(
+                                    task.task_id, item.id, ItemStatus.SKIPPED
+                                )
+                                continue
+                        # 记录成功
+                        await self._task_manager.update_item_status(
+                            task.task_id, item.id, ItemStatus.SUCCESS
+                        )
+                    else:
+                        await self._task_manager.update_item_status(
+                            task.task_id,
+                            item.id,
+                            ItemStatus.FAILED,
+                            "MESSAGE_NOT_FOUND",
+                        )
+                except Exception as e:
+                    await self._task_manager.update_item_status(
+                        task.task_id, item.id, ItemStatus.FAILED, str(e)
+                    )
+
+        # 保存已下载的文件路径到任务
+        if downloaded_files:
+            await self._task_manager.update_file_paths(task.task_id, downloaded_files)
 
     async def _execute_forward(self, task: Task) -> None:
         """执行转发任务。"""
         chat_id = task.chat_id
-        target_chat_id = task.target_chat_id
-        message_range = task.message_range
+        target_chat_id = task.params.get("target_chat_id")
+        filter_types = task.params.get("filter_types", [])
 
-        if message_range:
-            start_id, end_id = message_range
-        else:
-            start_id, end_id = 1, 100
+        message_ids = self._resolve_message_ids(task)
 
-        # 创建子任务项
+        # 创建子任务项并持久化到数据库
         if not task.items:
-            for msg_id in range(start_id, end_id + 1):
+            new_items = []
+            for msg_id in message_ids:
                 item_id = f"{task.task_id}_msg_{msg_id}"
-                task.items.append(self._create_item(task, item_id, message_id=msg_id))
+                new_items.append(self._create_item(task, item_id, message_id=msg_id))
+            await self._task_manager.add_items(task.task_id, new_items)
 
         # 逐个转发
         for item in task.items:
@@ -150,27 +183,38 @@ class TaskExecutor:
                 continue
 
             await self._task_manager.update_item_status(
-                task.task_id, item.item_id, ItemStatus.RUNNING
+                task.task_id, item.id, ItemStatus.RUNNING
             )
 
             try:
+                # 类型过滤
+                if filter_types:
+                    message = await self._client.get_messages(chat_id, item.source_id)
+                    if message and message.media:
+                        media_type = self._get_media_type(message)
+                        if media_type and media_type not in filter_types:
+                            await self._task_manager.update_item_status(
+                                task.task_id, item.id, ItemStatus.SKIPPED
+                            )
+                            continue
+
                 await self._client.copy_message(
                     chat_id=target_chat_id,
                     from_chat_id=chat_id,
-                    message_id=item.message_id,
+                    message_id=item.source_id,
                 )
                 await self._task_manager.update_item_status(
-                    task.task_id, item.item_id, ItemStatus.SUCCESS
+                    task.task_id, item.id, ItemStatus.SUCCESS
                 )
             except Exception as e:
                 await self._task_manager.update_item_status(
-                    task.task_id, item.item_id, ItemStatus.FAILED, str(e)
+                    task.task_id, item.id, ItemStatus.FAILED, str(e)
                 )
 
     async def _execute_upload(self, task: Task) -> None:
         """执行上传任务。"""
         chat_id = task.chat_id
-        file_paths = task.file_paths
+        file_paths = task.params.get("file_paths", [])
 
         if not file_paths:
             raise ValueError(f"任务 {task.task_id} 没有文件路径")
@@ -209,15 +253,17 @@ class TaskExecutor:
             is_album = group.get("is_album", False)
             files = group.get("files", [])
 
-            # 创建子任务项
+            # 创建子任务项并持久化到数据库
+            new_items = []
             for file_info in files:
                 item_id = f"{task.task_id}_file_{item_index}"
-                task.items.append(
+                new_items.append(
                     self._create_item(
                         task, item_id, message_id=None, file_path=file_info.path
                     )
                 )
                 item_index += 1
+            await self._task_manager.add_items(task.task_id, new_items)
 
             # 上传
             for file_info in files:
@@ -237,7 +283,7 @@ class TaskExecutor:
                                 file_infos=files,
                                 chat_id=chat_id,
                                 progress_callback=self._on_progress,
-                                delete_after=task.delete_after_upload,
+                                delete_after=task.params.get("delete_after_upload", True),
                             )
                             for i, res in enumerate(results):
                                 item_id = (
@@ -263,7 +309,7 @@ class TaskExecutor:
                             file_path=file_info.path,
                             chat_id=chat_id,
                             progress_callback=self._on_progress,
-                            delete_after=task.delete_after_upload,
+                            delete_after=task.params.get("delete_after_upload", True),
                         )
                         if result.success:
                             await self._task_manager.update_item_status(
@@ -306,11 +352,39 @@ class TaskExecutor:
         task: Task,
         item_id: str,
         message_id: Optional[int] = None,
+        file_path: Optional[str] = None,
     ) -> object:
         """创建子任务项。"""
+        from datetime import datetime
         from module.core.task_manager import TaskItem
 
+        now = datetime.now().isoformat()
         return TaskItem(
-            item_id=item_id,
-            message_id=message_id,
+            id=item_id,
+            task_id=task.task_id,
+            source_id=message_id or file_path,
+            file_path=file_path,
+            created_at=now,
+            updated_at=now,
         )
+
+    @staticmethod
+    def _get_media_type(message) -> Optional[str]:
+        """获取消息的媒体类型字符串。
+
+        返回: "video", "photo", "document", "audio", "animation" 或 None。
+        """
+        if not message or not message.media:
+            return None
+        media = message.media
+        if hasattr(media, "video") and media.video:
+            return "video"
+        if hasattr(media, "photo") and media.photo:
+            return "photo"
+        if hasattr(media, "document") and media.document:
+            return "document"
+        if hasattr(media, "audio") and media.audio:
+            return "audio"
+        if hasattr(media, "animation") and media.animation:
+            return "animation"
+        return None
