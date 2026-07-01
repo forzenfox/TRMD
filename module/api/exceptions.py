@@ -111,6 +111,73 @@ def setup_exception_handlers(app: FastAPI) -> None:
             content={"code": 404, "message": str(exc), "data": None},
         )
 
+    # 处理核心模块 ResourceLimitError（强制级资源限制）
+    from module.core.task_manager import (
+        ResourceLimitError as CoreResourceLimitError,
+    )
+
+    @app.exception_handler(CoreResourceLimitError)
+    async def core_resource_limit_handler(
+        request: Request, exc: CoreResourceLimitError
+    ) -> JSONResponse:
+        """处理核心模块资源限制异常。"""
+        return JSONResponse(
+            status_code=400,
+            content={"code": 1001, "message": str(exc), "data": None},
+        )
+
+    # 处理核心模块 TaskStateError（状态不允许当前操作）
+    from module.core.task_manager import TaskStateError as CoreTaskStateError
+
+    @app.exception_handler(CoreTaskStateError)
+    async def core_task_state_handler(
+        request: Request, exc: CoreTaskStateError
+    ) -> JSONResponse:
+        """处理核心模块任务状态异常。"""
+        return JSONResponse(
+            status_code=409,
+            content={"code": 409, "message": str(exc), "data": None},
+        )
+
+    # 处理核心模块 ValidationError（参数校验失败）
+    from module.core.task_manager import ValidationError as CoreValidationError
+
+    @app.exception_handler(CoreValidationError)
+    async def core_validation_handler(
+        request: Request, exc: CoreValidationError
+    ) -> JSONResponse:
+        """处理核心模块参数校验异常。"""
+        return JSONResponse(
+            status_code=422,
+            content={"code": 422, "message": str(exc), "data": None},
+        )
+
+    # 处理核心模块 ExecutorError（执行器内部错误）
+    from module.core.task_manager import ExecutorError as CoreExecutorError
+
+    @app.exception_handler(CoreExecutorError)
+    async def core_executor_handler(
+        request: Request, exc: CoreExecutorError
+    ) -> JSONResponse:
+        """处理核心模块执行器异常。"""
+        return JSONResponse(
+            status_code=500,
+            content={"code": 500, "message": str(exc), "data": None},
+        )
+
+    # 处理核心模块 TaskManagerError 基类（兜底）
+    from module.core.task_manager import TaskManagerError as CoreTaskManagerError
+
+    @app.exception_handler(CoreTaskManagerError)
+    async def core_task_manager_error_handler(
+        request: Request, exc: CoreTaskManagerError
+    ) -> JSONResponse:
+        """处理核心模块基础异常兜底。"""
+        return JSONResponse(
+            status_code=400,
+            content={"code": 400, "message": str(exc), "data": None},
+        )
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError

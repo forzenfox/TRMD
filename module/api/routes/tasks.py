@@ -16,7 +16,6 @@ from module.api.responses import json_response, error_json_response
 from module.api.models.task import TaskCreate, TaskOut
 from module.api.exceptions import (
     TaskNotFoundError,
-    TaskSizeExceeded,
     TaskSizeWarning,
     InsufficientDiskSpace,
     TaskConflictError,
@@ -26,14 +25,14 @@ from module.core.task_manager import (
     Task,
     TaskType,
     TaskStatus,
-    InvalidStateTransition,
+    TaskStateError,
 )
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
 logger = logging.getLogger(__name__)
 
-# 匹配纯数字 ID
-_RE_NUMERIC_ID = re.compile(r"^\d+$")
+# 匹配纯数字 ID（支持 Telegram 负数格式 -100...）
+_RE_NUMERIC_ID = re.compile(r"^-?\d+$")
 
 
 def _get_client(request: Request):
@@ -105,7 +104,8 @@ async def list_tasks(
     offset: int = Query(0, ge=0),
 ):
     """获取任务列表，支持分页和过滤。"""
-    # 按状态过滤
+    # 参数校验
+    status_enum: Optional[TaskStatus] = None
     if status_filter:
         try:
             status_enum = TaskStatus(status_filter)
@@ -113,11 +113,8 @@ async def list_tasks(
             return error_json_response(
                 code=400, message=f"无效的状态: {status_filter}", status_code=400
             )
-        tasks = await task_manager.list_tasks(status=status_enum)
-    else:
-        tasks = await task_manager.list_tasks()
 
-    # 按类型过滤
+    type_enum: Optional[TaskType] = None
     if task_type:
         try:
             type_enum = TaskType(task_type)
@@ -125,13 +122,17 @@ async def list_tasks(
             return error_json_response(
                 code=400, message=f"无效的类型: {task_type}", status_code=400
             )
-        tasks = [t for t in tasks if t.task_type == type_enum]
 
-    total = len(tasks)
-    paginated_tasks = tasks[offset : offset + limit]
+    # 下沉到 TaskManager 进行过滤和分页
+    filtered_items, total = await task_manager.list_tasks(
+        status=status_enum,
+        task_type=type_enum,
+        limit=limit,
+        offset=offset,
+    )
 
     data = {
-        "items": [_task_to_out(t).model_dump() for t in paginated_tasks],
+        "items": [_task_to_out(t).model_dump() for t in filtered_items],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -161,19 +162,22 @@ async def create_task(
     task_manager: TaskManager = Depends(get_task_manager),
 ):
     """创建任务。"""
-    # 检查任务大小（如果 params 中有估算大小）
+    # 检查任务大小 - 处理警告级（强制级已由 TaskManager.create_task 内部处理）
     estimated_size = body.params.get("estimated_size", 0)
 
-    # 检查磁盘空间
-    if not task_manager.check_disk_space(estimated_size):
-        raise InsufficientDiskSpace()
-
-    size_result = task_manager.check_size_threshold(estimated_size)
-    if size_result == "exceeded":
-        raise TaskSizeExceeded()
-    if size_result == "warning":
-        size_human = body.params.get("size_human", "")
+    size_level, size_msg = task_manager.check_size_threshold(estimated_size)
+    if size_level == "warning":
+        size_human = body.params.get("size_human", size_msg or "")
         raise TaskSizeWarning(size_human)
+
+    # 磁盘空间 - 在 API 层提前检查以提供人类可读的错误码
+    # （强制级检查也在 TaskManager.create_task 中作为兜底）
+    from module.integration import get_context
+
+    ctx = get_context()
+    download_dir = ctx.config_manager.save_directory if ctx else None
+    if not task_manager.check_disk_space(estimated_size, download_dir=download_dir):
+        raise InsufficientDiskSpace()
 
     # 映射任务类型
     type_map = {
@@ -235,12 +239,12 @@ async def create_task(
         "filter_types": params.get("filter_types", []),
         "min_id": params.get("min_id"),
         "max_id": params.get("max_id"),
-        "date_start": params.get("date_start"),
-        "date_end": params.get("date_end"),
-        "message_ids": params.get("message_ids", []),
+        "start_date": params.get("start_date"),
+        "end_date": params.get("end_date"),
+        "message_list": params.get("message_list", []),
     }
-    # 移除 None 值和空列表，保持干净
-    task_params = {k: v for k, v in task_params.items() if v is not None and v != []}
+    # 移除 None 值，保持干净（保留空列表，供前端识别字段存在）
+    task_params = {k: v for k, v in task_params.items() if v is not None}
 
     # 创建任务
     task = await task_manager.create_task(
@@ -266,7 +270,8 @@ async def start_task(
         task = await task_manager.get_task(task_id)
 
         # 触发 TaskExecutor 异步执行任务（不阻塞 API 响应）
-        asyncio.create_task(executor.execute_task(task))
+        if executor is not None:
+            asyncio.create_task(executor.execute_task(task))
 
         return json_response(
             data=_task_to_out(task).model_dump(),
@@ -274,7 +279,7 @@ async def start_task(
         )
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)
-    except InvalidStateTransition:
+    except TaskStateError:
         raise TaskConflictError("任务状态不允许启动")
 
 
@@ -287,12 +292,18 @@ async def cancel_task(
 ):
     """取消任务。"""
     try:
-        await task_manager.cancel_task(task_id)
+        body = await request.json() if request.method == "POST" else {}
+        reason = body.get("reason") if isinstance(body, dict) else None
+    except Exception:
+        reason = None
+
+    try:
+        await task_manager.cancel_task(task_id, reason=reason)
         task = await task_manager.get_task(task_id)
         return json_response(data=_task_to_out(task).model_dump(), message="任务已取消")
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)
-    except InvalidStateTransition:
+    except TaskStateError:
         raise TaskConflictError("任务状态不允许取消")
 
 
@@ -310,7 +321,7 @@ async def retry_task(
         return json_response(data=_task_to_out(task).model_dump(), message="任务已重试")
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)
-    except InvalidStateTransition:
+    except TaskStateError:
         raise TaskConflictError("任务状态不允许重试")
 
 

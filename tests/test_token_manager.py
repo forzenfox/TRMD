@@ -177,7 +177,7 @@ class TestRefresh:
     def test_refresh_revokes_old_token(self, memory_manager):
         """刷新后旧 Token 应被撤销。"""
         old_token = memory_manager.generate(user_id=1)
-        new_token = memory_manager.refresh(old_token)
+        memory_manager.refresh(old_token)
         assert memory_manager.is_valid(old_token) is False
 
     def test_refresh_new_token_valid(self, memory_manager):
@@ -271,7 +271,7 @@ class TestRevokeAll:
     def test_revoke_all_does_not_revoke_already_revoked(self, memory_manager):
         """revoke_all() 不计入已撤销的 Token。"""
         t1 = memory_manager.generate(user_id=1)
-        t2 = memory_manager.generate(user_id=1)
+        memory_manager.generate(user_id=1)
         memory_manager.revoke(t1)
         count = memory_manager.revoke_all()
         assert count == 1
@@ -353,7 +353,7 @@ class TestCleanupExpired:
         """仅删除过期超过 max_age_hours 的记录。"""
         # 生成两个 Token：一个过期 26h（应删除），一个过期 12h（应保留）
         with freeze_time("2026-01-01 00:00:00"):
-            t1 = memory_manager.generate(user_id=1)
+            memory_manager.generate(user_id=1)
         with freeze_time("2026-01-01 13:00:00"):
             t2 = memory_manager.generate(user_id=1)
         # 当前时间：2026-01-02 02:00:00

@@ -13,7 +13,6 @@ from module.api.dependencies import get_cache_manager, require_token
 from module.api.responses import json_response, error_json_response
 from module.api.models.chat import (
     MessageRangeRequest,
-    MessageEstimateOut,
     MessageEstimateRequest,
     MessageAnalyzeRequest,
 )
@@ -21,7 +20,7 @@ from module.api.models.chat import (
 router = APIRouter(prefix="/chats", tags=["频道"])
 logger = logging.getLogger(__name__)
 
-_RE_NUMERIC_ID = re.compile(r"^\d+$")
+_RE_NUMERIC_ID = re.compile(r"^-?\d+$")
 
 
 async def _resolve_chat_id(request: Request, channel_input: str):
@@ -35,6 +34,7 @@ async def _resolve_chat_id(request: Request, channel_input: str):
     # 获取 Telegram Client
     try:
         from module.integration import get_context
+
         ctx = get_context()
         client = ctx.client if ctx else None
     except Exception:
@@ -56,6 +56,7 @@ def _get_client(request: Request):
     """获取 Telegram Client 实例（从 AppContext 单例读取）。"""
     try:
         from module.integration import get_context
+
         ctx = get_context()
         return ctx.client if ctx else None
     except Exception:
@@ -98,6 +99,7 @@ async def list_chats(
     client = _get_client(request)
 
     if cache_manager:
+
         async def fetch_dialogs():
             dialogs = await client.get_dialogs(limit=limit)
             return [_dialog_to_dict(d) for d in dialogs]
@@ -130,13 +132,18 @@ async def estimate_messages(
 ):
     """抽样估算消息范围大小与数量。
 
-    从 TelegramClient 获取消息历史进行估算。
-    验证消息范围参数。支持缓存以减少 Telegram API 调用。
+    根据 range_mode 差异化估算：
+    - id_range: 小范围精确，大范围头尾抽样
+    - multiple_ids: 精确遍历
+    - date_range: 小范围精确，大范围头尾抽样
+    - all: 头尾各10条抽样估算
+
+    支持缓存以减少 Telegram API 调用。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
     chat_id = await _resolve_chat_id(request, body.chat_id)
     if chat_id is None:
-        return error_json_response("无法解析频道标识，请检查输入")
+        return error_json_response(code=400, message="无法解析频道标识，请检查输入")
 
     # 转换为 MessageRangeRequest 用于验证
     range_req = MessageRangeRequest(
@@ -150,22 +157,28 @@ async def estimate_messages(
     )
     is_valid, errors = range_req.validate_for_mode()
     if not is_valid:
-        return error_json_response("消息范围参数无效", "; ".join(errors))
+        return error_json_response(
+            code=400, message=f"消息范围参数无效: {'; '.join(errors)}"
+        )
 
     client = _get_client(request)
-    params = body.model_dump(exclude={"chat_id"})  # 用于缓存键
+    if client is None:
+        return error_json_response(code=400, message="Telegram Client 未连接")
+
+    params = body.model_dump(exclude={"chat_id"})
 
     if cache_manager:
+
         async def fetch_estimate():
-            chat = await client.get_chat(chat_id)
-            count = getattr(chat, "messages_count", 0)
-            return {
-                "message_count": count,
-                "total_size_bytes": 0,
-                "total_size_human": "未知",
-                "estimated_duration_seconds": count * 3,
-                "sampled": True,
-            }
+            from module.api.estimate import estimate_message_stats
+
+            return await estimate_message_stats(
+                client=client,
+                chat_id=chat_id,
+                range_mode=body.range_mode,
+                params=params,
+                precise=False,
+            )
 
         try:
             result = await cache_manager.get_message_stats(
@@ -177,24 +190,21 @@ async def estimate_messages(
         except Exception as e:
             logger.warning(f"缓存估算失败，降级为直接调用: {e}")
 
-    # 降级逻辑（原有代码不变）
+    # 降级逻辑
     try:
-        # 获取消息计数
-        chat = await client.get_chat(chat_id)
-        count = getattr(chat, "messages_count", 0)
+        from module.api.estimate import estimate_message_stats
 
-        # 简单估算（实际应遍历消息获取真实大小）
-        estimate = MessageEstimateOut(
-            message_count=count,
-            total_size_bytes=0,  # 需要遍历消息才能获取
-            total_size_human="未知",
-            estimated_duration_seconds=count * 3,  # 假设每条消息 3 秒
-            sampled=True,
+        result = await estimate_message_stats(
+            client=client,
+            chat_id=chat_id,
+            range_mode=body.range_mode,
+            params=params,
+            precise=False,
         )
-        return json_response(data=estimate.model_dump())
+        return json_response(data=result)
     except Exception as e:
         logger.error(f"估算消息失败: {e}")
-        return error_json_response("估算失败", str(e))
+        return error_json_response(code=400, message=f"估算失败: {e}")
 
 
 @router.post("/messages/analyze")
@@ -205,27 +215,30 @@ async def analyze_messages(
 ):
     """精确分析消息范围（遍历）。
 
-    从 TelegramClient 遍历消息进行精确分析。
+    小范围（≤500条）精确遍历获取真实文件大小，
+    大范围降级为抽样估算并标记 sampled=True。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
     chat_id = await _resolve_chat_id(request, body.chat_id)
     if chat_id is None:
-        return error_json_response("无法解析频道标识，请检查输入")
+        return error_json_response(code=400, message="无法解析频道标识，请检查输入")
 
     client = _get_client(request)
-    try:
-        # 获取精确消息数
-        chat = await client.get_chat(chat_id)
-        count = getattr(chat, "messages_count", 0)
+    if client is None:
+        return error_json_response(code=400, message="Telegram Client 未连接")
 
-        estimate = MessageEstimateOut(
-            message_count=count,
-            total_size_bytes=0,
-            total_size_human="未知",
-            estimated_duration_seconds=count * 3,
-            sampled=False,
+    try:
+        from module.api.estimate import estimate_message_stats
+
+        params = body.model_dump(exclude={"chat_id"})
+        result = await estimate_message_stats(
+            client=client,
+            chat_id=chat_id,
+            range_mode=body.range_mode,
+            params=params,
+            precise=True,
         )
-        return json_response(data=estimate.model_dump())
+        return json_response(data=result)
     except Exception as e:
         logger.error(f"分析消息失败: {e}")
-        return error_json_response("分析失败", str(e))
+        return error_json_response(code=400, message=f"分析失败: {e}")

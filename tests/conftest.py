@@ -32,6 +32,7 @@ def test_data_dir():
 def task_factory():
     """提供任务数据工厂。"""
     from tests.fixtures.data_factories import TaskFactory
+
     return TaskFactory()
 
 
@@ -39,6 +40,7 @@ def task_factory():
 def token_factory():
     """提供 Token 数据工厂。"""
     from tests.fixtures.data_factories import TokenFactory
+
     return TokenFactory()
 
 
@@ -46,6 +48,7 @@ def token_factory():
 def config_factory():
     """提供配置数据工厂。"""
     from tests.fixtures.data_factories import ConfigFactory
+
     return ConfigFactory()
 
 
@@ -53,4 +56,5 @@ def config_factory():
 def file_factory():
     """提供文件准备工具。"""
     from tests.fixtures import prepare_test_files
+
     return prepare_test_files

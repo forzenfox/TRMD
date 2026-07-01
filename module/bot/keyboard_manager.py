@@ -755,6 +755,88 @@ class KeyboardManager:
             ]
         )
 
+    # ==================== /batch 内联键盘 ====================
+
+    @staticmethod
+    def build_task_type_keyboard() -> InlineKeyboardMarkup:
+        """构建任务类型选择键盘。"""
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "⬇️ 下载", callback_data="batch:task_type:download"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "↗️ 转发", callback_data="batch:task_type:forward"
+                    )
+                ],
+            ]
+        )
+
+    @staticmethod
+    def build_range_mode_keyboard() -> InlineKeyboardMarkup:
+        """构建范围模式选择键盘。"""
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "🔢 ID 范围", callback_data="batch:range_mode:id_range"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "📅 日期范围", callback_data="batch:range_mode:date_range"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "📋 消息列表", callback_data="batch:range_mode:multiple_ids"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "📦 全部消息", callback_data="batch:range_mode:all"
+                    )
+                ],
+            ]
+        )
+
+    @staticmethod
+    def build_filter_types_keyboard(
+        selected: list = None,
+    ) -> InlineKeyboardMarkup:
+        """构建类型过滤选择键盘（多选 toggle）。
+
+        :param selected: 已选中的类型列表，如 ["video", "photo"]
+        """
+        selected = selected or []
+        types = [
+            ("video", "🎬 视频"),
+            ("photo", "🖼️ 图片"),
+            ("document", "📄 文档"),
+            ("audio", "🎵 音频"),
+            ("animation", "🎨 GIF"),
+            ("voice", "🎤 语音"),
+            ("video_note", "📹 视频笔记"),
+        ]
+        rows = []
+        for dtype, label in types:
+            mark = " ✅" if dtype in selected else ""
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        f"{label}{mark}",
+                        callback_data=f"batch:filter:{dtype}",
+                    )
+                ]
+            )
+        rows.append(
+            [InlineKeyboardButton("✅ 确认选择", callback_data="batch:filter:confirm")]
+        )
+        return InlineKeyboardMarkup(rows)
+
 
 class KeyboardButtonHandler:
     """键盘按钮交互处理器：处理键盘按钮点击事件。

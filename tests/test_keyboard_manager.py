@@ -177,6 +177,55 @@ class TestKeyboardManagerBuild:
         keyboard = KeyboardManager.build_keyword_filter_keyboard()
         assert isinstance(keyboard, InlineKeyboardMarkup)
 
+    def test_build_task_type_keyboard(self):
+        """build_task_type_keyboard 应返回任务类型选择键盘。"""
+        keyboard = KeyboardManager.build_task_type_keyboard()
+        assert isinstance(keyboard, InlineKeyboardMarkup)
+        # 应有下载和转发两个按钮
+        assert len(keyboard.inline_keyboard) == 2
+        # callback_data 格式 batch:task_type:download/forward
+        all_callbacks = [
+            btn.callback_data for row in keyboard.inline_keyboard for btn in row
+        ]
+        assert "batch:task_type:download" in all_callbacks
+        assert "batch:task_type:forward" in all_callbacks
+
+    def test_build_range_mode_keyboard(self):
+        """build_range_mode_keyboard 应返回范围模式选择键盘。"""
+        keyboard = KeyboardManager.build_range_mode_keyboard()
+        assert isinstance(keyboard, InlineKeyboardMarkup)
+        # 应有 4 种模式按钮
+        assert len(keyboard.inline_keyboard) == 4
+        all_callbacks = [
+            btn.callback_data for row in keyboard.inline_keyboard for btn in row
+        ]
+        assert "batch:range_mode:id_range" in all_callbacks
+        assert "batch:range_mode:date_range" in all_callbacks
+        assert "batch:range_mode:multiple_ids" in all_callbacks
+        assert "batch:range_mode:all" in all_callbacks
+
+    def test_build_filter_types_keyboard_default(self):
+        """build_filter_types_keyboard 默认应返回 7 个类型按钮 + 1 个确认按钮。"""
+        keyboard = KeyboardManager.build_filter_types_keyboard()
+        assert isinstance(keyboard, InlineKeyboardMarkup)
+        assert len(keyboard.inline_keyboard) == 8  # 7 types + 1 confirm
+
+    def test_build_filter_types_keyboard_with_selected(self):
+        """build_filter_types_keyboard 选中项应显示 ✅ 标记。"""
+        keyboard = KeyboardManager.build_filter_types_keyboard(
+            selected=["video", "audio"]
+        )
+        assert isinstance(keyboard, InlineKeyboardMarkup)
+        # 找到 video 按钮文本应包含 ✅
+        video_btn = keyboard.inline_keyboard[0][0]
+        assert "✅" in video_btn.text
+        # photo 按钮不应有 ✅
+        photo_btn = keyboard.inline_keyboard[1][0]
+        assert "✅" not in photo_btn.text
+        # 确认按钮
+        confirm_btn = keyboard.inline_keyboard[-1][0]
+        assert confirm_btn.callback_data == "batch:filter:confirm"
+
     def test_build_calendar_keyboard_start(self):
         """build_calendar_keyboard 起始日期应包含导航和日期。"""
         rows = KeyboardManager.build_calendar_keyboard(

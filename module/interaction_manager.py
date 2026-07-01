@@ -3,12 +3,15 @@
 
 负责管理用户输入流程（如 /batch 的多步输入收集）、超时处理、
 状态保存/恢复。详见 M2 阶段 Bot 简化模块设计。
+
+批次8 扩展：支持任务类型选择、4 种 range_mode、内联键盘交互。
 """
 
 import json
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -20,45 +23,87 @@ logger = logging.getLogger(__name__)
 
 
 class BatchStep(str, Enum):
-    """批量操作收集步骤枚举。"""
+    """批量操作收集步骤枚举。
 
+    步骤流程：
+    TASK_TYPE → SOURCE_CHANNEL → [TARGET_CHANNEL] → RANGE_MODE → RANGE_INPUT → FILTER_TYPES → COMPLETE
+    TARGET_CHANNEL 仅在 task_type="forward" 时出现。
+    """
+
+    TASK_TYPE = "task_type"  # 任务类型选择（内联键盘）
     SOURCE_CHANNEL = "source_channel"  # 源频道链接
-    TARGET_CHANNEL = "target_channel"  # 目标频道链接
-    MESSAGE_RANGE = "message_range"  # 消息范围
-    FILTER_CONDITION = "filter_condition"  # 过滤条件
+    TARGET_CHANNEL = "target_channel"  # 目标频道链接（仅 FORWARD）
+    RANGE_MODE = "range_mode"  # 范围模式选择（内联键盘）
+    RANGE_INPUT = "range_input"  # 范围参数输入（文本）
+    FILTER_TYPES = "filter_types"  # 类型过滤选择（内联键盘）
     COMPLETE = "complete"  # 收集完成
 
     @classmethod
-    def next_step(cls, current: "BatchStep") -> "BatchStep":
-        """返回当前步骤的下一步骤。"""
-        order = [
-            cls.SOURCE_CHANNEL,
-            cls.TARGET_CHANNEL,
-            cls.MESSAGE_RANGE,
-            cls.FILTER_CONDITION,
-            cls.COMPLETE,
-        ]
-        idx = order.index(current)
-        if idx >= len(order) - 1:
-            return cls.COMPLETE
-        return order[idx + 1]
+    def next_step(
+        cls, current: "BatchStep", collected_data: dict = None
+    ) -> "BatchStep":
+        """返回当前步骤的下一步骤。
+
+        SOURCE_CHANNEL 的下一步取决于 task_type：
+        - download → RANGE_MODE
+        - forward → TARGET_CHANNEL
+        """
+        order_map = {
+            cls.TASK_TYPE: cls.SOURCE_CHANNEL,
+            cls.TARGET_CHANNEL: cls.RANGE_MODE,
+            cls.RANGE_MODE: cls.RANGE_INPUT,
+            cls.RANGE_INPUT: cls.FILTER_TYPES,
+            cls.FILTER_TYPES: cls.COMPLETE,
+        }
+
+        if current == cls.SOURCE_CHANNEL:
+            task_type = (collected_data or {}).get("task_type", "download")
+            if task_type == "forward":
+                return cls.TARGET_CHANNEL
+            return cls.RANGE_MODE
+
+        return order_map.get(current, cls.COMPLETE)
 
     @classmethod
-    def get_prompt(cls, step: "BatchStep") -> str:
-        """返回当前步骤的用户提示文本。"""
+    def get_prompt(cls, step: "BatchStep", collected_data: dict = None) -> str:
+        """返回当前步骤的用户提示文本。
+
+        RANGE_INPUT 的提示根据已选择的 range_mode 差异化。
+        """
+        if step == cls.RANGE_INPUT:
+            mode = (collected_data or {}).get("range_mode", "id_range")
+            prompts = {
+                "id_range": "🔢 请输入消息 ID 范围（格式：起始ID 结束ID，如 1 100）",
+                "date_range": "📅 请输入日期范围（格式：起始日期 结束日期，如 2026-01-01 2026-06-01）",
+                "multiple_ids": "📋 请输入消息 ID 或链接列表（每行一个，或用逗号分隔）",
+                "all": "📦 将下载频道内所有消息",
+            }
+            return prompts.get(mode, "❓ 未知范围模式")
+
         prompts = {
+            cls.TASK_TYPE: "📋 请选择任务类型",
             cls.SOURCE_CHANNEL: "📥 请输入源频道链接（如 https://t.me/channel_name）",
             cls.TARGET_CHANNEL: "📤 请输入目标频道链接（如 https://t.me/channel_name）",
-            cls.MESSAGE_RANGE: "🔢 请输入消息范围（格式：起始ID 结束ID，如 1 100）",
-            cls.FILTER_CONDITION: "🔍 请输入过滤关键词（可选，直接回车跳过）",
+            cls.RANGE_MODE: "📐 请选择消息范围模式",
+            cls.FILTER_TYPES: "🔍 请选择要下载的媒体类型",
             cls.COMPLETE: "✅ 所有信息已收集完成",
         }
         return prompts.get(step, "❓ 未知步骤")
 
     @classmethod
-    def is_valid_input(cls, step: "BatchStep", input_text: str) -> bool:
-        """验证当前步骤的输入是否有效。"""
+    def is_valid_input(
+        cls, step: "BatchStep", input_text: str, collected_data: dict = None
+    ) -> bool:
+        """验证当前步骤的输入是否有效。
+
+        内联键盘步骤（TASK_TYPE/RANGE_MODE/FILTER_TYPES）不接受文本输入。
+        RANGE_INPUT 的验证逻辑根据 range_mode 差异化。
+        """
         text = input_text.strip()
+
+        # 内联键盘步骤不接受文本输入
+        if step in (cls.TASK_TYPE, cls.RANGE_MODE, cls.FILTER_TYPES):
+            return False
 
         if step == cls.SOURCE_CHANNEL:
             return text.startswith("https://t.me/")
@@ -66,20 +111,38 @@ class BatchStep(str, Enum):
         elif step == cls.TARGET_CHANNEL:
             return text.startswith("https://t.me/")
 
-        elif step == cls.MESSAGE_RANGE:
-            parts = text.split()
-            if len(parts) != 2:
-                return False
-            try:
-                start = int(parts[0])
-                end = int(parts[1])
-                return start > 0 and end >= start
-            except ValueError:
-                return False
+        elif step == cls.RANGE_INPUT:
+            mode = (collected_data or {}).get("range_mode", "id_range")
 
-        elif step == cls.FILTER_CONDITION:
-            # 过滤条件可以为空
-            return True
+            if mode == "id_range":
+                parts = text.split()
+                if len(parts) != 2:
+                    return False
+                try:
+                    start = int(parts[0])
+                    end = int(parts[1])
+                    return start > 0 and end >= start
+                except ValueError:
+                    return False
+
+            elif mode == "date_range":
+                parts = text.split()
+                if len(parts) != 2:
+                    return False
+                try:
+                    datetime.strptime(parts[0], "%Y-%m-%d")
+                    datetime.strptime(parts[1], "%Y-%m-%d")
+                    return True
+                except ValueError:
+                    return False
+
+            elif mode == "multiple_ids":
+                return bool(text)
+
+            elif mode == "all":
+                return True
+
+            return False
 
         return False
 
@@ -101,7 +164,7 @@ class InteractionState:
 
     user_id: int  # 用户 ID
     command: str  # 触发的命令（如 /batch）
-    current_step: BatchStep = BatchStep.SOURCE_CHANNEL  # 当前步骤
+    current_step: BatchStep = BatchStep.TASK_TYPE  # 当前步骤（默认从 TASK_TYPE 开始）
     collected_data: dict = field(default_factory=dict)  # 已收集的数据
     created_at: float = 0.0  # 创建时间戳
     last_updated: float = 0.0  # 最后更新时间戳
@@ -134,13 +197,13 @@ class InteractionState:
     @classmethod
     def from_dict(cls, data: dict) -> "InteractionState":
         """从字典反序列化。"""
-        step_value = data.get("current_step", BatchStep.SOURCE_CHANNEL)
+        step_value = data.get("current_step", BatchStep.TASK_TYPE)
         # 兼容字符串和枚举值
         if isinstance(step_value, str):
             try:
                 step = BatchStep(step_value)
             except ValueError:
-                step = BatchStep.SOURCE_CHANNEL
+                step = BatchStep.TASK_TYPE
         else:
             step = step_value
 
@@ -163,12 +226,12 @@ class InteractionManager:
     管理多步输入收集、超时处理、状态持久化。
     """
 
-    # 数据字段映射（命令 -> 步骤 -> 收集字段名）
+    # 数据字段映射（步骤 -> 收集字段名）
+    # 仅文本输入步骤需要映射，内联键盘步骤通过 set_step_data 直接设置
     _BATCH_FIELD_MAP = {
         BatchStep.SOURCE_CHANNEL: "source_channel",
         BatchStep.TARGET_CHANNEL: "target_channel",
-        BatchStep.MESSAGE_RANGE: "message_range",
-        BatchStep.FILTER_CONDITION: "filter_condition",
+        BatchStep.RANGE_INPUT: "range_input",
     }
 
     def __init__(
@@ -261,6 +324,60 @@ class InteractionManager:
 
     # ---- 步骤收集 ----
 
+    def set_step_data(self, user_id: int, field_name: str, value) -> bool:
+        """直接设置收集数据中的某个字段（用于内联键盘回调）。
+
+        不推进步骤，仅更新数据。
+
+        :param user_id: 用户 ID
+        :param field_name: 字段名（如 "task_type"、"range_mode"、"filter_types"）
+        :param value: 字段值
+        :return: 是否设置成功
+        """
+        state = self.get_active_flow(user_id)
+        if state is None:
+            return False
+        state.collected_data[field_name] = value
+        state.touch()
+        return True
+
+    def advance_step(self, user_id: int) -> Optional[StepResult]:
+        """推进到下一步骤（用于内联键盘回调后手动推进）。
+
+        与 collect 不同，不收集文本输入，仅根据当前步骤和已收集数据推进。
+
+        :param user_id: 用户 ID
+        :return: StepResult 或 None
+        """
+        state = self.get_active_flow(user_id)
+        if state is None:
+            return None
+
+        current = state.current_step
+        next_step = BatchStep.next_step(current, state.collected_data)
+        state.current_step = next_step
+        state.touch()
+
+        result_msg = ""
+        if next_step == BatchStep.COMPLETE:
+            result_msg = "✅ 所有信息已收集完成！"
+            result_data = dict(state.collected_data)
+        else:
+            result_msg = (
+                f"✅ 已接收，{BatchStep.get_prompt(next_step, state.collected_data)}"
+            )
+            result_data = {}
+
+        return StepResult(
+            success=True,
+            current_step=next_step,
+            next_step=BatchStep.next_step(next_step, state.collected_data)
+            if next_step != BatchStep.COMPLETE
+            else None,
+            message=result_msg,
+            collected_data=result_data,
+        )
+
     def update_step(
         self,
         user_id: int,
@@ -283,7 +400,7 @@ class InteractionManager:
             state.collected_data[field_name] = data
 
         # 推进到下一步
-        state.current_step = BatchStep.next_step(current_step)
+        state.current_step = BatchStep.next_step(current_step, state.collected_data)
         state.touch()
         logger.info(
             "步骤已更新: user_id=%s, step=%s",
@@ -309,12 +426,12 @@ class InteractionManager:
 
         current_step = state.current_step
 
-        # 验证输入
-        if not BatchStep.is_valid_input(current_step, input_text):
+        # 验证输入（传入已收集数据用于差异化验证）
+        if not BatchStep.is_valid_input(current_step, input_text, state.collected_data):
             return StepResult(
                 success=False,
                 current_step=current_step,
-                message=f"❌ 输入格式无效，请重新输入\n{BatchStep.get_prompt(current_step)}",
+                message=f"❌ 输入格式无效，请重新输入\n{BatchStep.get_prompt(current_step, state.collected_data)}",
             )
 
         # 收集数据
@@ -323,7 +440,7 @@ class InteractionManager:
             state.collected_data[field_name] = input_text.strip()
 
         # 推进步骤
-        next_step = BatchStep.next_step(current_step)
+        next_step = BatchStep.next_step(current_step, state.collected_data)
         state.current_step = next_step
         state.touch()
 
@@ -333,7 +450,9 @@ class InteractionManager:
             result_msg = "✅ 所有信息已收集完成！"
             result_data = dict(state.collected_data)
         else:
-            result_msg = f"✅ 已接收，{BatchStep.get_prompt(next_step)}"
+            result_msg = (
+                f"✅ 已接收，{BatchStep.get_prompt(next_step, state.collected_data)}"
+            )
             result_data = {}
 
         # 自动保存（如果有持久化路径）
@@ -343,7 +462,7 @@ class InteractionManager:
         return StepResult(
             success=True,
             current_step=next_step,
-            next_step=BatchStep.next_step(next_step)
+            next_step=BatchStep.next_step(next_step, state.collected_data)
             if next_step != BatchStep.COMPLETE
             else None,
             message=result_msg,
@@ -370,7 +489,7 @@ class InteractionManager:
         state = self.get_active_flow(user_id)
         if state is None:
             return None
-        return BatchStep.get_prompt(state.current_step)
+        return BatchStep.get_prompt(state.current_step, state.collected_data)
 
     # ---- 超时处理 ----
 

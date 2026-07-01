@@ -56,7 +56,7 @@ class TestMessageHelper:
     @pytest.mark.asyncio
     async def test_safe_process_message_sends_new(self, mock_client, mock_message):
         """safe_process_message 应发送新消息（无 last_message_id 时）。"""
-        result = await MessageHelper.safe_process_message(
+        await MessageHelper.safe_process_message(
             mock_client, mock_message, "hello world"
         )
         mock_client.send_message.assert_called_once()
@@ -67,7 +67,7 @@ class TestMessageHelper:
     @pytest.mark.asyncio
     async def test_safe_process_message_edits_existing(self, mock_client, mock_message):
         """safe_process_message 应编辑已有消息（有 last_message_id 时）。"""
-        result = await MessageHelper.safe_process_message(
+        await MessageHelper.safe_process_message(
             mock_client, mock_message, ["hello"], last_message_id=50
         )
         mock_client.edit_message_text.assert_called_once()
@@ -109,7 +109,7 @@ class TestMessageHelper:
         # 第一次触发 FloodWait，第二次成功
         mock_client.edit_message_text.side_effect = [FloodWait(value=1), MagicMock()]
         with patch("asyncio.sleep", AsyncMock()):
-            result = await MessageHelper.safe_edit_message_text(
+            await MessageHelper.safe_edit_message_text(
                 mock_client, mock_message, 50, "text after wait"
             )
         assert mock_client.edit_message_text.call_count == 2

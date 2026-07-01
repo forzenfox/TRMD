@@ -139,3 +139,7 @@ class MessageEstimateOut(BaseModel):
     total_size_human: str
     estimated_duration_seconds: int
     sampled: bool
+    sample_count: int = 0
+    sample_valid_count: int = 0
+    avg_size_bytes: float = 0.0
+    range_mode: str = "id_range"

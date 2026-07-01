@@ -856,13 +856,13 @@ class CommandRouter:
         """
         if keyword_handler:
             return
-        
+
         # 记录未知命令日志
         user_id = message.from_user.id
         user_name = message.from_user.username or user_id
         command_text = message.text[:50] if message.text else "None"
         log.warning(f"未知命令 - 用户: {user_name}, 命令: {command_text}")
-        
+
         await self.help(client, message)
         await client.send_message(
             chat_id=message.from_user.id,

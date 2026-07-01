@@ -1260,8 +1260,27 @@ class TelegramRestrictedMediaDownloader(Bot):
                     )
                     record_id.append(message_id)
                 except (ChatForwardsRestricted_400, ChatForwardsRestricted_406):
-                    # TODO 存在内容保护限制时，文本类型的消息无需下载，而是直接send_message。
-                    # TODO 存在内容保护限制时，下载后上传的消息转发时无法过滤类型。
+                    # 文本消息直接转发，无需下载后上传
+                    if getattr(i, "text", False) and not i.media:
+                        try:
+                            await client.send_message(
+                                chat_id=target_chat_id,
+                                text=i.text,
+                                disable_notification=True,
+                            )
+                            record_id.append(message_id)
+                            continue
+                        except Exception as e:
+                            log.warning(f"文本消息直接转发失败: {e}")
+                    # 类型过滤：即使走下载后上传路径，也跳过非目标类型
+                    if not self.check_type(i):
+                        console.log(
+                            f'{_t(KeyWord.CHANNEL)}:"{origin_chat_id}",{_t(KeyWord.MESSAGE_ID)}:"{message_id}"'
+                            f" -> "
+                            f'{_t(KeyWord.CHANNEL)}:"{target_chat_id}",'
+                            f"{_t(KeyWord.STATUS)}:{_t(KeyWord.FORWARD_SKIP)}。"
+                        )
+                        continue
                     self.cd.data = {
                         "origin_link": origin_link,
                         "target_link": target_link,
@@ -2449,38 +2468,12 @@ class TelegramRestrictedMediaDownloader(Bot):
                         await progress_callback(task_id, item_id, ItemStatus.SUCCESS)
                     continue
 
-                # 执行下载
-                downloaded = 0
-                chunk_size = 1024 * 1024
-                temp_path = f"{final_path}.temp"
-                mode = "wb"
-
-                with open(file=temp_path, mode=mode) as f:
-                    while True:
-                        try:
-                            async for chunk in self.app.client.stream_media(
-                                message=message, offset=downloaded // chunk_size
-                            ):
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                            break
-                        except FileReferenceExpired:
-                            log.warning(
-                                f"文件引用已过期，重新获取消息: msg_id={msg_id}"
-                            )
-                            message = await self.app.client.get_messages(
-                                chat_id=chat_id, message_ids=msg_id
-                            )
-                        except (FloodWait, FloodPremiumWait) as e:
-                            log.warning(f"下载限流，等待 {e.value} 秒")
-                            await asyncio.sleep(e.value)
-
-                # 移动到最终路径
-                result = safe_replace(origin_file=temp_path, overwrite_file=final_path)
-                if result.get("e_code"):
-                    log.warning(result["e_code"])
-
-                log.info(f"下载完成: {file_name} ({downloaded} bytes)")
+                # 执行下载（支持断点续传）
+                final_path = await self.resume_download(
+                    message=message,
+                    file_name=final_path,
+                    compare_size=sever_file_size,
+                )
                 downloaded_files.append(final_path)
 
                 if progress_callback:

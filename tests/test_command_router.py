@@ -175,7 +175,7 @@ class TestDownloadCommand:
         mock_client.delete_messages = AsyncMock()
         mock_bot_client = MagicMock()
         mock_bot_client.get_me = AsyncMock(return_value=MagicMock(username="test_bot"))
-        result = await router.get_download_link_from_bot(
+        await router.get_download_link_from_bot(
             mock_client, mock_message, mock_bot_client, mock_bot_client
         )
         mock_client.delete_messages.assert_called_once()

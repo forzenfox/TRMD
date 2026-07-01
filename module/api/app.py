@@ -52,6 +52,7 @@ def create_app(
     ctx = None
     if token_manager is None:
         from module.integration import init_context
+
         ctx = init_context()
         token_manager = ctx.token_manager
 

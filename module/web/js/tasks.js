@@ -11,6 +11,7 @@ class TaskManager {
     this.loading = false;
     this.error = null;
     this.filter = 'all'; // all, pending, running, completed, failed, cancelled
+    this.typeFilter = 'all'; // all, download, forward, upload
     this.selectedTask = null;
     this.showDetailDrawer = false;
     this.showCreateModal = false;
@@ -49,7 +50,7 @@ class TaskManager {
       taskType: 'download', // download, forward, upload
       sourceChat: '',
       targetChat: '',
-      messageRangeMode: 'id_range', // date_range, id_range, id_list, all
+      messageRangeMode: 'id_range', // date_range, id_range, multiple_ids, all
       startDate: '',
       endDate: '',
       minId: '',
@@ -83,6 +84,9 @@ class TaskManager {
 
       if (this.filter !== 'all') {
         params.status = this.filter;
+      }
+      if (this.typeFilter !== 'all') {
+        params.task_type = this.typeFilter;
       }
 
       const response = await api.getTasks(params);
@@ -194,10 +198,18 @@ class TaskManager {
     if (this.createForm.taskType === 'download') {
       params.chat_id = this.createForm.sourceChat;
       _flattenRange(this._buildMessageRange());
+      // 类型过滤（仅下载/转发任务有意义）
+      if (this.createForm.typeFilters.length > 0) {
+        params.filter_types = this.createForm.typeFilters;
+      }
     } else if (this.createForm.taskType === 'forward') {
       params.chat_id = this.createForm.sourceChat;
       params.forward_target = this.createForm.targetChat;
       _flattenRange(this._buildMessageRange());
+      // 类型过滤
+      if (this.createForm.typeFilters.length > 0) {
+        params.filter_types = this.createForm.typeFilters;
+      }
     } else if (this.createForm.taskType === 'upload') {
       params.chat_id = this.createForm.target_chat;
       params.file_paths = this.createForm.selectedFiles || [];
@@ -497,6 +509,15 @@ class TaskManager {
   }
 
   /**
+   * 设置任务类型过滤条件
+   * @param {string} typeFilter - 类型过滤条件
+   */
+  setTypeFilter(typeFilter) {
+    this.typeFilter = typeFilter;
+    this.loadTasks(true);
+  }
+
+  /**
    * 设置页码
    * @param {number} page - 页码
    */
@@ -515,6 +536,43 @@ class TaskManager {
       .split('\n')
       .map(line => line.trim())
       .filter(line => line.length > 0).length;
+  }
+
+  /**
+   * 获取类型过滤选项列表
+   */
+  getTypeFilterOptions() {
+    return [
+      { value: 'photo', label: '图片', icon: '🖼️' },
+      { value: 'video', label: '视频', icon: '🎬' },
+      { value: 'document', label: '文档', icon: '📄' },
+      { value: 'audio', label: '音频', icon: '🎵' },
+      { value: 'animation', label: '动画', icon: '🎞️' },
+      { value: 'voice', label: '语音', icon: '🎤' },
+      { value: 'video_note', label: '视频笔记', icon: '📹' },
+    ];
+  }
+
+  /**
+   * 检查类型过滤是否选中
+   * @param {string} type - 类型值
+   * @returns {boolean}
+   */
+  isTypeFilterSelected(type) {
+    return this.createForm.typeFilters.includes(type);
+  }
+
+  /**
+   * 切换类型过滤选项
+   * @param {string} type - 类型值
+   */
+  toggleTypeFilter(type) {
+    const index = this.createForm.typeFilters.indexOf(type);
+    if (index === -1) {
+      this.createForm.typeFilters.push(type);
+    } else {
+      this.createForm.typeFilters.splice(index, 1);
+    }
   }
 
   /**
@@ -552,7 +610,7 @@ class TaskManager {
         } else if (minId < 1 || maxId < 1) {
           errors.push('消息 ID 必须为正整数');
         }
-      } else if (form.messageRangeMode === 'id_list') {
+      } else if (form.messageRangeMode === 'multiple_ids') {
         const count = this.getParsedItemCount();
         if (count === 0) {
           errors.push('请输入至少一个消息 ID 或链接');
@@ -730,6 +788,38 @@ class TaskManager {
       upload: '上传',
     };
     return textMap[type] || type;
+  }
+
+  /**
+   * 获取范围模式对应的中文文本
+   * @param {string} rangeMode - 范围模式
+   */
+  getRangeModeText(rangeMode) {
+    const textMap = {
+      id_range: 'ID范围',
+      date_range: '日期范围',
+      multiple_ids: '消息列表',
+      all: '全部消息',
+    };
+    return textMap[rangeMode] || rangeMode || '-';
+  }
+
+  /**
+   * 格式化类型过滤列表为中文文本
+   * @param {string[]} filterTypes - 类型过滤列表
+   */
+  formatFilterTypes(filterTypes) {
+    if (!filterTypes || filterTypes.length === 0) return '全部类型';
+    const textMap = {
+      video: '视频',
+      photo: '图片',
+      document: '文档',
+      audio: '音频',
+      animation: '动图',
+      voice: '语音',
+      video_note: '视频笔记',
+    };
+    return filterTypes.map(t => textMap[t] || t).join(', ');
   }
 
   /**

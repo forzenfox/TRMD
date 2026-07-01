@@ -385,7 +385,7 @@ async def test_lru_eviction_on_max_entries(cache: CacheManager):
 async def test_single_flight_concurrent_refresh(cache: CacheManager):
     """并发强制刷新同一缓存键时，fetcher 只应被调用一次"""
     call_count = 0
-    event = asyncio.Event()
+    asyncio.Event()
 
     async def slow_fetcher():
         nonlocal call_count
@@ -472,7 +472,7 @@ async def test_message_stats_ttl(cache: CacheManager):
         estimator=estimator,
     )
 
-    now = int(asyncio.get_event_loop().time())
+    int(asyncio.get_event_loop().time())
     with cache._get_connection() as conn:
         cursor = conn.execute(
             "SELECT expires_at - created_at FROM cache_entries WHERE cache_type = 'message_stats'"
@@ -499,7 +499,7 @@ async def test_message_list_ttl(cache: CacheManager):
         fetcher=fetcher,
     )
 
-    now = int(asyncio.get_event_loop().time())
+    int(asyncio.get_event_loop().time())
     with cache._get_connection() as conn:
         cursor = conn.execute(
             "SELECT expires_at - created_at FROM cache_entries WHERE cache_type = 'message_list'"

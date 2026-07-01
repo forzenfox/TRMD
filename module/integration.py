@@ -62,12 +62,13 @@ class AppContext:
 
         # 初始化核心管理器
         self.token_manager = self._init_token_manager()
+        self.config_manager = self._init_config_manager()
         self.task_manager = self._init_task_manager()
         self.cache_manager = self._init_cache_manager()
         self.file_manager = self._init_file_manager()
         self.interaction_manager = self._init_interaction_manager()
-        self.config_manager = self._init_config_manager()
         self.repository_db = self._init_repository_db()
+        self.repository_manager = self._init_repository_manager()
         self.repository_sync = None  # 延迟初始化，需要 client
 
         # 延迟初始化（需在 client 启动后调用 init_task_executor）
@@ -90,12 +91,16 @@ class AppContext:
 
     def _init_task_manager(self) -> TaskManager:
         """初始化 TaskManager。"""
+        rl = self.config_manager.resource_limits
         tm = TaskManager(
             db_path=self.db_path,
-            max_concurrent_tasks=1,
-            max_retries=3,
+            max_concurrent_tasks=rl.get("max_concurrent_tasks", 1),
+            max_retry_count=5,
+            task_size_warning_gb=rl.get("task_size_warning_gb", 5),
+            task_size_max_gb=rl.get("task_size_max_gb", 10),
+            min_disk_space_gb=rl.get("min_disk_space_gb", 2),
         )
-        log.info("TaskManager 已初始化")
+        log.info("TaskManager 已初始化（配置来自 ConfigManager）")
         return tm
 
     def _init_cache_manager(self) -> CacheManager:
@@ -129,6 +134,17 @@ class AppContext:
         repo_db = RepositoryDB(db_path=db_path)
         log.info(f"RepositoryDB 已初始化，数据库路径: {db_path}")
         return repo_db
+
+    def _init_repository_manager(self):
+        """初始化 RepositoryManager。"""
+        from module.core.repository_manager import RepositoryManager
+
+        rm = RepositoryManager(
+            repository_db=self.repository_db,
+            config_manager=self.config_manager,
+        )
+        log.info("RepositoryManager 已初始化")
+        return rm
 
     def init_repository_sync(self, client) -> None:
         """延迟初始化并启动 RepositorySync。
@@ -171,6 +187,8 @@ class AppContext:
             client=client,
             downloader=downloader,
             uploader=uploader,
+            config_manager=self.config_manager,
+            repository_manager=self.repository_manager,
         )
         log.info("TaskExecutor 已初始化")
 

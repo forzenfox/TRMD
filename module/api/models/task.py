@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 TaskType = Literal["download", "forward", "upload"]
 TaskStatus = Literal["pending", "queued", "running", "completed", "failed", "cancelled"]
-RangeMode = Literal["date_range", "id_range", "message_list", "all"]
+RangeMode = Literal["date_range", "id_range", "multiple_ids", "all"]
 
 
 class TaskBase(BaseModel):

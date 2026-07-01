@@ -37,13 +37,17 @@ def _start_web_api_background(port: int = 8000):
     t.start()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     check_environ()
 
     # 确定 WebUI 端口（--port 优先，其次 --web PORT）
     web_port = PARSE_ARGS.port
     if web_port is None:
-        web_port = PARSE_ARGS.web if (PARSE_ARGS.web is not None and PARSE_ARGS.web > 0) else 8000
+        web_port = (
+            PARSE_ARGS.web
+            if (PARSE_ARGS.web is not None and PARSE_ARGS.web > 0)
+            else 8000
+        )
 
     # 启动 Web API（后台线程）+ Telegram 客户端（主线程）
     _start_web_api_background(port=web_port)

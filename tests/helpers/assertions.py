@@ -9,7 +9,9 @@ from typing import Any, Dict, Optional
 
 
 def assert_success_response(
-    response_data: Dict[str, Any], expected_code: int = 0, expected_message: str = "success"
+    response_data: Dict[str, Any],
+    expected_code: int = 0,
+    expected_message: str = "success",
 ) -> None:
     """验证成功响应格式。
 
@@ -24,12 +26,18 @@ def assert_success_response(
     assert "code" in response_data, "响应缺少 code 字段"
     assert "message" in response_data, "响应缺少 message 字段"
     assert "data" in response_data, "响应缺少 data 字段"
-    assert response_data["code"] == expected_code, f"code 值错误：期望 {expected_code}，实际 {response_data['code']}"
-    assert response_data["message"] == expected_message, f"message 值错误：期望 {expected_message}，实际 {response_data['message']}"
+    assert response_data["code"] == expected_code, (
+        f"code 值错误：期望 {expected_code}，实际 {response_data['code']}"
+    )
+    assert response_data["message"] == expected_message, (
+        f"message 值错误：期望 {expected_message}，实际 {response_data['message']}"
+    )
 
 
 def assert_error_response(
-    response_data: Dict[str, Any], expected_code: int, expected_message: Optional[str] = None
+    response_data: Dict[str, Any],
+    expected_code: int,
+    expected_message: Optional[str] = None,
 ) -> None:
     """验证错误响应格式。
 
@@ -43,9 +51,13 @@ def assert_error_response(
     """
     assert "code" in response_data, "响应缺少 code 字段"
     assert "message" in response_data, "响应缺少 message 字段"
-    assert response_data["code"] == expected_code, f"code 值错误：期望 {expected_code}，实际 {response_data['code']}"
+    assert response_data["code"] == expected_code, (
+        f"code 值错误：期望 {expected_code}，实际 {response_data['code']}"
+    )
     if expected_message is not None:
-        assert response_data["message"] == expected_message, f"message 值错误：期望 {expected_message}，实际 {response_data['message']}"
+        assert response_data["message"] == expected_message, (
+            f"message 值错误：期望 {expected_message}，实际 {response_data['message']}"
+        )
 
 
 def assert_task_status(
@@ -66,15 +78,21 @@ def assert_task_status(
         AssertionError: 如果任务状态不符合预期
     """
     assert "status" in task_data, "任务数据缺少 status 字段"
-    assert task_data["status"] == expected_status, f"任务状态错误：期望 {expected_status}，实际 {task_data['status']}"
+    assert task_data["status"] == expected_status, (
+        f"任务状态错误：期望 {expected_status}，实际 {task_data['status']}"
+    )
 
     if expected_task_type is not None:
         assert "task_type" in task_data, "任务数据缺少 task_type 字段"
-        assert task_data["task_type"] == expected_task_type, f"任务类型错误：期望 {expected_task_type}，实际 {task_data['task_type']}"
+        assert task_data["task_type"] == expected_task_type, (
+            f"任务类型错误：期望 {expected_task_type}，实际 {task_data['task_type']}"
+        )
 
     if expected_chat_id is not None:
         assert "chat_id" in task_data, "任务数据缺少 chat_id 字段"
-        assert task_data["chat_id"] == expected_chat_id, f"频道 ID 错误：期望 {expected_chat_id}，实际 {task_data['chat_id']}"
+        assert task_data["chat_id"] == expected_chat_id, (
+            f"频道 ID 错误：期望 {expected_chat_id}，实际 {task_data['chat_id']}"
+        )
 
 
 def assert_pagination_response(
@@ -102,13 +120,19 @@ def assert_pagination_response(
     assert "items" in data, "分页数据缺少 items 字段"
 
     if expected_total is not None:
-        assert data["total"] == expected_total, f"total 值错误：期望 {expected_total}，实际 {data['total']}"
+        assert data["total"] == expected_total, (
+            f"total 值错误：期望 {expected_total}，实际 {data['total']}"
+        )
 
     if expected_limit is not None:
-        assert data["limit"] == expected_limit, f"limit 值错误：期望 {expected_limit}，实际 {data['limit']}"
+        assert data["limit"] == expected_limit, (
+            f"limit 值错误：期望 {expected_limit}，实际 {data['limit']}"
+        )
 
     if expected_offset is not None:
-        assert data["offset"] == expected_offset, f"offset 值错误：期望 {expected_offset}，实际 {data['offset']}"
+        assert data["offset"] == expected_offset, (
+            f"offset 值错误：期望 {expected_offset}，实际 {data['offset']}"
+        )
 
     assert isinstance(data["items"], list), "items 必须是列表"
 
@@ -130,7 +154,11 @@ def assert_token_response(response_data: Dict[str, Any]) -> None:
     assert "usage_count" in data, "Token 响应缺少 usage_count 字段"
 
 
-def assert_file_info(file_info: Dict[str, Any], expected_name: Optional[str] = None, expected_type: Optional[str] = None) -> None:
+def assert_file_info(
+    file_info: Dict[str, Any],
+    expected_name: Optional[str] = None,
+    expected_type: Optional[str] = None,
+) -> None:
     """验证文件信息。
 
     Args:
@@ -147,13 +175,19 @@ def assert_file_info(file_info: Dict[str, Any], expected_name: Optional[str] = N
     assert "size" in file_info, "文件信息缺少 size 字段"
 
     if expected_name is not None:
-        assert file_info["name"] == expected_name, f"文件名错误：期望 {expected_name}，实际 {file_info['name']}"
+        assert file_info["name"] == expected_name, (
+            f"文件名错误：期望 {expected_name}，实际 {file_info['name']}"
+        )
 
     if expected_type is not None:
-        assert file_info["type"] == expected_type, f"文件类型错误：期望 {expected_type}，实际 {file_info['type']}"
+        assert file_info["type"] == expected_type, (
+            f"文件类型错误：期望 {expected_type}，实际 {file_info['type']}"
+        )
 
 
-def assert_config_response(response_data: Dict[str, Any], check_sensitive_fields: bool = True) -> None:
+def assert_config_response(
+    response_data: Dict[str, Any], check_sensitive_fields: bool = True
+) -> None:
     """验证配置响应。
 
     Args:
@@ -199,7 +233,11 @@ def assert_list_response(
     assert isinstance(data, list), "data 必须是列表"
 
     if expected_min_items > 0:
-        assert len(data) >= expected_min_items, f"项目数不足：期望至少 {expected_min_items}，实际 {len(data)}"
+        assert len(data) >= expected_min_items, (
+            f"项目数不足：期望至少 {expected_min_items}，实际 {len(data)}"
+        )
 
     if expected_max_items is not None:
-        assert len(data) <= expected_max_items, f"项目数过多：期望至多 {expected_max_items}，实际 {len(data)}"
+        assert len(data) <= expected_max_items, (
+            f"项目数过多：期望至多 {expected_max_items}，实际 {len(data)}"
+        )

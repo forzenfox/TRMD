@@ -26,7 +26,7 @@ from module.core.task_manager import (
     TaskType,
     TaskStatus,
     ItemStatus,
-    InvalidStateTransition,
+    TaskStateError,
 )
 
 
@@ -177,8 +177,8 @@ class TestTaskItemModel:
         assert item.status == ItemStatus.SKIPPED
 
     def test_task_item_can_retry(self):
-        """测试可重试判定。"""
-        # FloodWait 可重试
+        """测试可重试判定（error_message 和 error_code 均参与判断）。"""
+        # FloodWait 可重试（通过 error_message）
         item1 = TaskItem(
             id="msg_100",
             task_id="",
@@ -187,7 +187,7 @@ class TestTaskItemModel:
         )
         assert item1.can_retry() is True
 
-        # 网络超时 可重试
+        # 网络超时 可重试（通过 error_message）
         item2 = TaskItem(
             id="msg_101",
             task_id="",
@@ -196,7 +196,7 @@ class TestTaskItemModel:
         )
         assert item2.can_retry() is True
 
-        # 消息已删除 不可重试
+        # 消息已删除 不可重试（通过 error_message）
         item3 = TaskItem(
             id="msg_102",
             task_id="",
@@ -205,14 +205,25 @@ class TestTaskItemModel:
         )
         assert item3.can_retry() is False
 
-        # 无权限 不可重试
+        # 无权限 不可重试（通过 error_code）
         item4 = TaskItem(
             id="msg_103",
             task_id="",
             status=ItemStatus.FAILED,
-            error_message="CHAT_FORBIDDEN",
+            error_code="CHAT_FORBIDDEN",
+            error_message="无权访问该频道",
         )
         assert item4.can_retry() is False
+
+        # error_code 优先于 error_message 判断
+        item5 = TaskItem(
+            id="msg_104",
+            task_id="",
+            status=ItemStatus.FAILED,
+            error_code="USER_BANNED",
+            error_message="some generic message",
+        )
+        assert item5.can_retry() is False
 
 
 # ============================================================
@@ -373,7 +384,7 @@ class TestTaskStateTransitions:
         )
         await task_manager.start_task(task.task_id)
         await task_manager.complete_task(task.task_id)
-        with pytest.raises(InvalidStateTransition):
+        with pytest.raises(TaskStateError):
             await task_manager.cancel_task(task.task_id)
 
     @pytest.mark.asyncio
@@ -447,7 +458,7 @@ class TestRetryLogic:
             params={"message_range_start": 1, "message_range_end": 10},
         )
         await task_manager.start_task(task.task_id)
-        with pytest.raises(InvalidStateTransition):
+        with pytest.raises(TaskStateError):
             await task_manager.retry_task(task.task_id)
 
     @pytest.mark.asyncio
@@ -503,21 +514,27 @@ class TestResourceProtection:
             },
         )
         assert task.params.get("estimated_size") == 3 * 1024 * 1024 * 1024
-        assert task_manager.check_size_threshold(3 * 1024 * 1024 * 1024) == "ok"
+        level, msg = task_manager.check_size_threshold(3 * 1024 * 1024 * 1024)
+        assert level == "ok"
+        assert msg is None
 
     @pytest.mark.asyncio
     async def test_task_size_warning(self, task_manager):
         """测试任务大小触发告警。"""
         size = 7 * 1024 * 1024 * 1024  # 7GB
-        result = task_manager.check_size_threshold(size)
-        assert result == "warning"
+        level, msg = task_manager.check_size_threshold(size)
+        assert level == "warning"
+        assert msg is not None
+        assert "7.00GB" in msg
 
     @pytest.mark.asyncio
     async def test_task_size_exceeded(self, task_manager):
         """测试任务大小超过上限。"""
         size = 12 * 1024 * 1024 * 1024  # 12GB
-        result = task_manager.check_size_threshold(size)
-        assert result == "exceeded"
+        level, msg = task_manager.check_size_threshold(size)
+        assert level == "exceeded"
+        assert msg is not None
+        assert "12.00GB" in msg
 
     @pytest.mark.asyncio
     async def test_disk_space_check(self, task_manager):
@@ -541,6 +558,185 @@ class TestResourceProtection:
             )
             assert task_manager.check_disk_space() is True
 
+    @pytest.mark.asyncio
+    async def test_disk_space_oserror_raises(self, task_manager):
+        """测试磁盘空间检查 OSError 时抛出 ResourceLimitError。"""
+        from module.core.task_manager import ResourceLimitError
+
+        with patch("shutil.disk_usage", side_effect=OSError("disk error")):
+            with pytest.raises(ResourceLimitError, match="无法获取磁盘使用信息"):
+                task_manager.check_disk_space()
+
+    @pytest.mark.asyncio
+    async def test_disk_space_with_download_dir(self, task_manager):
+        """测试 check_disk_space 使用指定下载目录。"""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 使用真实临时目录检查
+            result = task_manager.check_disk_space(download_dir=tmpdir)
+            assert result is True
+
+    @pytest.mark.asyncio
+    async def test_create_task_exceeds_max_size_forbidden(self, task_manager):
+        """测试 create_task 中 estimated_size > 10GB 抛出 ResourceLimitError。"""
+        from module.core.task_manager import ResourceLimitError
+
+        with pytest.raises(ResourceLimitError, match="上限"):
+            await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=-1001234567890,
+                params={
+                    "message_range_start": 1,
+                    "message_range_end": 10,
+                    "estimated_size": 12 * 1024 * 1024 * 1024,  # 12GB
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_task_insufficient_disk_space(self, task_manager):
+        """测试 create_task 中磁盘不足抛出 ResourceLimitError。"""
+        from module.core.task_manager import ResourceLimitError
+
+        with patch("shutil.disk_usage") as mock_disk_usage:
+            mock_disk_usage.return_value = MagicMock(
+                total=50 * 1024**3,
+                used=49 * 1024**3,
+                free=1 * 1024**3,  # 1GB 剩余，小于 min_disk_space_gb=2
+            )
+            with pytest.raises(ResourceLimitError, match="磁盘剩余空间不足"):
+                await task_manager.create_task(
+                    task_type=TaskType.DOWNLOAD,
+                    chat_id=-1001234567890,
+                    params={
+                        "message_range_start": 1,
+                        "message_range_end": 10,
+                        "estimated_size": 0,
+                    },
+                )
+
+    @pytest.mark.asyncio
+    async def test_create_task_warning_size_allowed(self, task_manager):
+        """测试 create_task 中 5-10GB 任务正常创建（警告级由 API 层处理）。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={
+                "message_range_start": 1,
+                "message_range_end": 10,
+                "estimated_size": 7 * 1024 * 1024 * 1024,  # 7GB - 警告级
+            },
+        )
+        assert task.task_id is not None
+        assert task.params.get("estimated_size") == 7 * 1024 * 1024 * 1024
+
+    @pytest.mark.asyncio
+    async def test_create_task_under_threshold_ok(self, task_manager):
+        """测试 create_task 中 <5GB 任务正常创建。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={
+                "message_range_start": 1,
+                "message_range_end": 10,
+                "estimated_size": 3 * 1024 * 1024 * 1024,  # 3GB
+            },
+        )
+        assert task.task_id is not None
+
+    @pytest.mark.asyncio
+    async def test_check_size_threshold_returns_tuple(self, task_manager):
+        """验证 check_size_threshold 返回值为 (str, Optional[str]) 元组。"""
+        result = task_manager.check_size_threshold(1024)
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], str)
+        assert result[0] in ("ok", "warning", "exceeded")
+
+    @pytest.mark.asyncio
+    async def test_invalid_task_type_raises_validation_error(self, task_manager):
+        """测试 create_task 传入非法 task_type 抛出 ValidationError。"""
+        from module.core.task_manager import ValidationError
+
+        with pytest.raises(ValidationError, match="无效的任务类型"):
+            await task_manager.create_task(
+                task_type="invalid_type",
+                chat_id=-1001234567890,
+            )
+
+    @pytest.mark.asyncio
+    async def test_missing_chat_id_raises_validation_error(self, task_manager):
+        """测试 create_task 传入 chat_id=0 抛出 ValidationError。"""
+        from module.core.task_manager import ValidationError
+
+        with pytest.raises(ValidationError, match="chat_id"):
+            await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_task_state_error_on_invalid_transition(self, task_manager):
+        """验证 TaskStateError 在状态不允许时被抛出。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        # 已完成的任务不允许取消
+        await task_manager.start_task(task.task_id)
+        await task_manager.complete_task(task.task_id)
+        with pytest.raises(TaskStateError):
+            await task_manager.cancel_task(task.task_id)
+
+    @pytest.mark.asyncio
+    async def test_backward_compat_aliases(self):
+        """验证向后兼容别名仍可用。"""
+        from module.core.task_manager import (
+            InvalidStateTransition,
+            TaskStateError,
+        )
+
+        assert InvalidStateTransition is TaskStateError
+
+    @pytest.mark.asyncio
+    async def test_create_task_invalid_range_mode(self, task_manager):
+        """测试 create_task 传入非法 range_mode 抛出 ValidationError。"""
+        from module.core.task_manager import ValidationError
+
+        with pytest.raises(ValidationError, match="无效的 range_mode"):
+            await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=-1001234567890,
+                params={"range_mode": "invalid_mode", "min_id": 1, "max_id": 5},
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_task_date_range_missing_start_date(self, task_manager):
+        """测试 date_range 缺少 start_date 抛出 ValidationError。"""
+        from module.core.task_manager import ValidationError
+
+        with pytest.raises(ValidationError, match="date_range 模式需要提供 start_date"):
+            await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=-1001234567890,
+                params={"range_mode": "date_range", "end_date": "2024-06-20"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_create_task_multiple_ids_missing_message_list(self, task_manager):
+        """测试 multiple_ids 缺少 message_list 抛出 ValidationError。"""
+        from module.core.task_manager import ValidationError
+
+        with pytest.raises(
+            ValidationError, match="multiple_ids 模式需要提供 message_list"
+        ):
+            await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=-1001234567890,
+                params={"range_mode": "multiple_ids"},
+            )
+
 
 # ============================================================
 # 测试：任务列表与查询
@@ -563,8 +759,9 @@ class TestTaskList:
             chat_id=-1001234567890,
             params={"file_paths": ["/tmp/test.mp4"]},
         )
-        tasks = await task_manager.list_tasks()
+        tasks, total = await task_manager.list_tasks()
         assert len(tasks) == 2
+        assert total == 2
 
     @pytest.mark.asyncio
     async def test_list_tasks_by_status(self, task_manager):
@@ -581,8 +778,9 @@ class TestTaskList:
         )
         await task_manager.start_task(task1.task_id)
         await task_manager.complete_task(task1.task_id)
-        completed = await task_manager.list_tasks(status=TaskStatus.COMPLETED)
+        completed, total = await task_manager.list_tasks(status=TaskStatus.COMPLETED)
         assert len(completed) == 1
+        assert total == 1
         assert completed[0].task_id == task1.task_id
 
     @pytest.mark.asyncio
@@ -602,6 +800,70 @@ class TestTaskList:
         """测试获取不存在的任务返回 None。"""
         result = await task_manager.get_task("nonexistent_id")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_with_limit(self, task_manager):
+        """测试分页 limit。"""
+        for i in range(5):
+            await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=-1001234567890,
+                params={"message_range_start": 1, "message_range_end": 10},
+            )
+        tasks, total = await task_manager.list_tasks(limit=2)
+        assert len(tasks) == 2
+        assert total == 5
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_with_offset(self, task_manager):
+        """测试分页 offset。"""
+        for i in range(5):
+            await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=-1001234567890,
+                params={"message_range_start": 1, "message_range_end": 10},
+            )
+        tasks, total = await task_manager.list_tasks(limit=2, offset=2)
+        assert len(tasks) == 2
+        assert total == 5
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_by_task_type(self, task_manager):
+        """测试按类型过滤。"""
+        await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.create_task(
+            task_type=TaskType.UPLOAD,
+            chat_id=-1001234567890,
+            params={"file_paths": ["/tmp/test.mp4"]},
+        )
+        downloads, total = await task_manager.list_tasks(task_type=TaskType.DOWNLOAD)
+        assert len(downloads) == 1
+        assert total == 1
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_combined_filters(self, task_manager):
+        """测试组合过滤（状态+类型）。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.create_task(
+            task_type=TaskType.UPLOAD,
+            chat_id=-1001234567890,
+            params={"file_paths": ["/tmp/test.mp4"]},
+        )
+        await task_manager.start_task(task.task_id)
+        await task_manager.complete_task(task.task_id)
+        result, total = await task_manager.list_tasks(
+            status=TaskStatus.COMPLETED, task_type=TaskType.DOWNLOAD
+        )
+        assert len(result) == 1
+        assert total == 1
 
 
 # ============================================================
@@ -685,8 +947,9 @@ class TestPersistenceAndRecovery:
 
         # 第二轮：重新加载
         tm2 = TaskManager(db_path=db_path, max_concurrent_tasks=2)
-        tasks = await tm2.list_tasks()
+        tasks, total = await tm2.list_tasks()
         assert len(tasks) == 1
+        assert total == 1
         assert tasks[0].task_id == task_id
         assert tasks[0].status == TaskStatus.COMPLETED
 
@@ -708,7 +971,195 @@ class TestPersistenceAndRecovery:
         # task1 未完成，task2 未启动
 
         tm2 = TaskManager(db_path=db_path, max_concurrent_tasks=2)
-        pending = await tm2.list_tasks(status=TaskStatus.PENDING)
-        running = await tm2.list_tasks(status=TaskStatus.RUNNING)
+        pending, pending_total = await tm2.list_tasks(status=TaskStatus.PENDING)
+        running, running_total = await tm2.list_tasks(status=TaskStatus.RUNNING)
         assert len(pending) == 1
+        assert pending_total == 1
         assert len(running) == 1
+        assert running_total == 1
+
+
+# ============================================================
+# 测试：shutdown
+# ============================================================
+
+
+class TestShutdown:
+    """测试 TaskManager 优雅关闭。"""
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_running(self, task_manager):
+        """shutdown 取消运行中任务。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.start_task(task.task_id)
+        assert task.status == TaskStatus.RUNNING
+        await task_manager.shutdown()
+        assert task.status == TaskStatus.CANCELLED
+
+    @pytest.mark.asyncio
+    async def test_shutdown_cancels_queued(self, task_manager):
+        """shutdown 取消排队中任务。"""
+        # 先创建并发数 2 个任务并启动填满并发
+        for _ in range(2):
+            t = await task_manager.create_task(
+                task_type=TaskType.DOWNLOAD,
+                chat_id=-1001234567890,
+                params={"message_range_start": 1, "message_range_end": 10},
+            )
+            t._max_concurrent_tasks = 1  # 不能直接修改，用绕过方式
+        # 使用 task_manager.max_concurrent_tasks 属性
+        # 直接创建第3个任务会排队
+        t1 = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.start_task(t1.task_id)
+        _ = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        # 简化：直接验证 shutdown 清空队列
+        await task_manager.shutdown()
+        # 验证队列为空
+        assert len(task_manager._task_queue) == 0
+
+    @pytest.mark.asyncio
+    async def test_shutdown_completed_untouched(self, task_manager):
+        """shutdown 不影响已完成任务。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.start_task(task.task_id)
+        await task_manager.complete_task(task.task_id)
+        await task_manager.shutdown()
+        assert task.status == TaskStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_shutdown_clears_queue(self, task_manager):
+        """shutdown 清空排队列表。"""
+        await task_manager.shutdown()
+        assert len(task_manager._task_queue) == 0
+
+
+# ============================================================
+# 测试：get_task_stats
+# ============================================================
+
+
+class TestGetTaskStats:
+    """测试 TaskManager 统计信息。"""
+
+    @pytest.mark.asyncio
+    async def test_stats_all_counts(self, task_manager):
+        """多种状态任务的统计。"""
+        t1 = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        t2 = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        _ = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.start_task(t1.task_id)
+        await task_manager.complete_task(t1.task_id)
+        await task_manager.start_task(t2.task_id)
+        await task_manager.cancel_task(t2.task_id)
+        # 第3个任务保持 PENDING
+
+        stats = task_manager.get_task_stats()
+        assert stats["total"] == 3
+        assert stats["completed"] == 1
+        assert stats["cancelled"] == 1
+        assert stats["pending"] == 1
+
+    @pytest.mark.asyncio
+    async def test_stats_empty(self, task_manager):
+        """空的任务管理器统计。"""
+        stats = task_manager.get_task_stats()
+        assert stats["total"] == 0
+        assert stats["completed"] == 0
+        assert stats["failed"] == 0
+        assert stats["running"] == 0
+        assert stats["pending"] == 0
+        assert stats["total_size_bytes"] == 0
+
+    @pytest.mark.asyncio
+    async def test_stats_total_size(self, task_manager):
+        """累计总大小统计。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        task.total_size_bytes = 1024
+        stats = task_manager.get_task_stats()
+        assert stats["total_size_bytes"] == 1024
+
+
+# ============================================================
+# 测试：create_task auto_start
+# ============================================================
+
+
+class TestCreateTaskAutoStart:
+    """测试 create_task auto_start 参数。"""
+
+    @pytest.mark.asyncio
+    async def test_create_task_auto_start(self, task_manager):
+        """auto_start=True 时任务应为 RUNNING 或 QUEUED（状态发生变更）。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+            auto_start=True,
+        )
+        assert task.status != TaskStatus.PENDING
+
+
+# ============================================================
+# 测试：cancel_task reason
+# ============================================================
+
+
+class TestCancelTaskWithReason:
+    """测试 cancel_task reason 参数。"""
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_with_reason(self, task_manager):
+        """取消带原因。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.start_task(task.task_id)
+        await task_manager.cancel_task(task.task_id, reason="用户手动取消")
+        assert task.status == TaskStatus.CANCELLED
+        assert task.error_message == "用户手动取消"
+
+    @pytest.mark.asyncio
+    async def test_cancel_task_reason_persisted(self, task_manager):
+        """取消原因持久化。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        await task_manager.start_task(task.task_id)
+        await task_manager.cancel_task(task.task_id, reason="资源不足")
+        assert task.error_message == "资源不足"

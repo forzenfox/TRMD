@@ -29,10 +29,20 @@ CACHE_TYPE_CHAT_LIST = "chat_list"
 CACHE_TYPE_MESSAGE_LIST = "message_list"
 CACHE_TYPE_MESSAGE_STATS = "message_stats"
 
+# 仓库模式缓存类型常量（新增）
+CACHE_TYPE_REPOSITORY_FILES = "repository_files"
+CACHE_TYPE_REPOSITORY_SOURCESS = "repository_sources"
+CACHE_TYPE_FILE_DISTRIBUTIONS = "file_distributions"
+
 # TTL 配置（秒）
 TTL_CHAT_LIST = 3600  # 1 小时
 TTL_MESSAGE_LIST = 1800  # 30 分钟
 TTL_MESSAGE_STATS = 600  # 10 分钟
+
+# 仓库缓存TTL配置（新增）
+TTL_REPOSITORY_FILES = 600  # 10 分钟
+TTL_REPOSITORY_SOURCES = 3600  # 1 小时
+TTL_FILE_DISTRIBUTIONS = 600  # 10 分钟
 
 # 容量控制
 DEFAULT_MAX_ENTRIES = 10000  # 默认最大缓存条目数
@@ -402,6 +412,135 @@ class CacheManager:
             deleted = cursor.rowcount
             logger.info(f"删除了 {deleted} 条消息统计缓存")
             return deleted
+
+    # ---------- 仓库模式缓存（新增）----------
+
+    async def get_repository_files(
+        self,
+        chat_id: int,
+        params: dict,
+        fetcher: Callable | None = None,
+        force_refresh: bool = False,
+    ) -> dict:
+        """获取仓库文件列表缓存。
+
+        设计依据: module-design-cache-layer.md §285-L349
+
+        Args:
+            chat_id: 频道ID
+            params: 查询参数(offset, limit, file_type等)
+            fetcher: 数据获取函数(未缓存时调用)
+            force_refresh: 是否强制刷新
+
+        Returns:
+            包含items和total的字典
+        """
+        cache_type = CACHE_TYPE_REPOSITORY_FILES
+        key_params = {"chat_id": chat_id, **params}
+        return await self._get_or_fetch(
+            cache_type=cache_type,
+            key_params=key_params,
+            fetcher=fetcher,
+            ttl=TTL_REPOSITORY_FILES,
+            force_refresh=force_refresh,
+        )
+
+    async def get_repository_sources(
+        self,
+        chat_id: int,
+        file_unique_id: str,
+        fetcher: Callable | None = None,
+        force_refresh: bool = False,
+    ) -> list[dict]:
+        """获取文件来源映射缓存。
+
+        Args:
+            chat_id: 频道ID
+            file_unique_id: 文件唯一标识
+            fetcher: 数据获取函数(未缓存时调用)
+            force_refresh: 是否强制刷新
+
+        Returns:
+            来源映射列表
+        """
+        cache_type = CACHE_TYPE_REPOSITORY_SOURCESS
+        key_params = {"chat_id": chat_id, "file_unique_id": file_unique_id}
+        return await self._get_or_fetch(
+            cache_type=cache_type,
+            key_params=key_params,
+            fetcher=fetcher,
+            ttl=TTL_REPOSITORY_SOURCES,
+            force_refresh=force_refresh,
+        )
+
+    async def get_file_distributions(
+        self,
+        chat_id: int,
+        params: dict,
+        fetcher: Callable | None = None,
+        force_refresh: bool = False,
+    ) -> dict:
+        """获取分发记录缓存。
+
+        Args:
+            chat_id: 频道ID
+            params: 查询参数(offset, limit等)
+            fetcher: 数据获取函数(未缓存时调用)
+            force_refresh: 是否强制刷新
+
+        Returns:
+            包含items和total的字典
+        """
+        cache_type = CACHE_TYPE_FILE_DISTRIBUTIONS
+        key_params = {"chat_id": chat_id, **params}
+        return await self._get_or_fetch(
+            cache_type=cache_type,
+            key_params=key_params,
+            fetcher=fetcher,
+            ttl=TTL_FILE_DISTRIBUTIONS,
+            force_refresh=force_refresh,
+        )
+
+    def clear_repository_cache(self, chat_id: int | None = None) -> int:
+        """清除仓库缓存。
+
+        Args:
+            chat_id: 频道ID（可选，不指定则清除所有仓库缓存）
+
+        Returns:
+            删除条数
+        """
+        with self._get_connection() as conn:
+            if chat_id is not None:
+                cursor = conn.execute(
+                    "DELETE FROM cache_entries WHERE cache_type IN (?, ?, ?) AND chat_id = ?",
+                    (
+                        CACHE_TYPE_REPOSITORY_FILES,
+                        CACHE_TYPE_REPOSITORY_SOURCESS,
+                        CACHE_TYPE_FILE_DISTRIBUTIONS,
+                        str(chat_id),
+                    ),
+                )
+            else:
+                cursor = conn.execute(
+                    "DELETE FROM cache_entries WHERE cache_type IN (?, ?, ?)",
+                    (
+                        CACHE_TYPE_REPOSITORY_FILES,
+                        CACHE_TYPE_REPOSITORY_SOURCESS,
+                        CACHE_TYPE_FILE_DISTRIBUTIONS,
+                    ),
+                )
+            deleted = cursor.rowcount
+            logger.info(f"删除了 {deleted} 条仓库缓存")
+            return deleted
+
+    def clear_all_repository_cache(self) -> int:
+        """清除所有仓库缓存。
+
+        Returns:
+            删除条数
+        """
+        return self.clear_repository_cache(chat_id=None)
 
     # ---------- 通用操作 ----------
 

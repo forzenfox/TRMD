@@ -230,6 +230,36 @@
           </div>
         </div>
 
+        <!-- 任务类型筛选 -->
+        <div class="mb-6">
+          <div class="flex flex-wrap gap-2">
+            <button
+              @click="setTypeFilter('all')"
+              :class="taskManager.typeFilter === 'all' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              全部类型
+            </button>
+            <button
+              @click="setTypeFilter('download')"
+              :class="taskManager.typeFilter === 'download' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              下载
+            </button>
+            <button
+              @click="setTypeFilter('forward')"
+              :class="taskManager.typeFilter === 'forward' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              转发
+            </button>
+            <button
+              @click="setTypeFilter('upload')"
+              :class="taskManager.typeFilter === 'upload' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              上传
+            </button>
+          </div>
+        </div>
+
         <!-- 加载状态 -->
         <div x-show="loading" class="flex items-center justify-center py-12">
           <div class="spinner spinner-lg"></div>
@@ -418,6 +448,18 @@
                 </div>
               </div>
 
+              <!-- 范围模式 + 类型过滤 -->
+              <div class="grid grid-cols-2 gap-4">
+                <div>
+                  <p class="text-sm text-slate-400">范围模式</p>
+                  <p class="text-white mt-1" x-text="taskManager.getRangeModeText(selectedTask.params?.range_mode)"></p>
+                </div>
+                <div>
+                  <p class="text-sm text-slate-400">类型过滤</p>
+                  <p class="text-white mt-1" x-text="taskManager.formatFilterTypes(selectedTask.params?.filter_types)"></p>
+                </div>
+              </div>
+
               <!-- 子任务统计 -->
               <div class="bg-slate-900/50 rounded-lg p-4 space-y-2">
                 <p class="text-xs text-slate-500 uppercase tracking-wider font-medium">子任务统计</p>
@@ -581,7 +623,7 @@
                   <span>日期范围</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="createForm.messageRangeMode" value="id_list" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="multiple_ids" class="mr-2">
                   <span>ID 列表</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
@@ -615,7 +657,7 @@
               </div>
 
               <!-- ID 列表 -->
-              <div x-show="createForm.messageRangeMode === 'id_list'">
+              <div x-show="createForm.messageRangeMode === 'multiple_ids'">
                 <textarea
                   x-model="createForm.rawItems"
                   class="form-input form-textarea"
@@ -637,13 +679,13 @@
             <div class="form-group" x-show="createForm.taskType !== 'upload'">
               <label class="form-label">类型过滤</label>
               <div class="flex flex-wrap gap-3">
-                <template x-for="option in configManager.getDownloadTypeOptions()" :key="option.value">
+                <template x-for="option in taskManager.getTypeFilterOptions()" :key="option.value">
                   <label class="flex items-center cursor-pointer">
                     <input
                       type="checkbox"
                       :value="option.value"
-                      @change="configManager.toggleDownloadType(option.value)"
-                      :checked="configManager.isDownloadTypeSelected(option.value)"
+                      @change="taskManager.toggleTypeFilter(option.value)"
+                      :checked="taskManager.isTypeFilterSelected(option.value)"
                       class="mr-2"
                     >
                     <span x-text="option.icon + ' ' + option.label"></span>
@@ -966,6 +1008,11 @@
 
         setFilter(filter) {
           taskManager.setFilter(filter);
+          this.refreshTasks();
+        },
+
+        setTypeFilter(filter) {
+          taskManager.setTypeFilter(filter);
           this.refreshTasks();
         },
 

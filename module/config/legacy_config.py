@@ -298,9 +298,9 @@ class UserConfig(BaseConfig):
         self.temp_directory: str = PARSE_ARGS.temp or (
             task.get("temp_directory") or UserConfig.TEMP_DIRECTORY
         )
-        self.data_directory: str = self.config.get(
-            "data_directory"
-        ) or UserConfig.DATA_DIRECTORY
+        self.data_directory: str = (
+            self.config.get("data_directory") or UserConfig.DATA_DIRECTORY
+        )
 
     def get_last_history_record(self) -> None:
         """获取最近一次保存的历史配置文件。"""
@@ -415,15 +415,29 @@ class UserConfig(BaseConfig):
         self.process_nesting(param_name="task", config=config)
         if "task" in config and isinstance(config["task"], dict):
             task_template = UserConfig.TEMPLATE.get("task", {})
-            self.process_nesting(param_name="max_tasks", config=config["task"], template=task_template)
-            self.process_nesting(param_name="max_retries", config=config["task"], template=task_template)
+            self.process_nesting(
+                param_name="max_tasks", config=config["task"], template=task_template
+            )
+            self.process_nesting(
+                param_name="max_retries", config=config["task"], template=task_template
+            )
         # preference 分组（含嵌套子分组）
         self.process_nesting(param_name="preference", config=config)
         if "preference" in config and isinstance(config["preference"], dict):
             pref_template = UserConfig.TEMPLATE.get("preference", {})
-            self.process_nesting(param_name="forward_type", config=config["preference"], template=pref_template)
-            self.process_nesting(param_name="upload", config=config["preference"], template=pref_template)
-            self.process_nesting(param_name="export_table", config=config["preference"], template=pref_template)
+            self.process_nesting(
+                param_name="forward_type",
+                config=config["preference"],
+                template=pref_template,
+            )
+            self.process_nesting(
+                param_name="upload", config=config["preference"], template=pref_template
+            )
+            self.process_nesting(
+                param_name="export_table",
+                config=config["preference"],
+                template=pref_template,
+            )
         # log 分组
         self.process_nesting(param_name="log", config=config)
         # repository 分组
@@ -509,5 +523,3 @@ class UserConfig(BaseConfig):
     def ctrl_c(self):
         """服务退出时的处理（已移除暂停行为）。"""
         pass
-
-

@@ -349,11 +349,14 @@ class Bot:
         # 初始化 BotCommands 实例（通过 AppContext 共享管理器）
         if self.bot_commands is None:
             from module.integration import init_context
+
             ctx = init_context()
             self.bot_commands = BotCommands(
                 token_manager=ctx.token_manager,
                 interaction_manager=ctx.interaction_manager,
                 webui_base_url="http://localhost:8000",
+                task_manager=ctx.task_manager,
+                task_executor=ctx.task_executor,
             )
 
         # 注册 /web 命令
@@ -400,6 +403,14 @@ class Bot:
             group=1,
         )
 
+        # 注册 /batch 内联键盘回调处理器
+        self.bot.add_handler(
+            CallbackQueryHandler(
+                self.bot_commands.handle_batch_callback,
+                filters=filters.regex(r"^batch:") & filters.user(self.root),
+            ),
+        )
+
         # 更新 COMMANDS 列表
         new_commands = [
             BotCommand(cmd, desc) for cmd, desc in self.bot_commands.get_commands()
@@ -419,7 +430,9 @@ class Bot:
         pass
 
     async def done_notice(self, text):
-        if self.application.config.get("preference", {}).get(BotCallbackText.NOTICE, True):
+        if self.application.config.get("preference", {}).get(
+            BotCallbackText.NOTICE, True
+        ):
             if all([self.last_client, self.last_message]):
                 while True:
                     try:

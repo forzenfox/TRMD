@@ -113,7 +113,8 @@ class TaskItem:
             "USER_BANNED",
             "CHANNEL_PRIVATE",
         ]
-        if self.error_message and any(nr in self.error_message for nr in non_retryable):
+        check_str = self.error_code or self.error_message or ""
+        if check_str and any(nr in check_str for nr in non_retryable):
             return False
         return True
 
@@ -179,22 +180,38 @@ class TaskManagerError(Exception):
     pass
 
 
-class InvalidStateTransition(TaskManagerError):
-    """无效状态转换异常。"""
+class ValidationError(TaskManagerError):
+    """参数校验失败。"""
 
     pass
 
 
-class ResourceLimitExceeded(TaskManagerError):
-    """资源限制超出异常。"""
+class ResourceLimitError(TaskManagerError):
+    """资源限制触发。"""
 
     pass
 
 
 class TaskNotFoundError(TaskManagerError):
-    """任务未找到异常。"""
+    """任务不存在。"""
 
     pass
+
+
+class TaskStateError(TaskManagerError):
+    """任务状态不允许当前操作。"""
+
+    pass
+
+
+class ExecutorError(TaskManagerError):
+    """执行器内部错误。"""
+
+    pass
+
+
+# 向后兼容别名（过渡期保留，后续批次移除）
+InvalidStateTransition = TaskStateError
 
 
 # ============================================================
@@ -229,14 +246,14 @@ class TaskManager:
         self,
         db_path: Optional[str] = None,
         max_concurrent_tasks: int = 1,
-        max_retries: int = 3,
+        max_retry_count: int = 5,
         task_size_warning_gb: int = 5,
         task_size_max_gb: int = 10,
         min_disk_space_gb: int = 2,
     ):
         self._db_path = db_path or ":memory:"
         self._max_concurrent_tasks = max_concurrent_tasks
-        self._max_retries = max_retries
+        self._max_retry_count = max_retry_count
         self._task_size_warning_gb = task_size_warning_gb
         self._task_size_max_gb = task_size_max_gb
         self._min_disk_space_gb = min_disk_space_gb
@@ -381,6 +398,37 @@ class TaskManager:
             if queued_ids:
                 self._task_queue.extend(queued_ids)
                 log.info(f"已恢复 {len(queued_ids)} 个排队任务: {queued_ids}")
+
+    async def shutdown(self) -> None:
+        """优雅关闭：取消运行中/排队中任务、持久化状态。"""
+        async with self._lock:
+            for task in self._tasks.values():
+                if task.status in (TaskStatus.RUNNING, TaskStatus.QUEUED):
+                    task.status = TaskStatus.CANCELLED
+                    self._save_task(task)
+                    log.info(f"关闭时取消任务: {task.task_id}")
+            self._task_queue.clear()
+        log.info("TaskManager 已关闭")
+
+    def get_task_stats(self) -> dict:
+        """获取任务统计信息。"""
+        stats = {
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "running": 0,
+            "queued": 0,
+            "cancelled": 0,
+            "pending": 0,
+            "total_size_bytes": 0,
+        }
+        for task in self._tasks.values():
+            stats["total"] += 1
+            status_key = task.status.value
+            if status_key in stats:
+                stats[status_key] += 1
+            stats["total_size_bytes"] += task.total_size_bytes
+        return stats
 
     def _row_to_task(self, row) -> Task:
         """将数据库行转换为 Task。"""
@@ -553,9 +601,7 @@ class TaskManager:
         """验证状态转换是否合法。"""
         allowed = self.VALID_TRANSITIONS.get(current, set())
         if target not in allowed:
-            raise InvalidStateTransition(
-                f"无效状态转换: {current.value} → {target.value}"
-            )
+            raise TaskStateError(f"无效状态转换: {current.value} → {target.value}")
 
     def _get_running_count(self) -> int:
         """获取当前正在运行的任务数。"""
@@ -572,9 +618,60 @@ class TaskManager:
         task_type: TaskType,
         chat_id: int,
         params: Optional[dict] = None,
+        auto_start: bool = False,
     ) -> Task:
-        """创建任务。"""
+        """创建任务。
+
+        内部执行参数校验和强制级资源预检：
+        - 无效 task_type → 抛出 ValidationError
+        - chat_id 为空 → 抛出 ValidationError
+        - 任务大小 > task_size_max_gb → 抛出 ResourceLimitError
+        - 磁盘空间不足 → 抛出 ResourceLimitError
+
+        警告级检查（5GB~10GB）由 API 层单独处理。
+        """
         from datetime import datetime
+
+        # 参数校验
+        if not isinstance(task_type, TaskType):
+            raise ValidationError(f"无效的任务类型: {task_type}")
+        if not chat_id:
+            raise ValidationError("chat_id 不能为空")
+
+        # 消息范围参数校验（UPLOAD 任务不需要消息范围）
+        if task_type != TaskType.UPLOAD:
+            range_mode = (params or {}).get("range_mode", "all")
+            valid_modes = {"id_range", "multiple_ids", "date_range", "all"}
+            if range_mode not in valid_modes:
+                raise ValidationError(f"无效的 range_mode: {range_mode}")
+
+            if range_mode == "id_range":
+                if not (params or {}).get("min_id") and not (params or {}).get(
+                    "message_range_start"
+                ):
+                    raise ValidationError("id_range 模式需要提供 min_id")
+            elif range_mode == "multiple_ids":
+                if not (params or {}).get("message_list") and not (params or {}).get(
+                    "message_ids"
+                ):
+                    raise ValidationError("multiple_ids 模式需要提供 message_list")
+            elif range_mode == "date_range":
+                if not (params or {}).get("start_date") and not (params or {}).get(
+                    "date_start"
+                ):
+                    raise ValidationError("date_range 模式需要提供 start_date")
+
+        # 强制级资源预检
+        estimated_size = (params or {}).get("estimated_size", 0)
+        size_level, size_msg = self.check_size_threshold(estimated_size)
+        if size_level == "exceeded":
+            raise ResourceLimitError(size_msg or "任务大小超过上限")
+
+        # 磁盘空间预检
+        if not self.check_disk_space(estimated_size):
+            raise ResourceLimitError(
+                f"磁盘剩余空间不足，需至少保留 {self._min_disk_space_gb}GB"
+            )
 
         task_id = f"task_{uuid.uuid4().hex[:8]}"
         task = Task(
@@ -582,13 +679,15 @@ class TaskManager:
             task_type=task_type,
             chat_id=chat_id,
             params=params or {},
-            max_retry_count=self._max_retries,
+            max_retry_count=self._max_retry_count,
             created_at=datetime.now().isoformat(),
         )
         async with self._lock:
             self._tasks[task_id] = task
             self._save_task(task)
         log.info(f"任务已创建: {task_id} ({task_type.value})")
+        if auto_start:
+            await self.start_task(task_id)
         return task
 
     async def start_task(self, task_id: str) -> bool:
@@ -652,7 +751,7 @@ class TaskManager:
             # 尝试启动队列中的下一个任务
             await self._process_queue()
 
-    async def cancel_task(self, task_id: str):
+    async def cancel_task(self, task_id: str, reason: Optional[str] = None):
         """取消任务。"""
         async with self._lock:
             task = self._tasks.get(task_id)
@@ -660,6 +759,8 @@ class TaskManager:
                 raise TaskNotFoundError(f"任务不存在: {task_id}")
 
             self._validate_transition(task.status, TaskStatus.CANCELLED)
+            if reason:
+                task.error_message = reason
             task.status = TaskStatus.CANCELLED
             self._save_task(task)
             log.info(f"任务已取消: {task_id}")
@@ -697,11 +798,68 @@ class TaskManager:
         """获取任务。"""
         return self._tasks.get(task_id)
 
-    async def list_tasks(self, status: Optional[TaskStatus] = None) -> list[Task]:
-        """获取任务列表。"""
-        if status:
-            return [t for t in self._tasks.values() if t.status == status]
-        return list(self._tasks.values())
+    async def list_tasks(
+        self,
+        status: Optional[TaskStatus] = None,
+        task_type: Optional[TaskType] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> tuple[list[Task], int]:
+        """获取任务列表，支持状态过滤、类型过滤和分页。
+
+        Returns:
+            (tasks, total): tasks 是分页后列表，total 是过滤后总数（分页前）
+        """
+        if limit is not None and self._db_path != ":memory:":
+            # 使用数据库查询（支持 LIMIT/OFFSET/WHERE）
+            with self._db_connection() as conn:
+                cursor = conn.cursor()
+                conditions = []
+                params_list: list = []
+                if status:
+                    conditions.append("status = ?")
+                    params_list.append(status.value)
+                if task_type:
+                    conditions.append("task_type = ?")
+                    params_list.append(task_type.value)
+                where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+                # 总数查询
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM tm_tasks WHERE {where_clause}",
+                    tuple(params_list),
+                )
+                total = cursor.fetchone()[0]
+
+                # 分页查询
+                cursor.execute(
+                    f"SELECT * FROM tm_tasks WHERE {where_clause} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                    (*params_list, limit, offset),
+                )
+                rows = cursor.fetchall()
+                tasks = []
+                for row in rows:
+                    task = self._row_to_task(row)
+                    cursor.execute(
+                        "SELECT * FROM tm_task_items WHERE task_id = ?",
+                        (task.task_id,),
+                    )
+                    for item_row in cursor.fetchall():
+                        task.items.append(self._row_to_item(item_row))
+                    self._tasks[task.task_id] = task
+                    tasks.append(task)
+                return tasks, total
+        else:
+            # 内存模式或无分页时直接过滤
+            tasks = list(self._tasks.values())
+            if status:
+                tasks = [t for t in tasks if t.status == status]
+            if task_type:
+                tasks = [t for t in tasks if t.task_type == task_type]
+            total = len(tasks)
+            if limit is not None:
+                tasks = tasks[offset : offset + limit]
+            return tasks, total
 
     async def delete_task(self, task_id: str):
         """删除任务及其所有子任务（同时从内存和数据库中删除）。"""
@@ -742,9 +900,20 @@ class TaskManager:
         task_id: str,
         item_id: str,
         status: ItemStatus,
-        error_reason: Optional[str] = None,
+        error_message: Optional[str] = None,
+        error_code: Optional[str] = None,
+        **kwargs,
     ):
-        """更新子任务状态。"""
+        """更新子任务状态，支持额外字段更新。
+
+        Args:
+            task_id: 任务 ID
+            item_id: 子任务项 ID
+            status: 新状态
+            error_message: 可选的错误描述（人类可读）
+            error_code: 可选的错误代码（机器可读）
+            **kwargs: 额外要更新的字段（如 file_unique_id, file_sha256 等）
+        """
         from datetime import datetime
 
         now = datetime.now().isoformat()
@@ -756,8 +925,13 @@ class TaskManager:
                 if item.id == item_id:
                     item.status = status
                     item.updated_at = now
-                    if error_reason:
-                        item.error_message = error_reason
+                    if error_code:
+                        item.error_code = error_code
+                    if error_message:
+                        item.error_message = error_message
+                    for key, value in kwargs.items():
+                        if hasattr(item, key):
+                            setattr(item, key, value)
                     self._save_item(task_id, item)
                     self._save_task(task)
                     break
@@ -784,38 +958,55 @@ class TaskManager:
             raise TaskNotFoundError(f"任务不存在: {task_id}")
         return [item for item in task.items if item.status == ItemStatus.FAILED]
 
-    def check_size_threshold(self, size_bytes: int) -> str:
+    def check_size_threshold(self, size_bytes: int) -> tuple[str, Optional[str]]:
         """检查任务大小阈值。
 
         返回:
-            'ok' - 低于告警阈值
-            'warning' - 超过告警阈值但低于上限
-            'exceeded' - 超过上限
+            (level, message) 元组:
+            - ("ok", None) - 低于告警阈值
+            - ("warning", "当前任务 X.XX GB，超过 NgB 告警阈值") - 超过告警
+            - ("exceeded", "单次任务超过 NGB 上限（X.XX GB）") - 超过上限
         """
         warning_bytes = self._task_size_warning_gb * 1024 * 1024 * 1024
         max_bytes = self._task_size_max_gb * 1024 * 1024 * 1024
+        gb = size_bytes / (1024**3)
 
         if size_bytes > max_bytes:
-            return "exceeded"
+            return (
+                "exceeded",
+                f"单次任务超过 {self._task_size_max_gb}GB 上限（{gb:.2f}GB）",
+            )
         elif size_bytes > warning_bytes:
-            return "warning"
-        return "ok"
+            return (
+                "warning",
+                f"当前任务 {gb:.2f}GB，超过 {self._task_size_warning_gb}GB 告警阈值",
+            )
+        return "ok", None
 
-    def check_disk_space(self, estimated_size: int = 0) -> bool:
+    def check_disk_space(
+        self, estimated_size: int = 0, download_dir: Optional[str] = None
+    ) -> bool:
         """检查磁盘空间是否充足。
 
+        Args:
+            estimated_size: 预估任务大小（字节）
+            download_dir: 下载目录路径，用于检查磁盘空间
+
         返回 True 表示空间充足，False 表示空间不足。
+
+        Raises:
+            ResourceLimitError: 无法获取磁盘使用信息时
         """
         try:
-            # 获取项目目录所在磁盘
-            project_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            usage = shutil.disk_usage(project_dir)
+            check_dir = download_dir or os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))
+            )
+            usage = shutil.disk_usage(check_dir)
             free_gb = usage.free / (1024 * 1024 * 1024)
             estimated_gb = estimated_size / (1024 * 1024 * 1024)
             return free_gb >= (self._min_disk_space_gb + estimated_gb)
         except OSError:
-            log.warning("无法获取磁盘使用信息")
-            return True  # 无法获取时默认允许
+            raise ResourceLimitError("无法获取磁盘使用信息，拒绝创建任务")
 
     async def _process_queue(self):
         """处理任务队列，尝试启动排队的任务。"""

@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from typing import Union, Optional
 
 
-
 class LinkType:
     SINGLE: str = "single"
     GROUP: str = "group"
