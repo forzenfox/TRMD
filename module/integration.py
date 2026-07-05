@@ -99,6 +99,7 @@ class AppContext:
             task_size_warning_gb=rl.get("task_size_warning_gb", 5),
             task_size_max_gb=rl.get("task_size_max_gb", 10),
             min_disk_space_gb=rl.get("min_disk_space_gb", 2),
+            config_manager=self.config_manager,
         )
         log.info("TaskManager 已初始化（配置来自 ConfigManager）")
         return tm
@@ -171,7 +172,29 @@ class AppContext:
             self.repository_sync.stop()
             log.info("RepositorySync 已停止")
 
-    def init_task_executor(self, client, downloader=None, uploader=None):
+    def init_task_manager_services(self, client) -> None:
+        """在 Telegram Client 启动后向 TaskManager 注入 IdentifierService。
+
+        由于 client 在 AppContext 初始化时尚未启动，IdentifierService 需要延迟注入。
+        本方法幂等：若 task_manager 已持有 IdentifierService 则跳过。
+
+        Args:
+            client: 已启动的 Pyrogram Client 实例
+        """
+        if self.task_manager is None:
+            log.warning("TaskManager 未初始化，跳过 IdentifierService 注入")
+            return
+
+        if getattr(self.task_manager, "_identifier_service", None) is not None:
+            log.info("TaskManager 已注入 IdentifierService，跳过重复注入")
+            return
+
+        from module.core.identifier_service import IdentifierService
+
+        self.task_manager._identifier_service = IdentifierService(client)
+        log.info("TaskManager 已注入 IdentifierService")
+
+    async def init_task_executor(self, client, downloader=None, uploader=None):
         """初始化任务执行器（需在 client 启动后调用）。
 
         Args:
@@ -191,6 +214,9 @@ class AppContext:
             repository_manager=self.repository_manager,
         )
         log.info("TaskExecutor 已初始化")
+
+        # 恢复 running 状态的监听任务
+        await self.task_executor.recover_listeners()
 
     def get_webui_url(self, token: str) -> str:
         """生成 WebUI 访问链接。"""

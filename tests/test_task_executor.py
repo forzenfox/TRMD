@@ -1081,3 +1081,1129 @@ class TestResumeDownload:
             downloader=mock_downloader,
         )
         assert executor._downloader is mock_downloader
+
+
+# ============================================================
+# 测试：阶段 2 新特性（recent 模式与媒体过滤）
+# ============================================================
+
+
+class TestPhase2RecentAndMediaFilter:
+    """测试 recent 模式解析与媒体/大小过滤。"""
+
+    @pytest.mark.asyncio
+    async def test_resolve_message_ids_recent_mode(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """_resolve_message_ids 在 range_mode=recent 时调用 _resolve_recent_ids。"""
+        msg1 = MagicMock()
+        msg1.id = 10
+        msg2 = MagicMock()
+        msg2.id = 9
+
+        mock_client.get_chat_history = MagicMock(
+            return_value=AsyncIteratorMock([msg1, msg2])
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "recent", "recent_count": 2},
+        )
+        result = await executor._resolve_message_ids(task)
+        assert result == [10, 9]
+
+    @pytest.mark.asyncio
+    async def test_resolve_recent_ids(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """recent 模式返回最近 N 条消息 ID。"""
+        msg1 = MagicMock()
+        msg1.id = 10
+        msg2 = MagicMock()
+        msg2.id = 9
+        msg3 = MagicMock()
+        msg3.id = 8
+
+        mock_client.get_chat_history = MagicMock(
+            return_value=AsyncIteratorMock([msg1, msg2, msg3])
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "recent", "recent_count": 3},
+        )
+        result = await executor._resolve_recent_ids(task)
+        assert result == [10, 9, 8]
+
+    @pytest.mark.asyncio
+    async def test_resolve_recent_ids_missing_count_raises(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """recent 模式缺少有效 recent_count 时抛出 ExecutorError。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "recent", "recent_count": 1},
+        )
+        # 绕过 TaskManager 的校验，模拟执行时参数缺失
+        task.params.pop("recent_count")
+        with pytest.raises(ExecutorError, match="recent_count"):
+            await executor._resolve_recent_ids(task)
+
+    @pytest.mark.asyncio
+    async def test_resolve_recent_ids_truncated_by_task_manager(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """TaskManager 已将 recent_count 截断至 1000，Executor 仍按 params 取值工作。"""
+        messages = [MagicMock(id=i) for i in range(1000, 0, -1)]
+        mock_client.get_chat_history = MagicMock(
+            return_value=AsyncIteratorMock(messages)
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "recent", "recent_count": 1000},
+        )
+        result = await executor._resolve_recent_ids(task)
+        assert len(result) == 1000
+        assert result[0] == 1000
+        assert result[-1] == 1
+
+    def _make_message(self, msg_id, media_type=None, file_size=None):
+        """构造含媒体的 mock Message。"""
+        msg = MagicMock()
+        msg.id = msg_id
+        if media_type:
+            msg.media = MagicMock()
+            for attr in (
+                "video",
+                "photo",
+                "document",
+                "audio",
+                "animation",
+                "voice",
+                "video_note",
+            ):
+                setattr(msg.media, attr, None)
+            media_obj = MagicMock()
+            media_obj.file_size = file_size
+            media_obj.file_unique_id = f"unique_{msg_id}"
+            media_obj.file_id = f"file_{msg_id}"
+            setattr(msg.media, media_type, media_obj)
+        else:
+            msg.media = None
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_filter_media_messages_by_criteria(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """media_types 过滤仅保留指定类型的消息。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        messages = [
+            self._make_message(1, "video", 1024),
+            self._make_message(2, "photo", 512),
+            self._make_message(3, "audio", 2048),
+            self._make_message(4, None),
+        ]
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "all", "media_types": ["video", "photo"]},
+        )
+        result = executor._filter_media_messages_by_criteria(task, messages)
+        assert result == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_filter_messages_by_size(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """min_size / max_size 按字节过滤媒体文件。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        messages = [
+            self._make_message(1, "video", 100),
+            self._make_message(2, "video", 500),
+            self._make_message(3, "video", 1000),
+            self._make_message(4, "video", 2000),
+        ]
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "all", "min_size": 300, "max_size": 1200},
+        )
+        result = executor._filter_media_messages_by_criteria(task, messages)
+        assert result == [2, 3]
+
+    def test_get_message_file_size_various_media(self):
+        """_get_message_file_size 覆盖视频、照片、无媒体、不支持的媒体类型。"""
+        # 无媒体消息
+        msg_no_media = MagicMock()
+        msg_no_media.media = None
+        assert TaskExecutor._get_message_file_size(msg_no_media) is None
+
+        # 视频消息
+        msg_video = self._make_message(1, "video", 1024)
+        assert TaskExecutor._get_message_file_size(msg_video) == 1024
+
+        # 照片消息（sizes 列表取最后一个）
+        msg_photo = MagicMock()
+        msg_photo.media = MagicMock()
+        for attr in (
+            "video",
+            "document",
+            "audio",
+            "animation",
+            "voice",
+            "video_note",
+        ):
+            setattr(msg_photo.media, attr, None)
+        msg_photo.media.photo = MagicMock()
+        size1 = MagicMock(file_size=100)
+        size2 = MagicMock(file_size=200)
+        msg_photo.media.photo.sizes = [size1, size2]
+        assert TaskExecutor._get_message_file_size(msg_photo) == 200
+
+        # 不支持的媒体类型
+        msg_unsupported = MagicMock()
+        msg_unsupported.media = MagicMock()
+        for attr in (
+            "video",
+            "document",
+            "audio",
+            "animation",
+            "voice",
+            "video_note",
+            "photo",
+        ):
+            setattr(msg_unsupported.media, attr, None)
+        assert TaskExecutor._get_message_file_size(msg_unsupported) is None
+
+    @pytest.mark.asyncio
+    async def test_filter_media_messages_no_filter_returns_all(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """无过滤条件时返回所有非空消息 ID。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        messages = [
+            self._make_message(1, "video", 1024),
+            self._make_message(2, "photo", 512),
+            MagicMock(),
+        ]
+        messages[2].id = 3
+        messages[2].media = None
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "all"},
+        )
+        result = executor._filter_media_messages_by_criteria(task, messages)
+        assert result == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_apply_media_filter_with_mock_client(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """_apply_media_filter 获取消息对象后调用过滤逻辑。"""
+        messages = [
+            self._make_message(1, "video", 1024),
+            self._make_message(2, "photo", 512),
+            self._make_message(3, "audio", 2048),
+        ]
+        mock_client.get_messages = AsyncMock(
+            side_effect=lambda _chat, msg_id: messages[msg_id - 1]
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "all", "media_types": ["video"]},
+        )
+        result = await executor._apply_media_filter(task, [1, 2, 3])
+        assert result == [1]
+        assert mock_client.get_messages.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_execute_download_applies_media_filter(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """端到端：下载任务执行时先应用媒体过滤再创建 TaskItem。"""
+        messages = [
+            self._make_message(1, "video", 1024),
+            self._make_message(2, "photo", 512),
+            self._make_message(3, "video", 2048),
+        ]
+        mock_client.get_chat_history = MagicMock(
+            return_value=AsyncIteratorMock(messages)
+        )
+        mock_client.get_messages = AsyncMock(
+            side_effect=lambda _chat, msg_id: messages[msg_id - 1]
+        )
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"range_mode": "all", "media_types": ["video"]},
+        )
+        await executor._execute_download(task)
+        # 过滤后应只有 2 个 video 消息生成 item
+        assert len(task.items) == 2
+        assert all(item.source_id in (1, 3) for item in task.items)
+
+
+# ============================================================
+# 测试：Phase 3 - execute_task() 分发
+# ============================================================
+
+
+class TestPhase3ExecuteTaskDispatch:
+    """测试 execute_task() 正确分发 LISTEN_DOWNLOAD/LISTEN_FORWARD。"""
+
+    @pytest.mark.asyncio
+    async def test_execute_task_dispatches_listen_download(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 execute_task() 分发到 LISTEN_DOWNLOAD 分支。"""
+        mock_client.add_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+        await task_manager.start_task(task.task_id)
+        await executor.execute_task(task)
+        # 验证 add_handler 被调用（表示分发到了正确的分支）
+        mock_client.add_handler.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_task_dispatches_listen_forward(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 execute_task() 分发到 LISTEN_FORWARD 分支。"""
+        mock_client.add_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "target_identifier": "@targetchannel",
+            },
+        )
+        await task_manager.start_task(task.task_id)
+        await executor.execute_task(task)
+        mock_client.add_handler.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_listen_task_does_not_complete(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试监听任务执行后不进入 completed 状态（保持 running）。"""
+        mock_client.add_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+        await task_manager.start_task(task.task_id)
+        # 监听任务即使内部异常，也不会进入 completed 状态
+        await executor.execute_task(task)
+        updated = await task_manager.get_task(task.task_id)
+        assert updated.status != TaskStatus.COMPLETED
+
+
+# ============================================================
+# 测试：Phase 3 - 私聊下载/转发复用
+# ============================================================
+
+
+class TestPhase3PrivateChatReuse:
+    """测试私聊下载/转发复用现有 _execute_download() / _execute_forward()。"""
+
+    @pytest.mark.asyncio
+    async def test_private_chat_download_reuses_execute_download(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试私聊下载任务（source_identifier 创建）走 _execute_download() 路径。"""
+        mock_downloader = AsyncMock()
+        mock_downloader.download_range.return_value = ["/downloads/file.mp4"]
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+            downloader=mock_downloader,
+        )
+        # 模拟私聊任务：chat_id 为负数 Bot ID
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=8288406549,  # 私聊 Bot ID
+            params={
+                "source_identifier": "@seseYunBot",
+                "source_type": "private",
+                "message_range_start": 100,
+                "message_range_end": 102,
+            },
+        )
+        await executor._execute_download(task)
+        # 验证 downloader 被正确调用
+        mock_downloader.download_range.assert_called_once()
+        call_kwargs = mock_downloader.download_range.call_args[1]
+        assert call_kwargs["chat_id"] == 8288406549
+
+    @pytest.mark.asyncio
+    async def test_private_chat_forward_reuses_execute_forward(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试私聊转发任务（source_identifier 创建）走 _execute_forward() 路径。"""
+        mock_client.copy_message = AsyncMock(return_value=MagicMock(id=200))
+        mock_client.get_messages = AsyncMock()
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.FORWARD,
+            chat_id=8288406549,
+            params={
+                "source_identifier": "@seseYunBot",
+                "source_type": "private",
+                "target_identifier": "@my_channel",
+                "target_chat_id": -1002000000000,
+                "message_range_start": 100,
+                "message_range_end": 100,
+            },
+        )
+        await executor._execute_forward(task)
+        # 验证 copy_message 被调用（转发路径）
+        assert mock_client.copy_message.called
+
+
+# ============================================================
+# 测试：Phase 3 - _start_listener() / _stop_listener()
+# ============================================================
+
+
+class TestPhase3ListenerLifecycle:
+    """测试监听任务 Handler 生命周期管理。"""
+
+    @pytest.mark.asyncio
+    async def test_start_listener_registers_handler(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 _start_listener() 注册 MessageHandler 并存储引用。"""
+        mock_client.add_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        async def dummy_callback(client, message):
+            pass
+
+        await executor._start_listener(task, dummy_callback)
+
+        # 验证 add_handler 被调用
+        mock_client.add_handler.assert_called_once()
+        # 验证 handler 引用已存储
+        assert "_handler" in task.extra
+        assert task.extra["_handler"] is not None
+
+    @pytest.mark.asyncio
+    async def test_start_listener_uses_chat_id_filter(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 _start_listener() 创建的 Handler 使用 chat_id 过滤。"""
+        mock_client.add_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        async def dummy_callback(client, message):
+            pass
+
+        await executor._start_listener(task, dummy_callback)
+
+        # 验证 handler 被创建（通过 add_handler 调用验证）
+        args = mock_client.add_handler.call_args[0]
+        assert len(args) >= 1
+        from pyrogram.handlers import MessageHandler
+
+        assert isinstance(args[0], MessageHandler)
+
+    @pytest.mark.asyncio
+    async def test_execute_listen_download_calls_start_listener(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 _execute_listen_download() 调用 _start_listener()。"""
+        mock_client.add_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+        await task_manager.start_task(task.task_id)
+
+        await executor._execute_listen_download(task)
+
+        # 验证 add_handler 被调用
+        mock_client.add_handler.assert_called_once()
+        # 验证 handler 引用已存储
+        assert "_handler" in task.extra
+
+    @pytest.mark.asyncio
+    async def test_execute_listen_forward_calls_start_listener(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 _execute_listen_forward() 调用 _start_listener()。"""
+        mock_client.add_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "target_identifier": "@targetchannel",
+            },
+        )
+        await task_manager.start_task(task.task_id)
+
+        await executor._execute_listen_forward(task)
+
+        mock_client.add_handler.assert_called_once()
+        assert "_handler" in task.extra
+
+    @pytest.mark.asyncio
+    async def test_stop_listener_removes_handler(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 _stop_listener() 移除 Handler 并清理引用。"""
+        mock_client.add_handler = MagicMock()
+        mock_client.remove_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        async def dummy_callback(client, message):
+            pass
+
+        # 先 start
+        await executor._start_listener(task, dummy_callback)
+        assert "_handler" in task.extra
+
+        # 再 stop
+        await executor._stop_listener(task)
+        mock_client.remove_handler.assert_called_once()
+        assert "_handler" not in task.extra
+
+    @pytest.mark.asyncio
+    async def test_stop_listener_idempotent(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 _stop_listener() 多次调用不报错。"""
+        mock_client.add_handler = MagicMock()
+        mock_client.remove_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        async def dummy_callback(client, message):
+            pass
+
+        await executor._start_listener(task, dummy_callback)
+        await executor._stop_listener(task)
+        # 第二次调用不应报错
+        await executor._stop_listener(task)
+        assert "_handler" not in task.extra
+
+    @pytest.mark.asyncio
+    async def test_cancel_listen_task_stops_listener(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试取消监听任务时调用 _stop_listener()。"""
+        mock_client.add_handler = MagicMock()
+        mock_client.remove_handler = MagicMock()
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+        await task_manager.start_task(task.task_id)
+        await executor._execute_listen_download(task)
+        assert "_handler" in task.extra
+
+        # 取消任务
+        await executor.cancel_listen_task(task.task_id)
+        mock_client.remove_handler.assert_called_once()
+        assert "_handler" not in task.extra
+
+
+# ============================================================
+# 测试：Phase 3 - _handle_listen_download()
+# ============================================================
+
+
+class TestPhase3HandleListenDownload:
+    """测试监听下载回调 _handle_listen_download()。"""
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_download_no_media_skips(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试无媒体消息被跳过（不创建 TaskItem）。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 999
+        mock_message.media = None  # 无媒体
+
+        await executor._handle_listen_download(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证没有创建 TaskItem
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 0
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_download_creates_item(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试有媒体消息创建 TaskItem。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.video = MagicMock()
+        mock_message.media.video.file_unique_id = "uniq123"
+        mock_message.media.video.file_id = "file123"
+
+        await executor._handle_listen_download(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证创建了 TaskItem
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 1
+        assert updated.items[0].source_id == 12345
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_download_dedup(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试同一 message_id 不会重复创建 TaskItem。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.video = MagicMock()
+        mock_message.media.video.file_unique_id = "uniq123"
+        mock_message.media.video.file_id = "file123"
+
+        # 第一次调用
+        await executor._handle_listen_download(
+            task.task_id, mock_client, mock_message
+        )
+        # 第二次调用（同一消息）
+        await executor._handle_listen_download(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证只创建了一个 TaskItem
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 1
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_download_media_type_filter(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 media_types 过滤：不匹配的媒体类型被跳过。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "media_types": ["video"],  # 只接受 video
+            },
+        )
+
+        # 创建一个 photo 消息（不应被接受）
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.photo = MagicMock()
+        mock_message.media.photo.file_unique_id = "photo123"
+        mock_message.media.video = None
+
+        await executor._handle_listen_download(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证没有创建 TaskItem（photo 不在 media_types 中）
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 0
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_download_with_downloader(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试有 downloader 时执行下载并标记成功。"""
+        mock_downloader = AsyncMock()
+        mock_downloader.download_range.return_value = ["/downloads/file.mp4"]
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+            downloader=mock_downloader,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.video = MagicMock()
+        mock_message.media.video.file_unique_id = "uniq123"
+        mock_message.media.video.file_id = "file123"
+
+        await executor._handle_listen_download(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证 downloader.download_range 被调用
+        mock_downloader.download_range.assert_called_once()
+        call_kwargs = mock_downloader.download_range.call_args[1]
+        assert call_kwargs["chat_id"] == -1001234567890
+        assert call_kwargs["start_id"] == 12345
+        assert call_kwargs["end_id"] == 12345
+
+        # 验证 item 状态为 SUCCESS
+        updated = await task_manager.get_task(task.task_id)
+        assert updated.items[0].status == ItemStatus.SUCCESS
+
+
+# ============================================================
+# 测试：Phase 3 - _handle_listen_forward()
+# ============================================================
+
+
+class TestPhase3HandleListenForward:
+    """测试监听转发回调 _handle_listen_forward()。"""
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_forward_no_media_skips(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试无媒体消息被跳过（不创建 TaskItem）。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "target_identifier": "@targetchannel",
+                "target_chat_id": -1002000000000,
+            },
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 999
+        mock_message.media = None  # 无媒体
+
+        await executor._handle_listen_forward(
+            task.task_id, mock_client, mock_message
+        )
+
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 0
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_forward_creates_item(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试有媒体消息创建 TaskItem 并执行转发。"""
+        mock_client.copy_message = AsyncMock(return_value=MagicMock(id=200))
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "target_identifier": "@targetchannel",
+                "target_chat_id": -1002000000000,
+            },
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.video = MagicMock()
+        mock_message.media.video.file_unique_id = "uniq123"
+
+        await executor._handle_listen_forward(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证创建了 TaskItem
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 1
+        assert updated.items[0].source_id == 12345
+
+        # 验证 copy_message 被调用
+        mock_client.copy_message.assert_called_once_with(
+            chat_id=-1002000000000,
+            from_chat_id=-1001234567890,
+            message_id=12345,
+        )
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_forward_dedup(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试同一 message_id 不会重复转发。"""
+        mock_client.copy_message = AsyncMock(return_value=MagicMock(id=200))
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "target_identifier": "@targetchannel",
+                "target_chat_id": -1002000000000,
+            },
+        )
+
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.video = MagicMock()
+        mock_message.media.video.file_unique_id = "uniq123"
+
+        # 第一次调用
+        await executor._handle_listen_forward(
+            task.task_id, mock_client, mock_message
+        )
+        # 第二次调用（同一消息）
+        await executor._handle_listen_forward(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证只转发了一次
+        assert mock_client.copy_message.call_count == 1
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 1
+
+    @pytest.mark.asyncio
+    async def test_handle_listen_forward_media_type_filter(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 media_types 过滤：不匹配的媒体类型被跳过。"""
+        mock_client.copy_message = AsyncMock()
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            params={
+                "source_identifier": "@testchannel",
+                "target_identifier": "@targetchannel",
+                "target_chat_id": -1002000000000,
+                "media_types": ["video"],
+            },
+        )
+
+        # 创建一个 photo 消息（不应被接受）
+        mock_message = MagicMock()
+        mock_message.id = 12345
+        mock_message.media = MagicMock()
+        mock_message.media.photo = MagicMock()
+        mock_message.media.video = None
+
+        await executor._handle_listen_forward(
+            task.task_id, mock_client, mock_message
+        )
+
+        # 验证没有创建 TaskItem 也没有转发
+        updated = await task_manager.get_task(task.task_id)
+        assert len(updated.items) == 0
+        mock_client.copy_message.assert_not_called()
+
+
+# ============================================================
+# 测试：Phase 3 - recover_listeners()
+# ============================================================
+
+
+class TestPhase3RecoverListeners:
+    """测试监听任务恢复 recover_listeners()。"""
+
+    @pytest.mark.asyncio
+    async def test_recover_listeners_restores_handlers(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试 recover_listeners() 恢复 running 状态的监听任务 Handler。"""
+        mock_client.add_handler = MagicMock()
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        # 创建 running 状态的监听下载任务
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+        await task_manager.start_task(task.task_id)
+
+        # 执行恢复
+        await executor.recover_listeners()
+
+        # 验证 add_handler 被调用（Handler 已重新注册）
+        mock_client.add_handler.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_recover_listeners_no_tasks(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试没有 running 监听任务时 recover_listeners() 不报错。"""
+        mock_client.add_handler = MagicMock()
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        # 没有任何监听任务，恢复应该不报错
+        await executor.recover_listeners()
+
+        # 验证没有注册任何 Handler
+        mock_client.add_handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_recover_listeners_restores_both_types(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试同时恢复 LISTEN_DOWNLOAD 和 LISTEN_FORWARD 任务。"""
+        mock_client.add_handler = MagicMock()
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        # 创建 running 状态的监听下载任务
+        dl_task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+        await task_manager.start_task(dl_task.task_id)
+
+        # 创建 running 状态的监听转发任务
+        fw_task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1002000000000,
+            params={
+                "source_identifier": "@testchannel2",
+                "target_identifier": "@targetchannel",
+                "target_chat_id": -1003000000000,
+            },
+        )
+        await task_manager.start_task(fw_task.task_id)
+
+        # 执行恢复
+        await executor.recover_listeners()
+
+        # 验证两个 Handler 都被注册
+        assert mock_client.add_handler.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_recover_listeners_failed_task_marked_failed(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试恢复失败的任务被标记为 failed。"""
+        # 模拟 add_handler 抛出异常
+        mock_client.add_handler = MagicMock(side_effect=RuntimeError("Mock error"))
+
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        task = await task_manager.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"source_identifier": "@testchannel"},
+        )
+        await task_manager.start_task(task.task_id)
+
+        # 执行恢复（add_handler 会抛出异常）
+        await executor.recover_listeners()
+
+        # 验证任务被标记为 failed
+        updated = await task_manager.get_task(task.task_id)
+        assert updated.status == TaskStatus.FAILED
+        assert "恢复失败" in (updated.error_message or "")

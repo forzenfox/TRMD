@@ -5,51 +5,37 @@
 """
 
 import logging
-import re
 
 from fastapi import APIRouter, Depends, Query, Request
 
-from module.api.dependencies import get_cache_manager, require_token
+from module.api.dependencies import (
+    get_cache_manager,
+    require_token,
+    get_identifier_service,
+)
 from module.api.responses import json_response, error_json_response
 from module.api.models.chat import (
+    ChatResolveOut,
     MessageRangeRequest,
     MessageEstimateRequest,
     MessageAnalyzeRequest,
 )
+from module.core.identifier_service import IdentifierService, IdentifierServiceError
 
 router = APIRouter(prefix="/chats", tags=["频道"])
 logger = logging.getLogger(__name__)
 
-_RE_NUMERIC_ID = re.compile(r"^-?\d+$")
 
-
-async def _resolve_chat_id(request: Request, channel_input: str):
-    """将用户输入的频道标识解析为数字 chat_id（复用 tasks.py 逻辑）。"""
-    text = (channel_input or "").strip()
-    if not text:
-        return None
-    if _RE_NUMERIC_ID.match(text):
-        return int(text)
-
-    # 获取 Telegram Client
-    try:
-        from module.integration import get_context
-
-        ctx = get_context()
-        client = ctx.client if ctx else None
-    except Exception:
-        client = None
-
-    if client is None:
-        logger.warning("Telegram Client 未连接，无法解析频道: %s", text)
-        return None
-
-    try:
-        chat = await client.get_chat(text)
-        return int(chat.id)
-    except Exception as e:
-        logger.warning("解析频道失败: %s → %s", text, e)
-        return None
+def _handle_identifier_error(e: IdentifierServiceError):
+    """将 IdentifierServiceError 转换为统一错误响应。"""
+    status_code = e.status_code
+    data = {"retry_after": e.retry_after} if e.retry_after is not None else None
+    return error_json_response(
+        code=status_code,
+        message=e.message,
+        data=data,
+        status_code=status_code,
+    )
 
 
 def _get_client(request: Request):
@@ -123,12 +109,51 @@ async def list_chats(
         return json_response(data=[])
 
 
+@router.get("/resolve")
+async def resolve_chat(
+    request: Request,
+    identifier: str = Query(..., min_length=1, description="要解析的标识符"),
+    token: str = Depends(require_token),
+    identifier_service=Depends(get_identifier_service),
+):
+    """解析任意支持的对话标识符，返回标准化对话信息。
+
+    支持格式：
+    - 纯数字 chat_id
+    - @username
+    - 裸 username
+    - https://t.me/username 或 t.me/username
+    """
+    try:
+        resolved = await identifier_service.resolve(identifier)
+        return json_response(
+            data=ChatResolveOut(
+                chat_id=resolved.chat_id,
+                chat_type=resolved.chat_type,
+                chat_name=resolved.chat_name,
+                username=resolved.username,
+                message_count=resolved.message_count,
+                media_count=resolved.media_count,
+                has_access=resolved.has_access,
+                is_private=resolved.is_private,
+            ).model_dump()
+        )
+    except IdentifierServiceError as e:
+        return error_json_response(
+            code=e.status_code,
+            message=e.message,
+            data={"retry_after": e.retry_after} if e.retry_after is not None else None,
+            status_code=e.status_code,
+        )
+
+
 @router.post("/messages/estimate")
 async def estimate_messages(
     body: MessageEstimateRequest,
     request: Request,
     token: str = Depends(require_token),
     cache_manager=Depends(get_cache_manager),
+    identifier_service: IdentifierService = Depends(get_identifier_service),
 ):
     """抽样估算消息范围大小与数量。
 
@@ -137,13 +162,16 @@ async def estimate_messages(
     - multiple_ids: 精确遍历
     - date_range: 小范围精确，大范围头尾抽样
     - all: 头尾各10条抽样估算
+    - recent: 最近 N 条抽样估算
 
     支持缓存以减少 Telegram API 调用。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
-    chat_id = await _resolve_chat_id(request, body.chat_id)
-    if chat_id is None:
-        return error_json_response(code=400, message="无法解析频道标识，请检查输入")
+    try:
+        resolved = await identifier_service.resolve(body.chat_id)
+        chat_id = resolved.chat_id
+    except IdentifierServiceError as e:
+        return _handle_identifier_error(e)
 
     # 转换为 MessageRangeRequest 用于验证
     range_req = MessageRangeRequest(
@@ -154,6 +182,7 @@ async def estimate_messages(
         end_date=body.end_date,
         message_list=body.message_list,
         download_type=body.type_filters,
+        recent_count=body.recent_count,
     )
     is_valid, errors = range_req.validate_for_mode()
     if not is_valid:
@@ -212,6 +241,7 @@ async def analyze_messages(
     body: MessageAnalyzeRequest,
     request: Request,
     token: str = Depends(require_token),
+    identifier_service: IdentifierService = Depends(get_identifier_service),
 ):
     """精确分析消息范围（遍历）。
 
@@ -219,9 +249,11 @@ async def analyze_messages(
     大范围降级为抽样估算并标记 sampled=True。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
-    chat_id = await _resolve_chat_id(request, body.chat_id)
-    if chat_id is None:
-        return error_json_response(code=400, message="无法解析频道标识，请检查输入")
+    try:
+        resolved = await identifier_service.resolve(body.chat_id)
+        chat_id = resolved.chat_id
+    except IdentifierServiceError as e:
+        return _handle_identifier_error(e)
 
     client = _get_client(request)
     if client is None:

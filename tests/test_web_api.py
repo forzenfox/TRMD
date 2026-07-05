@@ -7,15 +7,25 @@ Mock TokenManager、TaskManager 等核心模块。
 
 import os
 import tempfile
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 
 from module.api.app import create_app
+from module.api.dependencies import get_identifier_service
 from module.core.token_manager import TokenManager
 from module.core.task_manager import TaskManager, TaskType
+from module.core.config_manager import ConfigManager
+from module.core.identifier_service import (
+    IdentifierService,
+    ResolvedChat,
+    InvalidIdentifierError,
+    UserNotFoundError,
+    AccessDeniedError,
+    RateLimitedError,
+)
 
 
 # ==================== 测试工具 ====================
@@ -36,8 +46,39 @@ def valid_token(token_manager):
 
 @pytest.fixture
 def task_manager():
-    """提供内存模式 TaskManager（不持久化）。"""
-    tm = TaskManager(db_path=":memory:", max_concurrent_tasks=2)
+    """提供内存模式 TaskManager（不持久化），已注入 mock IdentifierService 与 ConfigManager。"""
+    mock_service = MagicMock(spec=IdentifierService)
+
+    def _resolve_side_effect(identifier: str):
+        text = (identifier or "").strip()
+        if text.lstrip("-").isdigit():
+            chat_id = int(text)
+            chat_type = "private" if chat_id > 0 else "channel"
+        else:
+            chat_id = -1001234567890
+            chat_type = "channel"
+        return ResolvedChat(
+            chat_id=chat_id,
+            chat_type=chat_type,
+            chat_name="Test Channel",
+            username="testchannel",
+            message_count=-1,
+            media_count=-1,
+            has_access=True,
+            is_private=False,
+        )
+
+    mock_service.resolve = AsyncMock(side_effect=_resolve_side_effect)
+
+    mock_cm = MagicMock(spec=ConfigManager)
+    mock_cm.get = MagicMock(return_value=False)
+
+    tm = TaskManager(
+        db_path=":memory:",
+        max_concurrent_tasks=2,
+        identifier_service=mock_service,
+        config_manager=mock_cm,
+    )
     return tm
 
 
@@ -114,9 +155,14 @@ async def client(token_manager, task_manager, config_manager):
         file_manager=None,
         monitor=None,
     )
+
+    # 默认 mock IdentifierService：复用 TaskManager 已注入的 mock，保持源端与目标端解析行为一致
+    mock_service = task_manager._identifier_service
+    app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
     token = token_manager.generate(user_id=1)
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="http://localhost") as ac:
         ac.headers.update({"Authorization": f"Bearer {token}"})
         yield ac, app, token
 
@@ -132,7 +178,7 @@ async def unauthenticated_client(token_manager, task_manager, config_manager):
         monitor=None,
     )
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="http://localhost") as ac:
         yield ac, app
 
 
@@ -211,6 +257,28 @@ class TestAuthenticationMiddleware:
 class TestTaskEndpoints:
     """任务管理端点测试。"""
 
+    @pytest.fixture(autouse=True)
+    async def mock_identifier_service(self, client):
+        """为任务创建相关测试 mock IdentifierService（同时注入 TaskManager）。"""
+        ac, app, token = client
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=-1001234567890,
+                chat_type="channel",
+                chat_name="Test Channel",
+                username="testchannel",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+        app.state.task_manager._identifier_service = mock_service
+        yield
+        app.dependency_overrides.pop(get_identifier_service, None)
+
     @pytest.mark.asyncio
     async def test_list_tasks_empty(self, client):
         """测试空任务列表。"""
@@ -259,6 +327,105 @@ class TestTaskEndpoints:
         assert resp.status_code == 201
         data = resp.json()
         assert data["data"]["task_type"] == "upload"
+
+    @pytest.mark.asyncio
+    async def test_create_task_with_source_identifier(self, client):
+        """测试使用 source_identifier 创建任务。"""
+        ac, app, token = client
+        body = {
+            "task_type": "download",
+            "params": {
+                "source_identifier": "@testchannel",
+                "range_mode": "recent",
+                "recent_count": 10,
+            },
+        }
+        resp = await ac.post("/api/tasks", json=body)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["data"]["task_type"] == "download"
+        assert data["data"]["params"]["source_identifier"] == "@testchannel"
+        assert data["data"]["params"]["recent_count"] == 10
+
+    @pytest.mark.asyncio
+    async def test_create_forward_task_with_target_identifier(self, client):
+        """测试使用 target_identifier 创建转发任务。"""
+        ac, app, token = client
+
+        # 自定义 mock，让 target 解析为不同 ID
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            side_effect=lambda identifier: ResolvedChat(
+                chat_id=-2001234567890 if identifier == "@target" else -1001234567890,
+                chat_type="channel",
+                chat_name="Test",
+                username="test",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+        # 源端解析已下沉到 TaskManager，需同步覆盖其内部服务
+        app.state.task_manager._identifier_service = mock_service
+
+        body = {
+            "task_type": "forward",
+            "params": {
+                "source_identifier": "@source",
+                "target_identifier": "@target",
+                "range_mode": "id_range",
+                "min_id": 1,
+                "max_id": 100,
+            },
+        }
+        resp = await ac.post("/api/tasks", json=body)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["data"]["task_type"] == "forward"
+        assert data["data"]["params"]["source_identifier"] == "@source"
+        assert data["data"]["params"]["target_chat_id"] == -2001234567890
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_create_task_source_not_found(self, client):
+        """测试源频道解析失败返回 404。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=UserNotFoundError())
+        # 源端解析已下沉到 TaskManager，需同步覆盖其内部服务
+        app.state.task_manager._identifier_service = mock_service
+
+        body = {
+            "task_type": "download",
+            "params": {"source_identifier": "@missing"},
+        }
+        resp = await ac.post("/api/tasks", json=body)
+        assert resp.status_code == 404
+        data = resp.json()
+        assert data["code"] == 404
+
+    @pytest.mark.asyncio
+    async def test_create_task_source_access_denied(self, client):
+        """测试源频道无权限返回 403。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=AccessDeniedError())
+        # 源端解析已下沉到 TaskManager，需同步覆盖其内部服务
+        app.state.task_manager._identifier_service = mock_service
+
+        body = {
+            "task_type": "download",
+            "params": {"source_identifier": "@private"},
+        }
+        resp = await ac.post("/api/tasks", json=body)
+        assert resp.status_code == 403
+        data = resp.json()
+        assert data["code"] == 403
 
     @pytest.mark.asyncio
     async def test_create_task_size_exceeded(self, client):
@@ -465,8 +632,24 @@ class TestChatEndpoints:
 
     @pytest.mark.asyncio
     async def test_estimate_messages(self, client):
-        """测试消息估算。"""
+        """测试消息估算成功。"""
         ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=-1001234567890,
+                chat_type="channel",
+                chat_name="Test Channel",
+                username="testchannel",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
         body = {
             "chat_id": "-1001234567890",
             "range_mode": "id_range",
@@ -479,11 +662,30 @@ class TestChatEndpoints:
         assert resp.status_code in (200, 400)
         data = resp.json()
         assert isinstance(data, dict)
+        mock_service.resolve.assert_awaited_once_with("-1001234567890")
+
+        app.dependency_overrides.pop(get_identifier_service, None)
 
     @pytest.mark.asyncio
     async def test_analyze_messages(self, client):
-        """测试消息精确分析。"""
+        """测试消息精确分析成功。"""
         ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=-1001234567890,
+                chat_type="channel",
+                chat_name="Test Channel",
+                username="testchannel",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
         body = {
             "chat_id": "-1001234567890",
             "range_mode": "id_range",
@@ -496,10 +698,28 @@ class TestChatEndpoints:
         data = resp.json()
         assert isinstance(data, dict)
 
+        app.dependency_overrides.pop(get_identifier_service, None)
+
     @pytest.mark.asyncio
     async def test_estimate_messages_url_format(self, client):
         """测试 URL 格式 chat_id（不应 404）。"""
         ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=-1001234567890,
+                chat_type="channel",
+                chat_name="Test Channel",
+                username="testchannel",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
         body = {
             "chat_id": "https://t.me/douyincom",
             "range_mode": "all",
@@ -507,17 +727,196 @@ class TestChatEndpoints:
         resp = await ac.post("/api/chats/messages/estimate", json=body)
         # 不应返回 404（路由匹配失败），应返回 200 或业务错误
         assert resp.status_code != 404
+        mock_service.resolve.assert_awaited_once_with("https://t.me/douyincom")
+
+        app.dependency_overrides.pop(get_identifier_service, None)
 
     @pytest.mark.asyncio
     async def test_estimate_messages_username_format(self, client):
         """测试 @username 格式 chat_id。"""
         ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=-1001234567890,
+                chat_type="channel",
+                chat_name="Test Channel",
+                username="testchannel",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
         body = {
             "chat_id": "@douyincom",
             "range_mode": "all",
         }
         resp = await ac.post("/api/chats/messages/estimate", json=body)
         assert resp.status_code != 404
+        mock_service.resolve.assert_awaited_once_with("@douyincom")
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_estimate_messages_user_not_found(self, client):
+        """测试消息估算时解析失败返回 404。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=UserNotFoundError())
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        body = {
+            "chat_id": "@missing",
+            "range_mode": "all",
+        }
+        resp = await ac.post("/api/chats/messages/estimate", json=body)
+        assert resp.status_code == 404
+        data = resp.json()
+        assert data["code"] == 404
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_estimate_messages_access_denied(self, client):
+        """测试消息估算时无权限返回 403。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=AccessDeniedError())
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        body = {
+            "chat_id": "@private",
+            "range_mode": "all",
+        }
+        resp = await ac.post("/api/chats/messages/estimate", json=body)
+        assert resp.status_code == 403
+        data = resp.json()
+        assert data["code"] == 403
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_estimate_messages_rate_limited(self, client):
+        """测试消息估算时限流返回 429。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=RateLimitedError(retry_after=30))
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        body = {
+            "chat_id": "@busy",
+            "range_mode": "all",
+        }
+        resp = await ac.post("/api/chats/messages/estimate", json=body)
+        assert resp.status_code == 429
+        data = resp.json()
+        assert data["code"] == 429
+        assert data["data"]["retry_after"] == 30
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_resolve_chat_success(self, client):
+        """测试 /api/chats/resolve 成功解析。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(
+            return_value=ResolvedChat(
+                chat_id=8288406549,
+                chat_type="bot",
+                chat_name="seseYunBot",
+                username="seseYunBot",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=True,
+            )
+        )
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        resp = await ac.get("/api/chats/resolve?identifier=@seseYunBot")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["code"] == 0
+        assert data["data"]["chat_id"] == 8288406549
+        assert data["data"]["chat_type"] == "bot"
+        assert data["data"]["is_private"] is True
+        mock_service.resolve.assert_awaited_once_with("@seseYunBot")
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_resolve_chat_invalid_identifier(self, client):
+        """测试 /api/chats/resolve 无效标识符返回 400。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=InvalidIdentifierError())
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        resp = await ac.get("/api/chats/resolve?identifier=not_valid!!")
+        assert resp.status_code == 400
+        data = resp.json()
+        assert data["code"] == 400
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_resolve_chat_user_not_found(self, client):
+        """测试 /api/chats/resolve 用户不存在返回 404。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=UserNotFoundError())
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        resp = await ac.get("/api/chats/resolve?identifier=@missing_user")
+        assert resp.status_code == 404
+        data = resp.json()
+        assert data["code"] == 404
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_resolve_chat_access_denied(self, client):
+        """测试 /api/chats/resolve 无权限返回 403。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=AccessDeniedError())
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        resp = await ac.get("/api/chats/resolve?identifier=@private_user")
+        assert resp.status_code == 403
+        data = resp.json()
+        assert data["code"] == 403
+
+        app.dependency_overrides.pop(get_identifier_service, None)
+
+    @pytest.mark.asyncio
+    async def test_resolve_chat_rate_limited(self, client):
+        """测试 /api/chats/resolve 限流返回 429 并携带 retry_after。"""
+        ac, app, token = client
+
+        mock_service = MagicMock(spec=IdentifierService)
+        mock_service.resolve = AsyncMock(side_effect=RateLimitedError(retry_after=30))
+        app.dependency_overrides[get_identifier_service] = lambda: mock_service
+
+        resp = await ac.get("/api/chats/resolve?identifier=@busy_user")
+        assert resp.status_code == 429
+        data = resp.json()
+        assert data["code"] == 429
+        assert data["data"]["retry_after"] == 30
+
+        app.dependency_overrides.pop(get_identifier_service, None)
 
 
 # ==================== 文件路由测试 ====================
@@ -844,7 +1243,7 @@ class TestDependencies:
         )
         token = token_manager.generate(user_id=1)
         transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        async with AsyncClient(transport=transport, base_url="http://localhost") as ac:
             resp = await ac.get(f"/api/tasks?token={token}")
             assert resp.status_code == 200
 

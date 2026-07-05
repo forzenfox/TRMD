@@ -2,10 +2,11 @@
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
 > **模块名称**: Bot 端重构  
-> **文档版本**: v1.1  
+> **文档版本**: v1.2  
 > **创建日期**: 2026-06-18  
-> **状态**: 草稿  
-> **关联文档**: `docs/interaction-enhancement-design.md`
+> **更新日期**: 2026-07-03  
+> **状态**: 已更新（待实施）  
+> **关联文档**: `docs/interaction-enhancement-design.md`、`docs/private-chat-download-by-username-prd.md`
 
 ---
 
@@ -31,7 +32,7 @@
 | 范围转发 | `/forward <源> <目标> <起始ID> <结束ID>` | 可视化范围选择 + 预览 |
 | 单文件/目录上传 | `/upload` / `/upload_r` | 文件树勾选 + 媒体组配置 |
 | 批量操作 | `/batch` 简化收集入口 | 完整批量任务配置、预览、资源告警 |
-| 频道监听 | 保留 `/listen_download`、`/listen_forward`、`/listen_info` | 监听规则管理面板 |
+| 监听任务 | 保留 `/listen_download`、`/listen_forward`、`/listen_info`；Bot 端仅做参数透传，实际通过 `TaskManager.create_task(...)` 创建 `LISTEN_DOWNLOAD`/`LISTEN_FORWARD` 任务，`TaskExecutor` 统一管理 Handler 生命周期 | 监听规则管理面板 |
 | 配置管理 | 引导到 WebUI | 全部配置项可视化编辑 |
 | 任务监控 | `/status` 文本概览 | 实时 Dashboard + WebSocket |
 | 认证 | `filters.user(self.root)` + `/web` Token | URL Token / Cookie / Header |
@@ -73,7 +74,7 @@
 #### 2.2.1 保留命令
 
 - `/download`、`/forward`、`/upload`、`/upload_r` 保持原有语法与返回值不变，其底层仍通过现有 `get_download_link_from_bot`、`get_forward_link_from_bot`、`get_upload_link_from_bot` 处理。
-- `/listen_download`、`/listen_forward`、`/listen_info` 保持监听功能入口，复杂规则配置引导到 WebUI。
+- `/listen_download`、`/listen_forward`、`/listen_info` 保持监听功能入口，复杂规则配置引导到 WebUI。底层不再直接操作 `downloader.py` 的 Handler 与 `StateManager` 内存状态，统一通过 `TaskManager` 创建/查询/取消 `LISTEN_DOWNLOAD`/`LISTEN_FORWARD` 任务；`TaskExecutor` 负责监听 Handler 的注册、移除与消息回调。
 - `/start`、`/help` 更新文案，增加 WebUI 引导段落与 `/web` 按钮。
 - `/exit` 保持原行为。
 
@@ -94,13 +95,125 @@
 
 ---
 
+## 2.3 监听命令迁移设计
+
+### 2.3.1 设计定位
+
+将现有 `module/downloader.py` 中的监听逻辑迁移至 `module/core/task_executor.py`（以下简称 `TaskExecutor`），Bot 端仅保留命令入口与参数转换。`TaskManager` 负责任务的持久化、排队与状态流转；`TaskExecutor` 负责在唯一的 `User Client` 上注册/移除 `NewMessage` Handler，并在新消息到达时调用现有下载/转发执行路径。
+
+### 2.3.2 任务类型与参数
+
+复用 PRD v2.3 中扩展的 `TaskType`：
+
+- `LISTEN_DOWNLOAD`：监听并下载源对话新消息中的媒体
+- `LISTEN_FORWARD`：监听并转发源对话新消息中的媒体到目标对话
+
+创建任务时通过 `params` 透传标识符，示例：
+
+```python
+{
+  "task_type": "listen_download",
+  "params": {
+    "source_identifier": "@seseYunBot",
+    "media_types": ["video", "photo"]
+  }
+}
+```
+
+`source_identifier` 支持以下格式：
+
+| 格式 | 示例 |
+|------|------|
+| 数字 chat_id | `8288406549` |
+| @username | `@seseYunBot` |
+| 纯 username | `seseYunBot` |
+| t.me 链接 | `https://t.me/seseYunBot` |
+
+`LISTEN_FORWARD` 额外需要 `target_identifier`，格式与 `source_identifier` 相同。
+
+### 2.3.3 命令流程
+
+用户发送 `/listen_download @seseYunBot` 后的处理流程：
+
+```
+[CommandRouter.on_listen()]          # 参数解析与校验（保持不变）
+            │
+            ▼
+[IdentifierService.resolve()]        # 将 source_identifier 解析为 chat_id
+            │
+            ▼
+[TaskManager.create_task()]          # task_type=LISTEN_DOWNLOAD, params={...}
+            │                        # 同一 chat_id+task_type 的 running/pending 任务会返回 409
+            ▼
+[TaskQueue] ──> [TaskExecutor.execute_task()]
+            │
+            ▼
+[TaskExecutor._start_listener()]     # 注册 NewMessage Handler
+            │
+            ▼
+新消息到达 ──> [_handle_listen_download()] ──> 复用 [_execute_download()]
+```
+
+`/listen_forward` 流程相同，最终复用 `_execute_forward()` 与 `RepositoryManager` 降级链。
+
+### 2.3.4 Handler 生命周期
+
+- **`_start_listener()`**：在 `TaskExecutor` 执行到 `LISTEN_*` 任务时调用。通过 `IdentifierService.resolve()` 得到 `chat_id` 后，构造 `MessageHandler(filters=chat(chat_id), callback=...)` 并注册到 `User Client`；将 handler 引用保存到 `Task.extra["handler"]`，任务状态进入 `running`。
+- **`_stop_listener()`**：在任务被取消或失败时调用。从 `Task.extra["handler"]` 取出引用，调用 `self._client.remove_handler(handler)` 移除；更新任务状态为 `cancelled` 或 `failed`。
+- **进程恢复**：应用启动时遍历 SQLite 中 `status=running` 的 `LISTEN_*` 任务，重新调用 `_start_listener()` 注册 Handler。
+
+### 2.3.5 `/listen_info` 查询改造
+
+- **旧逻辑**：从 `StateManager.listen_download_chat` / `listen_forward_chat` 两个内存字典读取。
+- **新逻辑**：调用 `TaskManager.list_tasks(task_type=["listen_download", "listen_forward"], status=["running", "pending"])`，将返回的任务列表格式化为文本消息。展示字段至少包括：任务 ID、源对话标识、目标对话标识（转发）、任务状态、已处理消息数。
+
+### 2.3.6 `REMOVE_LISTEN_*` 回调按钮改造
+
+- **旧逻辑**：回调数据触发 `downloader.py` 中的 `cancel_listen()`，直接操作 Handler 与内存状态。
+- **新逻辑**：回调按钮携带 `task_id`，Bot 收到后调用 `TaskManager.cancel_task(task_id)`。`TaskManager` 内部将任务标记为 `cancelled`，并触发 `TaskExecutor._stop_listener()` 移除 Handler。
+
+### 2.3.7 私聊监听支持
+
+监听任务不再限定于 t.me 公开链接。通过 `IdentifierService` 统一解析，支持：
+
+- Bot 私聊（`chat_type="bot"`）
+- 普通用户私聊（`chat_type="private"`）
+- Saved Messages（通过自身 chat_id 或 username）
+- 公开频道/群组（`chat_type="channel"` / `"group"` / `"supergroup"`）
+
+私聊与频道的监听执行路径完全一致，仅在解析阶段通过 `ResolvedChat.is_private` 区分是否需要访问权限校验。
+
+### 2.3.8 旧实现清理
+
+迁移完成后，移除以下旧架构代码：
+
+- `module/downloader.py`
+  - `add_listen_chat()`
+  - `cancel_listen()`
+  - `listen_download()`
+  - `listen_forward()`
+- `module/bot/state_manager.py`
+  - `listen_download_chat` 内存字典
+  - `listen_forward_chat` 内存字典
+
+> 注意：在旧代码移除前，需确保 `TaskExecutor` 的监听实现已上线并通过回归测试，避免新旧 Handler 同时存在导致消息重复处理。
+
+### 2.3.9 向后兼容保证
+
+- Bot 命令语法保持不变：`/listen_download <源标识>`、`/listen_forward <源标识> <目标标识>`、`/listen_info`。
+- 用户看到的提示文案、成功/失败反馈与旧版本一致。
+- 现有频道监听功能继续可用，且统一走 `TaskManager`/`TaskExecutor` 路径。
+- 进程重启后，运行中的监听任务通过 SQLite 自动恢复，无需用户重新发送命令。
+
+---
+
 ## 3. `/web` 命令详细设计
 
 ### 3.1 触发条件
 
 - 命令：`/web`
 - 权限：`filters.user(self.root)`，仅登录用户账户 ID 可触发。
-- 依赖：WebUI 服务已启动（由 `main.py` 的 `--web` 或 `--web-only` 参数控制）。
+- 依赖：WebUI 服务已启动（由 `main.py` 启动时自动启动 Web 服务）。
 
 ### 3.2 处理流程
 
@@ -171,7 +284,7 @@ async def web(self, client, message):
 
 | 异常场景 | Bot 回复 |
 |----------|----------|
-| WebUI 未启动 | 「WebUI 服务尚未启动，请使用 `python main.py --web` 启动。」 |
+| WebUI 未启动 | 「WebUI 服务尚未启动，请重新启动程序。」 |
 | Token 生成失败 | 「生成访问链接失败，请稍后重试或查看日志。」 |
 | 非 root 用户触发 | Pyrogram `filters.user` 自动拦截，无回复 |
 
@@ -348,16 +461,18 @@ def validate_channel_input(self, channel_input: str) -> Optional[str]:
 
 ```python
 async def resolve_channel_id(self, client, channel_input: str) -> str:
-    """将用户输入的频道标识解析为数字 chat_id。
+	    """将用户输入的频道标识解析为数字 chat_id。
 
-    - 纯数字 ID 直接返回
-    - @username / t.me 链接 / 邀请链接通过 client.get_chat() 解析
+	    - 纯数字 ID 直接返回
+	    - @username / t.me 链接 / 邀请链接通过 client.get_chat() 解析
 
-    :param client: Pyrogram 客户端
-    :param channel_input: 用户输入的频道标识
-    :return: 解析后的数字 chat_id 字符串
-    :raises Exception: 解析失败时抛出异常
-    """
+	    迁移后将改为调用 IdentifierService.resolve()，此方法保留为向后兼容入口。
+
+	    :param client: Pyrogram 客户端
+	    :param channel_input: 用户输入的频道标识
+	    :return: 解析后的数字 chat_id 字符串
+	    :raises Exception: 解析失败时抛出异常
+	    """
 ```
 
 #### 5.4.4 权限检查方法
@@ -523,6 +638,9 @@ def _init_repository_manager(self):
 | 生成 WebUI Token | `TokenManager.generate(user_id, ttl=3600)` | 拼接 URL 后回复 |
 | 撤销 Token | `TokenManager.revoke(user_id)` | 回复撤销数量 |
 | 查询任务状态 | `TaskManager.list_tasks(status='running')` | 格式化文本列表 |
+| 创建监听下载/转发任务 | `TaskManager.create_task(task_type='listen_download'/'listen_forward', params={source_identifier: ...})` | 返回任务 ID；重复监听返回 409 |
+| 查询监听任务 | `TaskManager.list_tasks(task_type=['listen_download', 'listen_forward'], status=['running', 'pending'])` | 格式化文本列表 |
+| 取消监听任务 | `TaskManager.cancel_task(task_id)` | 移除 Handler 并持久化状态 |
 | 创建批量任务 | `TaskManager.create_task(task_type='batch', params=...)` | 返回任务 ID |
 | 启动批量会话 | `InteractionManager.start_session(user_id, mode='batch')` | 记录会话状态 |
 | 收集输入 | `InteractionManager.add_item(user_id, item)` | 更新计数 |
@@ -531,6 +649,8 @@ def _init_repository_manager(self):
 | 解析频道 ID | `BotCommands.resolve_channel_id(client, channel_input)` | 返回 chat_id 字符串 |
 | 检查管理员权限 | `BotCommands._check_admin_permission(client, chat_id)` | 返回布尔值 |
 | 保存仓库频道 ID | `ConfigManager.set_repository_chat_id(chat_id)` | 返回保存是否成功 |
+
+> **仓库备份配置透传逻辑**：`/batch` 命令创建下载任务时，`enable_repository_backup` 默认继承全局配置 `repository.auto_backup_downloads`；用户无需在 Bot 交互中显式指定。若用户需要覆盖默认行为，请引导至 WebUI 创建任务。
 
 ### 7.4 与 ConfigManager 的集成
 
@@ -640,8 +760,12 @@ class InteractionManager:
 
 ### 9.4 监听功能兼容
 
-- `/listen_download`、`/listen_forward`、`/listen_info` 保持原有入口。
+- `/listen_download`、`/listen_forward`、`/listen_info` 保持原有入口，命令调用语法、参数顺序、成功/失败提示文案均保持不变。
 - 复杂监听规则管理后续可在 WebUI 中补充，但 Bot 端入口不删除。
+- 底层实现由直接注册 Handler + 内存状态改为 `TaskManager` 任务 + `TaskExecutor` 生命周期管理，用户无感知。
+- 现有频道监听（t.me 链接形式）继续可用，且统一走 `IdentifierService` → `TaskManager` → `TaskExecutor` 路径。
+- 进程重启后，SQLite 中 `running` 状态的监听任务自动恢复 Handler 注册，无需用户重新发送命令。
+- `REMOVE_LISTEN_*` 回调按钮的交互与文案保持不变，仅内部取消逻辑改为 `TaskManager.cancel_task(task_id)`。
 
 ---
 
@@ -675,6 +799,7 @@ class InteractionManager:
 - 新增 Bot 命令处理逻辑单元测试覆盖率 ≥ 80%。
 - `/web` Token 生成与链接拼接逻辑 100% 覆盖。
 - `/batch` 状态机与超时逻辑 100% 覆盖。
+- `/listen_download`、`/listen_forward`、`/listen_info` 及 `REMOVE_LISTEN_*` 回调迁移逻辑 100% 覆盖。
 - 向后兼容命令（`/download`、`/forward`、`/upload`）至少保留关键路径回归测试。
 
 ### 11.2 测试框架
@@ -735,6 +860,19 @@ class InteractionManager:
 | TC-REPO-10 | 无 `config_manager` 实例时设置 | 跳过保存，记录警告日志 |
 | TC-REPO-11 | `setup_repository` 在 COMMANDS 列表中 | 命令名和描述均存在 |
 
+#### 监听命令迁移
+
+| 用例 ID | 用例描述 | 预期结果 |
+|---------|----------|----------|
+| TC-LIS-01 | 发送 `/listen_download @seseYunBot` | 调用 `TaskManager.create_task(task_type='listen_download', params={source_identifier: ...})`，返回任务 ID |
+| TC-LIS-02 | 同一 chat_id 重复创建监听下载任务 | 返回 409 `LISTEN_ALREADY_EXISTS`，不重复注册 Handler |
+| TC-LIS-03 | 发送 `/listen_forward @seseYunBot @my_channel` | 创建 `listen_forward` 任务，目标对话解析成功 |
+| TC-LIS-04 | 发送 `/listen_info` | 调用 `TaskManager.list_tasks(task_type=['listen_download','listen_forward'], status=['running','pending'])` 并格式化输出 |
+| TC-LIS-05 | 点击 `REMOVE_LISTEN_*` 回调按钮 | 调用 `TaskManager.cancel_task(task_id)`，Handler 被移除 |
+| TC-LIS-06 | 使用 chat_id 创建监听任务 | `IdentifierService.resolve()` 正确识别，任务创建成功 |
+| TC-LIS-07 | 使用 t.me 链接创建监听任务 | 兼容现有频道监听路径，任务创建成功 |
+| TC-LIS-08 | 进程恢复时存在 running 状态监听任务 | 自动重新注册 Handler，任务状态保持 running |
+
 #### 向后兼容命令
 
 | 用例 ID | 用例描述 | 预期结果 |
@@ -750,7 +888,9 @@ class InteractionManager:
 - `pyrogram.Client`：模拟 `send_message`、`edit_message_text`、`set_bot_commands`、`get_me`、`get_chat`、`get_chat_member`。
 - `pyrogram.types.Message`：构造 `from_user.id`、`text`、`id`。
 - `TokenManager`：模拟 `generate`、`revoke`、`validate`。
-- `TaskManager`：模拟 `list_tasks`、`create_task`。
+- `TaskManager`：模拟 `list_tasks`、`create_task`、`cancel_task`。
+- `IdentifierService`：模拟 `resolve()` 返回 `ResolvedChat`。
+- `TaskExecutor`：模拟 `_start_listener()`、`_stop_listener()`、`_handle_listen_download()`、`_handle_listen_forward()`。
 - `ConfigManager`：模拟 `get_config`、`get_repository_config`、`set_repository_chat_id` 返回值。
 - `datetime.now`：用于 `/batch` 超时测试。
 
@@ -766,6 +906,7 @@ tests/
 │   ├── test_batch_command.py
 │   ├── test_status_command.py
 │   ├── test_bot_setup_repository.py
+│   ├── test_listen_commands.py
 │   └── test_backward_compat.py
 └── core/
     └── test_interaction_manager.py
@@ -783,6 +924,7 @@ tests/
 | `module/core/task_manager.py` | 任务创建与查询 | 是 |
 | `module/core/interaction_manager.py` | `/batch` 状态管理 | 是 |
 | `module/core/config_manager.py` | 统一配置读写（含 repository 配置） | 是 |
+| `module/core/identifier_service.py` | 统一解析 username / chat_id / t.me 链接 | 是 |
 | `module/core/repository_manager.py` | 仓库模式编排（去重/分发） | 否（仓库模式启用时必选） |
 | `module/core/repository_db.py` | 仓库数据持久化 | 否（仓库模式启用时必选） |
 
@@ -810,6 +952,7 @@ tests/
 | 旧用户习惯 `/download_chat` 复杂表单 | 体验落差 | 在移除命令回复中明确 WebUI 优势，并提供 `/web` 快速入口 |
 | `filters.user(self.root)` 在动态 root 更新时延迟 | 权限误判 | root ID 在 Bot 启动时一次性加载，当前单用户场景下可接受 |
 | Token 明文出现在 Telegram 聊天记录 | 泄露风险 | Token 仅 1 小时有效；WebUI 首次验证后下发 HttpOnly Cookie |
+| 旧架构 Handler 未完全清理导致重复注册 | 消息重复处理 | 按阶段 3 完成 `TaskExecutor` 实现并通过回归测试后再移除 `downloader.py` 中的旧方法 |
 | `/batch` 会话超时与真实任务执行混淆 | 用户困惑 | 超时仅针对收集会话，已提交任务不受影响 |
 | 并发消息导致 `/batch` 状态竞争 | 数据不一致 | 单用户 + 单 Bot 实例，状态操作串行化；后续如需扩展再加锁 |
 
@@ -829,6 +972,7 @@ tests/
 |------|------|----------|
 | v1.0 | 2026-06-18 | 初始版本，完成 Bot 端重构模块设计 |
 | v1.1 | 2026-06-21 | 新增 `/setup_repository` 命令设计；新增频道验证与解析方法；更新 BotCommands 构造函数（config_manager 参数）；更新 Bot 类属性（repository_manager）；更新配置合并影响说明；新增仓库模式相关依赖 |
+| v1.2 | 2026-07-03 | 对齐 PRD v2.3：新增监听命令迁移设计（`LISTEN_DOWNLOAD`/`LISTEN_FORWARD` 统一走 TaskManager/TaskExecutor）；补充 `/listen_info` 查询、`REMOVE_LISTEN_*` 回调、私聊 username/chat_id 监听、旧实现清理清单；更新集成点、向后兼容策略与风险项；版本升级到 v1.2 |
 
 ---
 

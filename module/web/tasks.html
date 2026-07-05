@@ -257,6 +257,18 @@
             >
               上传
             </button>
+            <button
+              @click="setTypeFilter('listen_download')"
+              :class="taskManager.typeFilter === 'listen_download' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              🕵️ 监听下载
+            </button>
+            <button
+              @click="setTypeFilter('listen_forward')"
+              :class="taskManager.typeFilter === 'listen_forward' ? 'btn btn-primary' : 'btn btn-secondary'"
+            >
+              📲 监听转发
+            </button>
           </div>
         </div>
 
@@ -302,7 +314,13 @@
                       ></span>
                     </td>
                     <td class="min-w-[140px]">
-                      <div class="flex items-center gap-2">
+                      <!-- 监听任务：显示"监听中" -->
+                      <div x-show="task.task_type && task.task_type.startsWith('listen_')" class="text-sm text-blue-400">
+                        <span x-show="task.status === 'running'">🕵️ 监听中</span>
+                        <span x-show="task.status !== 'running'" x-text="taskManager.getStatusText(task.status)"></span>
+                      </div>
+                      <!-- 非监听任务：显示进度条 -->
+                      <div x-show="!task.task_type || !task.task_type.startsWith('listen_')" class="flex items-center gap-2">
                         <div class="progress-bar flex-1">
                           <div
                             class="progress-bar-fill"
@@ -572,6 +590,14 @@
                   <input type="radio" x-model="createForm.taskType" value="upload" class="mr-2">
                   <span>上传</span>
                 </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.taskType" value="listen_download" class="mr-2">
+                  <span>🕵️ 监听下载</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.taskType" value="listen_forward" class="mr-2">
+                  <span>📲 监听转发</span>
+                </label>
               </div>
             </div>
 
@@ -589,29 +615,77 @@
             <!-- 源频道 -->
             <div class="form-group" x-show="createForm.taskType !== 'upload'">
               <label class="form-label">源频道</label>
-              <input
-                type="text"
-                x-model="createForm.sourceChat"
-                class="form-input"
-                placeholder="@username 或 https://t.me/xxx"
-                required
-              >
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  x-model="createForm.sourceChat"
+                  class="form-input flex-1"
+                  placeholder="@username 或 https://t.me/xxx"
+                  required
+                >
+                <button type="button" @click="resolveSourceChat()" :disabled="resolveLoading"
+                        class="btn btn-secondary btn-sm whitespace-nowrap">
+                  <span x-show="!resolveLoading">🔍 解析</span>
+                  <span x-show="resolveLoading" class="flex items-center gap-1">
+                    <span class="spinner spinner-sm"></span> 解析中...
+                  </span>
+                </button>
+              </div>
+              <!-- 解析结果卡片 -->
+              <div x-show="resolveResult" class="mt-2 p-3 bg-slate-900/50 border border-slate-600 rounded-lg text-sm">
+                <div class="flex items-center justify-between">
+                  <span class="text-slate-300" x-text="resolveResult.chat_name"></span>
+                  <span class="badge text-xs" :class="resolveResult.has_access ? 'badge-completed' : 'badge-failed'"
+                        x-text="resolveResult.has_access ? '✅ 可访问' : '❌ 无权限'"></span>
+                </div>
+                <div class="flex gap-3 mt-1 text-xs text-slate-400">
+                  <span x-text="'ID: ' + resolveResult.chat_id"></span>
+                  <span x-show="resolveResult.username" x-text="'@' + resolveResult.username"></span>
+                  <span x-text="resolveResult.chat_type === 'private' ? '私聊' : resolveResult.chat_type === 'channel' ? '频道' : '群组'"></span>
+                  <span x-show="resolveResult.message_count >= 0" x-text="resolveResult.message_count + ' 条消息'"></span>
+                </div>
+              </div>
+              <!-- 解析错误 -->
+              <div x-show="resolveError" class="mt-2 text-sm text-red-400" x-text="resolveError"></div>
             </div>
 
             <!-- 目标频道 -->
-            <div class="form-group" x-show="createForm.taskType !== 'download'">
+            <div class="form-group" x-show="createForm.taskType === 'forward' || createForm.taskType === 'upload' || createForm.taskType === 'listen_forward'">
               <label class="form-label">目标频道</label>
-              <input
-                type="text"
-                x-model="createForm.targetChat"
-                class="form-input"
-                placeholder="@username 或 https://t.me/xxx"
-                required
-              >
+              <div class="flex gap-2">
+                <input
+                  type="text"
+                  x-model="createForm.targetChat"
+                  class="form-input flex-1"
+                  placeholder="@username 或 https://t.me/xxx"
+                  required
+                >
+                <button type="button" @click="resolveTargetChat()" :disabled="resolveTargetLoading"
+                        class="btn btn-secondary btn-sm whitespace-nowrap">
+                  <span x-show="!resolveTargetLoading">🔍 解析</span>
+                  <span x-show="resolveTargetLoading" class="flex items-center gap-1">
+                    <span class="spinner spinner-sm"></span> 解析中...
+                  </span>
+                </button>
+              </div>
+              <!-- 目标解析结果卡片 -->
+              <div x-show="resolveTargetResult" class="mt-2 p-3 bg-slate-900/50 border border-slate-600 rounded-lg text-sm">
+                <div class="flex items-center justify-between">
+                  <span class="text-slate-300" x-text="resolveTargetResult.chat_name"></span>
+                  <span class="badge text-xs" :class="resolveTargetResult.has_access ? 'badge-completed' : 'badge-failed'"
+                        x-text="resolveTargetResult.has_access ? '✅ 可访问' : '❌ 无权限'"></span>
+                </div>
+                <div class="flex gap-3 mt-1 text-xs text-slate-400">
+                  <span x-text="'ID: ' + resolveTargetResult.chat_id"></span>
+                  <span x-show="resolveTargetResult.username" x-text="'@' + resolveTargetResult.username"></span>
+                  <span x-text="resolveTargetResult.chat_type === 'private' ? '私聊' : resolveTargetResult.chat_type === 'channel' ? '频道' : '群组'"></span>
+                </div>
+              </div>
+              <div x-show="resolveTargetError" class="mt-2 text-sm text-red-400" x-text="resolveTargetError"></div>
             </div>
 
             <!-- 消息范围模式 -->
-            <div class="form-group" x-show="createForm.taskType !== 'upload'">
+            <div class="form-group" x-show="createForm.taskType !== 'upload' && !createForm.taskType.startsWith('listen_')">
               <label class="form-label">消息范围</label>
               <div class="flex flex-wrap gap-3 mb-3">
                 <label class="flex items-center cursor-pointer">
@@ -629,6 +703,10 @@
                 <label class="flex items-center cursor-pointer">
                   <input type="radio" x-model="createForm.messageRangeMode" value="all" class="mr-2">
                   <span>全部</span>
+                </label>
+                <label class="flex items-center cursor-pointer">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="recent" class="mr-2">
+                  <span>最近 N 条</span>
                 </label>
               </div>
 
@@ -669,6 +747,14 @@
                 </p>
               </div>
 
+              <!-- 最近 N 条 -->
+              <div x-show="createForm.messageRangeMode === 'recent'" class="flex items-center gap-2">
+                <span class="text-sm text-slate-400">最近</span>
+                <input type="number" x-model="createForm.recentCount" class="form-input w-24"
+                       placeholder="N" min="1" max="1000">
+                <span class="text-sm text-slate-400">条消息</span>
+              </div>
+
               <!-- 全部消息 -->
               <div x-show="createForm.messageRangeMode === 'all'" class="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-sm text-yellow-300">
                 ⚠️ 将处理频道历史所有消息，可能耗时较长。
@@ -691,6 +777,26 @@
                     <span x-text="option.icon + ' ' + option.label"></span>
                   </label>
                 </template>
+              </div>
+            </div>
+
+            <!-- 媒体大小过滤 -->
+            <div class="form-group" x-show="createForm.taskType !== 'upload' && !createForm.taskType.startsWith('listen_')">
+              <label class="form-label">文件大小过滤（可选）</label>
+              <div class="flex items-center gap-2">
+                <span class="text-sm text-slate-400">最小</span>
+                <input type="number" x-model="createForm.minSize" class="form-input w-24" placeholder="0" min="0">
+                <select x-model="createForm.minSizeUnit" class="form-select w-20">
+                  <option value="MB">MB</option>
+                  <option value="GB">GB</option>
+                </select>
+                <span class="text-sm text-slate-400 mx-2">—</span>
+                <span class="text-sm text-slate-400">最大</span>
+                <input type="number" x-model="createForm.maxSize" class="form-input w-24" placeholder="无限制" min="0">
+                <select x-model="createForm.maxSizeUnit" class="form-select w-20">
+                  <option value="MB">MB</option>
+                  <option value="GB">GB</option>
+                </select>
               </div>
             </div>
 
@@ -888,6 +994,9 @@
           startDate: '',
           endDate: '',
           rawItems: '',
+          recentCount: '',
+          minSize: '', maxSize: '',
+          minSizeUnit: 'MB', maxSizeUnit: 'MB',
         },
 
         // Alpine 可追踪的本地数据副本（解决响应式失效）
@@ -896,6 +1005,14 @@
         selectedTask: null,
         showDetailDrawer: false,
         lastSyncTime: null, // 最后同步时间显示
+
+        // 解析相关状态
+        resolveLoading: false,
+        resolveError: null,
+        resolveResult: null,
+        resolveTargetLoading: false,
+        resolveTargetError: null,
+        resolveTargetResult: null,
 
         async init() {
           const authenticated = await authManager.ensureAuthenticated();
@@ -915,7 +1032,7 @@
 
         /**
          * 处理 URL 参数，支持从 Dashboard 快捷操作跳转
-         * 支持参数: ?action=create&type=download|forward|upload
+         * 支持参数: ?action=create&type=download|forward|upload|listen_download|listen_forward
          */
         _handleUrlParams() {
           const params = new URLSearchParams(window.location.search);
@@ -924,7 +1041,7 @@
 
           if (action === 'create') {
             // 设置任务类型
-            if (type && ['download', 'forward', 'upload'].includes(type)) {
+            if (type && ['download', 'forward', 'upload', 'listen_download', 'listen_forward'].includes(type)) {
               this.createForm.taskType = type;
               taskManager.createForm.taskType = type;
             }
@@ -987,6 +1104,13 @@
         openCreateModal() {
           this.showCreateModal = true;
           taskManager.showCreateModal = true;
+          // 重置解析状态
+          this.resolveLoading = false;
+          this.resolveError = null;
+          this.resolveResult = null;
+          this.resolveTargetLoading = false;
+          this.resolveTargetError = null;
+          this.resolveTargetResult = null;
         },
 
         closeCreateModal() {
@@ -1004,6 +1128,49 @@
           taskManager.closeDetailDrawer();
           this.showDetailDrawer = false;
           this.selectedTask = null;
+        },
+
+        // ==================== 解析功能 ====================
+
+        async resolveSourceChat() {
+          this.resolveLoading = true;
+          this.resolveError = null;
+          this.resolveResult = null;
+          try {
+            this.resolveResult = await api.resolveChat(this.createForm.sourceChat);
+            // 自动同步 sourceChat 到 taskManager
+            taskManager.createForm.sourceChat = this.createForm.sourceChat;
+          } catch (error) {
+            this.resolveError = this._mapResolveError(error.message);
+          } finally {
+            this.resolveLoading = false;
+          }
+        },
+
+        async resolveTargetChat() {
+          this.resolveTargetLoading = true;
+          this.resolveTargetError = null;
+          this.resolveTargetResult = null;
+          try {
+            this.resolveTargetResult = await api.resolveChat(this.createForm.targetChat);
+            taskManager.createForm.targetChat = this.createForm.targetChat;
+          } catch (error) {
+            this.resolveTargetError = this._mapResolveError(error.message);
+          } finally {
+            this.resolveTargetLoading = false;
+          }
+        },
+
+        _mapResolveError(message) {
+          const map = {
+            '链接格式无效': '请检查输入格式，支持 @username 或 t.me 链接',
+            '找不到频道': '未找到该对话，请检查输入是否正确',
+            '无法访问该频道': '无法访问该对话，请确认已加入或权限足够',
+            'FloodWaitError': '请求过于频繁，请稍后再试',
+            '超时': '解析超时，请检查网络连接后重试',
+            '网络连接失败': '网络连接失败，请检查后端服务是否运行',
+          };
+          return map[message] || message;
         },
 
         setFilter(filter) {

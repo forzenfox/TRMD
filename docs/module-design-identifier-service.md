@@ -1,0 +1,574 @@
+# IdentifierService 模块设计文档
+
+> **项目名称**: Telegram_Restricted_Media_Downloader
+> **模块**: IdentifierService（统一标识符解析服务）
+> **文档版本**: v1.1
+> **创建日期**: 2026-07-03
+> **更新日期**: 2026-07-03
+> **作者**: AI Assistant
+> **状态**: 对齐 PRD v2.3
+> **关联文档**: [private-chat-download-by-username-prd.md](./private-chat-download-by-username-prd.md)
+
+---
+
+## 变更记录
+
+| 版本 | 日期 | 变更内容 | 状态 |
+|------|------|----------|------|
+| v1.0 | 2026-07-03 | 初始版本：定义 IdentifierService 职责、输入格式、输出模型、错误码、API 契约与 TDD 测试策略 | 草案 |
+| v1.1 | 2026-07-03 | 技术评审修订：纯数字ID改为调用get_chat获取元信息、修正username正则、对齐PRD v2.3 | 对齐 PRD v2.3 |
+
+---
+
+## 1. 设计目标与职责边界
+
+### 1.1 设计目标
+
+IdentifierService 是贯穿 WebUI、Bot 与任务执行层的**统一对话标识符解析服务**，目标是将散落在各入口的标识符转换逻辑收敛为单一、可测试、可复用的业务模块：
+
+1. **统一解析语义**：无论是 username、纯数字 chat_id 还是 t.me 链接，对外只暴露一个 `resolve()` 入口。
+2. **消除重复实现**：替代 `routes/tasks.py`、`routes/chats.py`、`bot/commands.py` 中各自维护的 `_resolve_chat_id()` / `resolve_channel_id()` 内联逻辑。
+3. **复用现有链接工具**：t.me 链接的格式提取继续复用 `helpers.extract_info_from_link()`，不重复造轮子。
+4. **提供丰富元信息**：除 chat_id 外，返回对话类型、名称、可访问性、消息/媒体数量估算等，供前端做预览与任务参数校验。
+5. **错误可识别**：将 Telegram API 异常、格式错误、权限不足等场景映射为标准化错误码，便于 API/Bot 统一响应。
+
+### 1.2 职责边界
+
+| 范围 | IdentifierService 负责 | IdentifierService 不负责 |
+|------|------------------------|--------------------------|
+| 输入解析 | 检测并规范化 4 种标识符格式 | 不处理消息级链接（如 `https://t.me/channel/123` 中的 post_id 提取，由 `parse_link` 负责） |
+| 网络查询 | 调用 `client.get_chat()` 获取对话实体 | 不登录、不管理 Telegram Client 生命周期 |
+| 输出模型 | 返回 `ResolvedChat` 标准化对象 | 不直接创建 Task，不写入数据库 |
+| 错误映射 | 将异常转换为 `IdentifierServiceError` 错误码 | 不渲染 Bot 消息或 HTTP 响应体（由调用方转换） |
+| 统计估算 | 估算消息数与媒体数（轻量抽样） | 不做精确遍历（避免大量 API 调用） |
+
+### 1.3 与现有函数的关系
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                         调用方层                                      │
+│  routes/tasks.py  routes/chats.py  bot/commands.py                    │
+│  TaskManager.create_task()                                            │
+└─────────────────────────────────┬─────────────────────────────────────┘
+                                  │ 统一调用 resolve()
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                     IdentifierService（本模块）                         │
+│  - _detect_format(): 识别输入格式                                      │
+│  - _normalize(): 清洗为可查询字符串                                     │
+│  - resolve(): 调用 client.get_chat() 并组装 ResolvedChat               │
+│  - 内部复用 helpers.extract_info_from_link() 处理 t.me 链接            │
+└─────────────────────────────────┬─────────────────────────────────────┘
+                                  │
+                                  ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│              helpers.parse_link() / helpers.extract_info_from_link()   │
+│  parse_link(): 消息/帖子级解析（保留，不合并）                          │
+│  extract_info_from_link(): 链接格式提取（复用）                         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**明确分工：**
+
+- `parse_link(client, link)`（[module/utils/helpers.py](../module/utils/helpers.py)）：负责**消息链接级解析**，返回 `chat_id` / `comment_id` / `topic_id`，被旧架构 `downloader.py` 大量使用。**保留不合并**。
+- `extract_info_from_link(link)`（[module/utils/helpers.py](../module/utils/helpers.py)）：负责**链接格式提取**，返回 `Link` 对象。IdentifierService 内部复用此函数进行 t.me 链接的格式检测与 username 提取。
+- `_resolve_chat_id()`（[module/api/routes/tasks.py](../module/api/routes/tasks.py)、[module/api/routes/chats.py](../module/api/routes/chats.py)）：现有的标识符 → chat_id 内联转换逻辑，**将被 IdentifierService 替代**，路由层仅做简单委托。
+- `resolve_channel_id()`（[module/bot/commands.py](../module/bot/commands.py)）：Bot 命令中的解析逻辑，**将被 IdentifierService 替代**。
+
+---
+
+## 2. 支持的输入格式
+
+IdentifierService 支持以下 4 种输入格式，均通过同一个 `resolve(identifier: str)` 入口处理：
+
+| 格式 | 示例 | 处理规则 |
+|------|------|----------|
+| 纯数字 ID | `8288406549` / `-1001234567890` | 纯数字 ID 格式虽可直接得到 chat_id，但仍需调用 `get_chat()` 获取 `chat_type`/`chat_name`/`is_private` 等元信息，以支持 TaskManager 的 `source_type` 内部推导；纯数字 ID 仍无需格式检测步骤，直接作为 chat_id 参数传给 get_chat |
+| @username | `@seseYunBot` | 去掉 `@` 前缀后调用 `client.get_chat(username)` |
+| 裸 username | `seseYunBot` | 直接调用 `client.get_chat(username)` |
+| t.me 链接 | `https://t.me/seseYunBot` | 调用 `extract_info_from_link()` 提取 `group_id`，再调用 `get_chat()` |
+
+**不支持的格式（明确返回 `INVALID_IDENTIFIER`）：**
+
+- 空字符串或仅空白字符
+- 带帖子 ID 的消息链接（如 `https://t.me/seseYunBot/123`）—— 属于 `parse_link()` 的职责范围
+- 不符合 Telegram username 规则的任意字符串
+- 非 t.me 域名的 URL
+
+---
+
+## 3. 数据模型
+
+### 3.1 IdentifierFormat 枚举
+
+```python
+from enum import Enum, auto
+
+
+class IdentifierFormat(Enum):
+    NUMERIC_ID = auto()      # 纯数字 ID
+    AT_USERNAME = auto()     # @username
+    BARE_USERNAME = auto()   # 裸 username
+    T_ME_LINK = auto()       # https://t.me/username
+    INVALID = auto()         # 无法识别的格式
+```
+
+### 3.2 ResolvedChat 输出模型
+
+```python
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedChat:
+    """IdentifierService 解析后的标准化对话信息。"""
+
+    chat_id: int                    # 数字 ID（可为负数，如 -100 开头的频道或 Bot ID）
+    chat_type: str                  # "bot" | "private" | "channel" | "group" | "supergroup"
+    chat_name: str                  # 显示名称（title / first_name / username 回退）
+    username: str | None            # 用户名（无 username 的私聊/频道为 None）
+    message_count: int              # 消息总数估算（-1 表示未获取）
+    media_count: int                # 媒体消息数估算（-1 表示未获取）
+    has_access: bool                # 当前用户是否可访问该对话
+    is_private: bool                # 是否为私聊类型（bot / private）
+```
+
+**字段说明：**
+
+- `chat_id`：Telegram 内部数字 ID。私聊、Bot、Saved Messages 可能为负数或普通整数；公开频道通常为 `-100` 开头。
+- `chat_type`：直接映射 Pyrogram `Chat.type` 的字符串值；Bot 账号特殊标记为 `"bot"`。
+- `chat_name`：优先取 `chat.title`，其次 `chat.first_name + last_name`，最后回退到 `chat.username` 或 `"chat_{chat_id}"`。
+- `username`：仅当对话拥有公开 username 时非空。
+- `message_count` / `media_count`：轻量估算值，默认通过小样本统计（如首尾各 10 条）估算；无法估算时返回 `-1`，不阻塞主解析流程。
+- `has_access`：`client.get_chat()` 成功即视为可访问；返回 `False` 时通常伴随 `ACCESS_DENIED` 错误。
+- `is_private`：`chat_type` 为 `"bot"` 或 `"private"` 时为 `True`，供 TaskManager 区分私聊与频道执行路径。
+
+---
+
+## 4. 接口契约
+
+### 4.1 IdentifierService 公共方法
+
+```python
+from typing import Optional
+import pyrogram
+
+
+class IdentifierService:
+    """统一对话标识符解析服务。"""
+
+    def __init__(self, client: pyrogram.Client):
+        """
+        Args:
+            client: 已启动且已授权的 Pyrogram Client 实例。
+        """
+        self._client = client
+
+    async def resolve(self, identifier: str) -> ResolvedChat:
+        """
+        将任意支持的标识符解析为 ResolvedChat。
+
+        Args:
+            identifier: 用户输入的标识符字符串。
+
+        Returns:
+            ResolvedChat 对象。
+
+        Raises:
+            InvalidIdentifierError: 输入格式无效。
+            UserNotFoundError: 用户名/ID 对应的对话不存在。
+            AccessDeniedError: 无权限访问该对话。
+            ResolveTimeoutError: Telegram API 调用超时。
+            RateLimitedError: 触发 FloodWait，响应体携带 retry_after。
+        """
+
+    @staticmethod
+    def _detect_format(identifier: str) -> IdentifierFormat:
+        """
+        检测输入字符串属于哪种标识符格式。
+
+        不发起网络请求，仅做本地正则/规则判断。
+        """
+
+    @staticmethod
+    def _normalize(identifier: str, fmt: IdentifierFormat) -> str:
+        """
+        将标识符清洗为可直接传给 client.get_chat() 的字符串。
+
+        - NUMERIC_ID: 原样返回
+        - AT_USERNAME: 去掉前缀 '@'
+        - BARE_USERNAME: 原样返回
+        - T_ME_LINK: 提取 username / group_id 后返回
+        """
+```
+
+### 4.2 构造函数说明
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `client` | `pyrogram.Client` | 是 | 已启动的 Telegram Client，用于调用 `get_chat`。 |
+
+IdentifierService 本身不持有配置或数据库连接，保持轻量；调用方（如 TaskManager、路由层）在需要时实例化并传入 client。
+
+### 4.3 返回值与异常约定
+
+- 正常返回 `ResolvedChat` 对象。
+- 所有错误统一抛出 `IdentifierServiceError` 的派生异常，异常对象携带 `code` 与 `message`。
+- API 层将异常转换为对应 HTTP 状态码；Bot 层将异常转换为用户提示消息。
+
+---
+
+## 5. API 端点
+
+### 5.1 `GET /api/chats/resolve`
+
+**用途**：前端在创建任务前，解析用户输入的源/目标对话标识符，并展示对话基本信息。
+
+**请求参数**（Query String）：
+
+| 参数 | 类型 | 必填 | 示例 | 说明 |
+|------|------|------|------|------|
+| `identifier` | string | 是 | `@seseYunBot` | 要解析的标识符 |
+
+**成功响应**（200 OK）：
+
+```json
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "chat_id": 8288406549,
+    "chat_type": "bot",
+    "chat_name": "sosov2☁️精选资源",
+    "username": "seseYunBot",
+    "message_count": 9,
+    "media_count": 2,
+    "has_access": true,
+    "is_private": true
+  }
+}
+```
+
+**错误响应示例**：
+
+```json
+// 400 - 格式无效
+{
+  "code": 400,
+  "message": "标识符格式不正确",
+  "data": null
+}
+
+// 404 - 用户/对话不存在
+{
+  "code": 404,
+  "message": "无法找到该用户/频道",
+  "data": null
+}
+
+// 403 - 无权限
+{
+  "code": 403,
+  "message": "您尚未与此用户建立对话",
+  "data": null
+}
+
+// 504 - 解析超时
+{
+  "code": 504,
+  "message": "解析请求超时，请重试",
+  "data": null
+}
+
+// 429 - API 限流
+{
+  "code": 429,
+  "message": "请求过于频繁，请稍后再试",
+  "data": { "retry_after": 30 }
+}
+```
+
+**限流与缓存策略**：
+
+- 服务端不实现缓存，避免 chat 信息不一致。
+- 前端"解析"按钮需做至少 3 秒防抖，降低触发 Telegram FloodWait 的概率。
+- API 层保留 Token 认证（`require_token`）与 TrustedHostMiddleware。
+
+---
+
+## 6. 错误处理
+
+### 6.1 异常体系
+
+```python
+class IdentifierServiceError(Exception):
+    """IdentifierService 基础异常。"""
+
+    def __init__(self, code: str, message: str, status_code: int = 400, retry_after: int | None = None):
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.retry_after = retry_after
+        super().__init__(message)
+
+
+class InvalidIdentifierError(IdentifierServiceError):
+    def __init__(self, message: str = "标识符格式不正确"):
+        super().__init__("INVALID_IDENTIFIER", message, 400)
+
+
+class UserNotFoundError(IdentifierServiceError):
+    def __init__(self, message: str = "无法找到该用户/频道"):
+        super().__init__("USER_NOT_FOUND", message, 404)
+
+
+class AccessDeniedError(IdentifierServiceError):
+    def __init__(self, message: str = "您尚未与此用户建立对话"):
+        super().__init__("ACCESS_DENIED", message, 403)
+
+
+class ResolveTimeoutError(IdentifierServiceError):
+    def __init__(self, message: str = "解析请求超时，请重试"):
+        super().__init__("RESOLVE_TIMEOUT", message, 504)
+
+
+class RateLimitedError(IdentifierServiceError):
+    def __init__(self, retry_after: int, message: str = "请求过于频繁，请稍后再试"):
+        super().__init__("RATE_LIMITED", message, 429, retry_after=retry_after)
+```
+
+### 6.2 错误映射表
+
+| 错误场景 | HTTP 状态码 | 错误码 | 错误消息 | 触发来源 |
+|---------|------------|--------|---------|----------|
+| 空字符串 / 非法格式 / 带帖子 ID 的消息链接 | 400 | `INVALID_IDENTIFIER` | 标识符格式不正确 | `_detect_format()` 识别为 `INVALID` |
+| username 不存在或已被删除 | 404 | `USER_NOT_FOUND` | 无法找到该用户/频道 | `client.get_chat()` 返回 `UsernameNotOccupied` / `PeerIdInvalid` |
+| 未与目标建立对话 / 被拉黑 / 无查看权限 | 403 | `ACCESS_DENIED` | 您尚未与此用户建立对话 | `client.get_chat()` 返回 `ChatForbidden` / `UserPrivacyRestricted` |
+| `client.get_chat()` 超过设定超时 | 504 | `RESOLVE_TIMEOUT` | 解析请求超时，请重试 | 网络异常或 Telegram 无响应 |
+| 触发 FloodWait | 429 | `RATE_LIMITED` | 请求过于频繁，请稍后再试 | `FloodWait` 异常，响应体含 `retry_after` |
+
+### 6.3 日志规范
+
+- 格式无效：`log.warning` 记录原始输入（长度截断到 100 字符）。
+- 解析失败：`log.warning` 记录输入与异常类型。
+- 限流：`log.warning` 记录 `retry_after` 秒数。
+- 不记录敏感信息（如完整 Token、用户手机号）。
+
+---
+
+## 7. 内部实现详细设计
+
+### 7.1 主流程 `resolve()`
+
+```
+[输入 identifier]
+        │
+        ▼
+[格式检测] _detect_format()
+        │
+        ├── INVALID ──▶ 抛出 InvalidIdentifierError
+        │
+        ▼
+[规范化] _normalize()
+        │
+        ▼
+[client.get_chat(query)]   ← 所有格式（含纯数字 ID）均调用
+        │
+        ├── 格式/不存在异常 ──▶ 抛出 UserNotFoundError
+        ├── 权限异常 ──▶ 抛出 AccessDeniedError
+        ├── FloodWait ──▶ 抛出 RateLimitedError(retry_after)
+        ├── 超时异常 ──▶ 抛出 ResolveTimeoutError
+        └── 成功
+                │
+                ▼
+        [组装 ResolvedChat]   ← 纯数字 ID 亦获取 chat_type 等完整元信息
+                │
+                ▼
+        [轻量统计 message_count / media_count]
+                │
+                ▼
+        返回 ResolvedChat
+```
+
+### 7.2 纯数字 ID 的 get_chat 调用策略
+
+**设计决策**：纯数字 ID 虽然可以直接作为 `chat_id` 使用，但 `resolve()` 仍需调用 `client.get_chat(chat_id)` 获取完整对话元信息，而非跳过直接返回。
+
+**原因**：
+
+1. **source_type 推导依赖 chat_type**：PRD 要求系统自动推导 `source_type`（channel / private），而 `chat_type`（如 `"channel"`、`"private"`、`"bot"` 等）只有通过 `get_chat()` 才能获取。纯数字 ID 本身无法判断对话是频道还是私聊。
+2. **chat_name 等展示信息**：前端预览需要展示对话名称，该信息也来自 `get_chat()` 的返回值。
+3. **成本可控**：纯数字 ID 调用 `get_chat()` 的 API 成本与 username 查询完全相同（均为一次 Telegram API 调用），不存在额外开销。相比跳过 `get_chat()` 带来的元信息缺失，这一调用是必要且值得的。
+
+**格式检测优化说明**：纯数字 ID 虽无需像 username/t.me 链接那样执行格式检测与提取步骤，但 `_detect_format()` 识别出纯数字格式后，可直接将其作为 `chat_id` 参数传入 `get_chat()`，而非作为 `username` 参数，避免因误判格式而导致的 API 错误。
+
+### 7.3 格式检测规则 `_detect_format()`
+
+```python
+_RE_NUMERIC_ID = re.compile(r"^-?\d+$")
+_RE_BARE_USERNAME = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]{4,31}$")  # Telegram: 5-32字符，字母开头
+_RE_AT_USERNAME = re.compile(r"^@[a-zA-Z][a-zA-Z0-9_]{4,31}$")  # 含@前缀共6-33字符
+_RE_T_ME_LINK = re.compile(r"^https?://t\.me/([a-zA-Z][a-zA-Z0-9_]{4,31})$")
+```
+
+**优先级**：
+
+1. 空/空白 → `INVALID`
+2. 纯数字 → `NUMERIC_ID`
+3. `@username` → `AT_USERNAME`
+4. `https://t.me/<username>` → `T_ME_LINK`
+5. 裸 username → `BARE_USERNAME`
+6. 其余 → `INVALID`
+
+### 7.4 规范化规则 `_normalize()`
+
+| 格式 | 输入示例 | 输出 |
+|------|----------|------|
+| `NUMERIC_ID` | `8288406549` | `8288406549`（原样返回，作为 `client.get_chat()` 的 chat_id 参数） |
+| `AT_USERNAME` | `@seseYunBot` | `seseYunBot` |
+| `BARE_USERNAME` | `seseYunBot` | `seseYunBot` |
+| `T_ME_LINK` | `https://t.me/seseYunBot` | `seseYunBot` |
+
+### 7.5 统计估算
+
+`message_count` / `media_count` 的获取策略：
+
+- 默认采用轻量估算：通过 `client.get_chat_history()` 获取最近若干条消息（如 20 条），按可见媒体消息比例外推。
+- 若对话无历史或 API 返回异常，字段返回 `-1`，不阻塞解析。
+- 本版本不做精确遍历，避免在解析阶段消耗大量 API 配额。
+
+---
+
+## 8. TDD 测试策略
+
+### 8.1 测试目标
+
+- `module/core/identifier_service.py` 核心逻辑单元测试覆盖率 ≥ 80%。
+- 格式检测、规范化、错误映射必须 100% 分支覆盖。
+- 所有 Telegram API 调用通过 Mock 隔离，不依赖真实网络。
+
+### 8.2 单元测试用例清单
+
+#### 格式检测与规范化
+
+| ID | 用例 | 期望结果 |
+|----|------|----------|
+| IS-FMT-01 | 纯数字 ID | `_detect_format()` 返回 `NUMERIC_ID` |
+| IS-FMT-02 | 负数频道 ID | `_detect_format()` 返回 `NUMERIC_ID` |
+| IS-FMT-03 | `@username` | `_detect_format()` 返回 `AT_USERNAME`，`_normalize()` 去掉 `@` |
+| IS-FMT-04 | 裸 username | `_detect_format()` 返回 `BARE_USERNAME` |
+| IS-FMT-05 | t.me 链接 | `_detect_format()` 返回 `T_ME_LINK`，`_normalize()` 提取 username |
+| IS-FMT-06 | 空字符串 | `_detect_format()` 返回 `INVALID` |
+| IS-FMT-07 | 带帖子 ID 的链接 `https://t.me/channel/123` | `_detect_format()` 返回 `INVALID`（属于 parse_link 职责） |
+| IS-FMT-08 | 非法特殊字符 | `_detect_format()` 返回 `INVALID` |
+
+#### 解析成功
+
+| ID | 用例 | 期望结果 |
+|----|------|----------|
+| IS-RES-01 | 纯数字 ID 解析 | 调用 `get_chat(chat_id)` 获取完整元信息，返回包含 `chat_type`、`chat_name` 等字段的 `ResolvedChat` |
+| IS-RES-02 | @username 解析 Bot | `chat_type="bot"`，`is_private=True`，`has_access=True` |
+| IS-RES-03 | t.me 链接解析私聊用户 | `chat_type="private"`，`is_private=True` |
+| IS-RES-04 | 公开频道 username | `chat_type="channel"`，`is_private=False` |
+| IS-RES-05 | 无 username 的私聊 | `username=None` |
+
+#### 错误处理
+
+| ID | 用例 | 期望结果 |
+|----|------|----------|
+| IS-ERR-01 | 空输入 | 抛出 `InvalidIdentifierError`，HTTP 400 |
+| IS-ERR-02 | username 不存在 | 抛出 `UserNotFoundError`，HTTP 404 |
+| IS-ERR-03 | 未建立对话 | 抛出 `AccessDeniedError`，HTTP 403 |
+| IS-ERR-04 | `get_chat` 超时 | 抛出 `ResolveTimeoutError`，HTTP 504 |
+| IS-ERR-05 | FloodWait 30 秒 | 抛出 `RateLimitedError`，HTTP 429，`retry_after=30` |
+| IS-ERR-06 | 非法 t.me 域名 | 抛出 `InvalidIdentifierError`，HTTP 400 |
+
+#### 统计估算
+
+| ID | 用例 | 期望结果 |
+|----|------|----------|
+| IS-EST-01 | 可获取历史消息 | `message_count` / `media_count` 为非负估算值 |
+| IS-EST-02 | 历史获取失败 | `message_count` / `media_count` 为 `-1`，解析仍成功 |
+
+### 8.3 Mock 点
+
+| 被测对象 | Mock 目标 | 说明 |
+|----------|----------|------|
+| IdentifierService | `pyrogram.Client.get_chat` | 模拟成功、不存在、无权限、限流、超时等场景。 |
+| IdentifierService | `pyrogram.Client.get_chat_history` | 模拟消息历史，用于统计估算。 |
+| IdentifierService | `helpers.extract_info_from_link` | 验证 t.me 链接复用关系。 |
+
+### 8.4 覆盖率目标
+
+| 模块 | 覆盖率目标 |
+|------|-----------|
+| `module/core/identifier_service.py` | ≥ 80% |
+| `_detect_format()` / `_normalize()` | ≥ 90% |
+| 异常映射分支 | 100% |
+
+### 8.5 测试框架
+
+- 使用 `pytest` + `pytest-asyncio`。
+- Client 使用 `AsyncMock` 构造。
+- CI 中运行 `pytest tests/unit/test_identifier_service.py -v --cov=module/core/identifier_service.py --cov-report=term-missing`。
+
+---
+
+## 9. 依赖关系
+
+### 9.1 内部依赖
+
+| 依赖模块/函数 | 用途 |
+|--------------|------|
+| `module.utils.helpers.extract_info_from_link` | t.me 链接的格式提取与 username 解析。 |
+| `module.api.responses` | API 层将异常转换为统一响应格式。 |
+
+### 9.2 外部依赖
+
+| 依赖 | 用途 |
+|------|------|
+| `pyrogram` | Telegram Client API：`get_chat`、`get_chat_history`。 |
+| `pytest` / `pytest-asyncio` | 单元测试框架。 |
+
+### 9.3 被依赖方
+
+| 使用方 | 用途 |
+|--------|------|
+| `module/api/routes/chats.py` | `GET /api/chats/resolve` 端点调用 `IdentifierService.resolve()`。 |
+| `module/api/routes/tasks.py` | 创建任务时解析 `source_identifier` / `target_identifier`。 |
+| `module/bot/commands.py` | Bot 命令中解析用户输入的对话标识。 |
+| `module/core/task_manager.py` | `create_task()` 内部统一调用，推导 `source_type` 并填充 `Task.extra`。 |
+
+---
+
+## 10. 风险与假设
+
+### 10.1 风险
+
+| 风险 | 影响 | 缓解措施 |
+|------|------|----------|
+| Telegram username 规则变化导致正则失效 | 低 | 将正则常量集中定义，便于统一调整。 |
+| `client.get_chat()` 对纯数字 ID 也发起网络请求 | 中 | 纯数字 ID 必须调用 `get_chat()` 以获取 `chat_type` 等元信息，从而支持 `source_type` 推导（channel/private）。该调用成本与 username 查询相同，但换取了完整的对话元信息，是必要开销。 |
+| FloodWait 频繁触发影响用户体验 | 中 | 前端 3 秒防抖 + 错误码 `retry_after` 回显。 |
+| 负数 chat_id 与 Bot ID 区分 | 低 | `chat_type` 由 Pyrogram `Chat.type` 决定，Bot 账号显式标记为 `"bot"`。 |
+| 与现有 `_resolve_chat_id()` 行为不完全一致 | 中 | 替换时保持路由层兼容，逐步迁移并补充回归测试。 |
+
+### 10.2 假设
+
+1. Pyrogram Client 已登录并启动。
+2. 调用方负责 Token 认证与权限校验（IdentifierService 只验证 Telegram 层可访问性）。
+3. 单次 `resolve()` 调用只解析一个标识符，批量解析由调用方循环调用。
+4. 本版本不缓存解析结果，每次调用都实时查询 Telegram。
+
+---
+
+## 11. 后续可扩展点（本版本不实现）
+
+- 服务端短周期缓存（如 60 秒 TTL）以降低 FloodWait 概率。
+- 批量 `resolve_batch(identifiers: list[str])` 接口。
+- 支持邀请链接 `https://t.me/+xxx` 的解析（当前由 `parse_link` / `get_valid_chat_id` 处理）。
+- 更精确的消息/媒体数量统计（按需精确遍历）。
+
+---
+
+> **文档结束**

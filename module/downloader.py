@@ -26,7 +26,6 @@ from pyrogram.errors.exceptions.bad_request_400 import (
     ChannelInvalid,
     BotMethodInvalid,
     UsernameNotOccupied,
-    PeerIdInvalid,
     MessageNotModified,
     ChannelPrivate as ChannelPrivate_400,
     ChatForwardsRestricted as ChatForwardsRestricted_400,
@@ -42,7 +41,6 @@ from pyrogram.errors.exceptions.unauthorized_401 import (
     Unauthorized,
 )
 from pyrogram.errors.exceptions.forbidden_403 import ChatWriteForbidden
-from pyrogram.handlers import MessageHandler
 from pyrogram.types.messages_and_media import ReplyParameters
 from pyrogram.types.bots_and_keyboards import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -601,40 +599,9 @@ class TelegramRestrictedMediaDownloader(Bot):
             callback_data == BotCallbackText.REMOVE_LISTEN_FORWARD
             or callback_data.startswith(BotCallbackText.REMOVE_LISTEN_DOWNLOAD)
         ):
-            if callback_data.startswith(BotCallbackText.REMOVE_LISTEN_DOWNLOAD):
-                args: list = callback_data.split()
-                link: str = args[1]
-                self.app.client.remove_handler(self.listen_download_chat.get(link))
-                self.listen_download_chat.pop(link)
-                await callback_query.message.edit_text(link)
-                await callback_query.message.edit_reply_markup(
-                    KeyboardButton.single_button(
-                        text=BotButton.ALREADY_REMOVE,
-                        callback_data=BotCallbackText.NULL,
-                    )
-                )
-                p = f'已删除监听下载,频道链接:"{link}"。'
-                console.log(p, style="#FF4689")
-                log.info(f"{p}当前的监听下载信息:{self.listen_download_chat}")
-                return None
-            if not isinstance(self.cd.data, dict):
-                return None
-            meta: Union[dict, None] = self.cd.data.copy()
-            self.cd.data = None
-            link: str = meta.get("link")
-            self.app.client.remove_handler(self.listen_forward_chat.get(link))
-            self.listen_forward_chat.pop(link)
-            m: list = link.split()
-            _ = " -> ".join(m)
-            p = f'已删除监听转发,转发规则:"{_}"。'
-            await callback_query.message.edit_text(" ➡️ ".join(m))
-            await callback_query.message.edit_reply_markup(
-                KeyboardButton.single_button(
-                    text=BotButton.ALREADY_REMOVE, callback_data=BotCallbackText.NULL
-                )
-            )
-            console.log(p, style="#FF4689")
-            log.info(f"{p}当前的监听转发信息:{self.listen_forward_chat}")
+            # 委托给 CommandRouter 处理（新格式: rld_{task_id} / rlf_{task_id}）
+            await self._commands.handle_remove_listen_callback(client, callback_query)
+            return None
         elif callback_data in (
             BotCallbackText.DOWNLOAD_CHAT_FILTER,  # 主页面。
             BotCallbackText.DOWNLOAD_CHAT_DATE_FILTER,  # 下载日期范围设置页面。
@@ -1434,175 +1401,6 @@ class TelegramRestrictedMediaDownloader(Bot):
             if last_message and getattr(last_message, "text", "") == loading:
                 await safe_delete_message(last_message)
 
-    async def cancel_listen(
-        self,
-        client: pyrogram.Client,
-        message: pyrogram.types.Message,
-        link: str,
-        command: str,
-    ):
-        if command == "/listen_forward":
-            self.cd.data = {"link": link}
-        args: list = link.split()
-        forward_emoji = " ➡️ "
-        await client.send_message(
-            chat_id=message.from_user.id,
-            reply_parameters=ReplyParameters(message_id=message.id),
-            text=f"`{link if len(args) == 1 else forward_emoji.join(args)}`\n🚛已经在监听列表中。",
-            link_preview_options=LINK_PREVIEW_OPTIONS,
-            reply_markup=InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            BotButton.DROP,
-                            callback_data=(
-                                f"{BotCallbackText.REMOVE_LISTEN_DOWNLOAD} {link}"
-                                if command == "/listen_download"
-                                else BotCallbackText.REMOVE_LISTEN_FORWARD
-                            ),
-                        )
-                    ]
-                ]
-            ),
-        )
-
-    async def on_listen(self, client: pyrogram.Client, message: pyrogram.types.Message):
-        meta: Union[dict, None] = await super().on_listen(client, message)
-        if meta is None:
-            return None
-
-        async def add_listen_chat(
-            _link: str, _listen_chat: dict, _callback: Callable
-        ) -> bool:
-            if _link not in _listen_chat:
-                try:
-                    chat = await self.user.get_chat(_link)
-                    if chat.is_forum:
-                        raise PeerIdInvalid
-                    handler = MessageHandler(
-                        _callback, filters=pyrogram.filters.chat(chat.id)
-                    )
-                    _listen_chat[_link] = handler
-                    self.user.add_handler(handler)
-                    return True
-                except PeerIdInvalid:
-                    try:
-                        link_meta: list = _link.split()
-                        link_length: int = len(link_meta)
-                        if (
-                            link_length >= 1
-                        ):  # v1.6.7 修复内部函数add_listen_chat中,抛出PeerIdInvalid后,在获取链接时抛出ValueError错误。
-                            l_link = link_meta[0]
-                        else:
-                            return False
-                        m: dict = await parse_link(client=self.app.client, link=l_link)
-                        topic_id = m.get("topic_id")
-                        chat_id = m.get("chat_id")
-                        if topic_id:
-                            filters = pyrogram.filters.chat(
-                                chat_id
-                            ) & pyrogram.filters.topic(topic_id)
-                        else:
-                            filters = pyrogram.filters.chat(chat_id)
-                        handler = MessageHandler(_callback, filters=filters)
-                        _listen_chat[_link] = handler
-                        self.user.add_handler(handler)
-                        return True
-                    except ValueError as e:
-                        await client.send_message(
-                            chat_id=message.from_user.id,
-                            reply_parameters=ReplyParameters(message_id=message.id),
-                            link_preview_options=LINK_PREVIEW_OPTIONS,
-                            text=f"⚠️⚠️⚠️无法读取⚠️⚠️⚠️\n`{_link}`\n(具体原因请前往终端查看报错信息)",
-                        )
-                        log.error(f'频道"{_link}"解析失败,{_t(KeyWord.REASON)}:"{e}"')
-                        return False
-                except Exception as e:
-                    await client.send_message(
-                        chat_id=message.from_user.id,
-                        reply_parameters=ReplyParameters(message_id=message.id),
-                        link_preview_options=LINK_PREVIEW_OPTIONS,
-                        text=f"⚠️⚠️⚠️无法读取⚠️⚠️⚠️\n`{_link}`\n(具体原因请前往终端查看报错信息)",
-                    )
-                    log.error(f'读取频道"{_link}"时遇到错误,{_t(KeyWord.REASON)}:"{e}"')
-                    return False
-            else:
-                await self.cancel_listen(client, message, _link, command)
-                return False
-
-        links: list = meta.get("links")
-        command: str = meta.get("command")
-        if command == "/listen_download":
-            last_message: Union[pyrogram.types.Message, None] = None
-            for link in links:
-                if await add_listen_chat(
-                    link, self.listen_download_chat, self.listen_download
-                ):
-                    if not last_message:
-                        last_message: Union[
-                            pyrogram.types.Message, str, None
-                        ] = await client.send_message(
-                            chat_id=message.from_user.id,
-                            reply_parameters=ReplyParameters(message_id=message.id),
-                            link_preview_options=LINK_PREVIEW_OPTIONS,
-                            text="✅新增`监听下载频道`频道:\n",
-                        )
-                    last_message: Union[
-                        pyrogram.types.Message, None
-                    ] = await self.safe_edit_message(
-                        client=client,
-                        message=message,
-                        last_message_id=last_message.id,
-                        text=safe_message(f"{last_message.text}\n{link}"),
-                        reply_markup=InlineKeyboardMarkup(
-                            [
-                                [
-                                    InlineKeyboardButton(
-                                        BotButton.LOOKUP_LISTEN_INFO,
-                                        callback_data=BotCallbackText.LOOKUP_LISTEN_INFO,
-                                    )
-                                ]
-                            ]
-                        ),
-                    )
-                    p = f'已新增监听下载,频道链接:"{link}"。'
-                    console.log(p, style="#FF4689")
-                    log.info(f"{p}当前的监听下载信息:{self.listen_download_chat}")
-        elif command == "/listen_forward":
-            listen_link, target_link = links
-            if await add_listen_chat(
-                f"{listen_link} {target_link}",
-                self.listen_forward_chat,
-                self.listen_forward,
-            ):
-                await client.send_message(
-                    chat_id=message.from_user.id,
-                    reply_parameters=ReplyParameters(message_id=message.id),
-                    link_preview_options=LINK_PREVIEW_OPTIONS,
-                    text=f"✅新增`监听转发`频道:\n{listen_link} ➡️ {target_link}",
-                    reply_markup=InlineKeyboardMarkup(
-                        [
-                            [
-                                InlineKeyboardButton(
-                                    BotButton.LOOKUP_LISTEN_INFO,
-                                    callback_data=BotCallbackText.LOOKUP_LISTEN_INFO,
-                                )
-                            ]
-                        ]
-                    ),
-                )
-                p = f'已新增监听转发,转发规则:"{listen_link} -> {target_link}"。'
-                console.log(p, style="#FF4689")
-                log.info(f"{p}当前的监听转发信息:{self.listen_forward_chat}")
-
-    async def listen_download(
-        self, client: pyrogram.Client, message: pyrogram.types.Message
-    ):
-        try:
-            await self.create_download_task(message_ids=message.link, single_link=True)
-        except Exception as e:
-            log.exception(f'监听下载出现错误,{_t(KeyWord.REASON)}:"{e}"')
-
     def check_type(self, message: pyrogram.types.Message):
         forward_type = self.app.config.get("preference", {}).get(
             "forward_type",
@@ -1649,122 +1447,6 @@ class TelegramRestrictedMediaDownloader(Bot):
             if media:
                 return getattr(media, "file_unique_id", None)
         return None
-
-    async def listen_forward(
-        self, client: pyrogram.Client, message: pyrogram.types.Message
-    ):
-        try:
-            link: str = message.link
-            meta = await parse_link(client=self.app.client, link=link)
-            listen_chat_id = meta.get("chat_id")
-            for m in self.listen_forward_chat:
-                listen_link, target_link = m.split()
-                _listen_link_meta = await parse_link(
-                    client=self.app.client, link=listen_link
-                )
-                _target_link_meta = await parse_link(
-                    client=self.app.client, link=target_link
-                )
-                _listen_chat_id = _listen_link_meta.get("chat_id")
-                _target_chat_id = _target_link_meta.get("chat_id")
-                if listen_chat_id == _listen_chat_id:
-                    try:
-                        media_group_ids = await message.get_media_group()
-                        if not media_group_ids:
-                            raise ValueError
-                        forward_type = self.app.config.get("preference", {}).get(
-                            "forward_type",
-                            {
-                                "video": True,
-                                "photo": True,
-                                "audio": True,
-                                "document": True,
-                                "voice": True,
-                                "text": True,
-                                "animation": True,
-                                "video_note": True,
-                            },
-                        )
-                        if not forward_type.get("video") or not forward_type.get(
-                            "photo"
-                        ):
-                            log.warning(
-                                "由于过滤了图片或视频类型的转发,将不再以媒体组方式发送。"
-                            )
-                            raise ValueError
-                        if (
-                            getattr(getattr(message, "chat", None), "is_creator", False)
-                            or getattr(
-                                getattr(message, "chat", None), "is_admin", False
-                            )
-                        ) and (
-                            getattr(getattr(message, "from_user", None), "id", -1)
-                            == getattr(getattr(client, "me", None), "id", None)
-                        ):
-                            pass
-                        elif (
-                            getattr(
-                                getattr(message, "chat", None),
-                                "has_protected_content",
-                                False,
-                            )
-                            or getattr(
-                                getattr(message, "sender_chat", None),
-                                "has_protected_content",
-                                False,
-                            )
-                            or getattr(message, "has_protected_content", False)
-                        ):
-                            raise ValueError
-                        if not self.handle_media_groups.get(listen_chat_id):
-                            self.handle_media_groups[listen_chat_id] = set()
-                        if (
-                            listen_chat_id in self.handle_media_groups
-                            and message.id
-                            not in self.handle_media_groups.get(listen_chat_id)
-                        ):
-                            ids: set = set()
-                            for peer_message in media_group_ids:
-                                peer_id = peer_message.id
-                                ids.add(peer_id)
-                            if ids:
-                                old_ids: Union[None, set] = (
-                                    self.handle_media_groups.get(listen_chat_id)
-                                )
-                                if old_ids and isinstance(old_ids, set):
-                                    old_ids.update(ids)
-                                    self.handle_media_groups[listen_chat_id] = old_ids
-                                else:
-                                    self.handle_media_groups[listen_chat_id] = ids
-                            await self.forward(
-                                client=client,
-                                message=message,
-                                message_id=message.id,
-                                origin_chat_id=_listen_chat_id,
-                                target_chat_id=_target_chat_id,
-                                target_link=target_link,
-                                download_upload=False,
-                                media_group=sorted(ids),
-                            )
-                            break
-                        break
-                    except ValueError:
-                        pass
-                    await self.forward(
-                        client=client,
-                        message=message,
-                        message_id=message.id,
-                        origin_chat_id=_listen_chat_id,
-                        target_chat_id=_target_chat_id,
-                        target_link=target_link,
-                        download_upload=True,
-                    )
-        except (ValueError, KeyError, UsernameInvalid, ChatWriteForbidden) as e:
-            log.error(
-                f"监听转发出现错误,{_t(KeyWord.REASON)}:{e}频道性质可能发生改变,包括但不限于(频道解散、频道名改变、频道类型改变、该账户没有在目标频道上传的权限、该账号被当前频道移除)。"
-            )
-        except Exception as e:
-            log.exception(f'监听转发出现错误,{_t(KeyWord.REASON)}:"{e}"')
 
     async def handle_forwarded_media(
         self, user_client: pyrogram.Client, user_message: pyrogram.types.Message
@@ -2991,6 +2673,17 @@ class TelegramRestrictedMediaDownloader(Bot):
                 _ctx.init_repository_sync(self.app.client)
         except Exception as _sync_err:
             log.warning(f"仓库同步器启动失败（非致命）: {_sync_err}")
+
+        # 向 TaskManager 注入 IdentifierService（延迟注入，client 已就绪）
+        try:
+            from module.integration import get_context
+
+            _ctx = get_context()
+            if _ctx:
+                _ctx.init_task_manager_services(client=self.app.client)
+        except Exception as _svc_err:
+            log.warning(f"TaskManager 服务注入失败（非致命）: {_svc_err}")
+
         if self.app.bot_token is not None:
             result = await self.start_bot(
                 self.app,
@@ -3018,7 +2711,7 @@ class TelegramRestrictedMediaDownloader(Bot):
 
                 _ctx = get_context()
                 if _ctx:
-                    _ctx.init_task_executor(
+                    await _ctx.init_task_executor(
                         client=self.app.client,
                         downloader=self,
                         uploader=getattr(self, "uploader", None),

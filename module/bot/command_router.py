@@ -11,7 +11,7 @@ import copy
 import os
 import asyncio
 from functools import partial
-from typing import Union, Dict, Callable
+from typing import Any, Callable, Dict, Optional, Union, cast, TYPE_CHECKING
 
 import pyrogram
 from pyrogram.types.messages_and_media import ReplyParameters
@@ -35,9 +35,7 @@ from module.language import _t
 from module.task import UploadTask
 from module.utils.path_tool import safe_scan_directory_file
 from module.utils.helpers import (
-    parse_link,
     safe_index,
-    safe_message,
     is_allow_upload,
     get_valid_chat_id,
 )
@@ -45,7 +43,6 @@ from module.enums import (
     UploadStatus,
     DownloadType,
     BotCommandText,
-    BotMessage,
     BotCallbackText,
     BotButton,
     KeyWord,
@@ -53,6 +50,11 @@ from module.enums import (
 from module.bot.utils import MessageHelper, TextFormatter, ValidationHelper
 from module.bot.keyboard_manager import KeyboardManager
 from module.bot.state_manager import StateManager
+
+from module.core.task_manager import TaskType, TaskStatus
+
+if TYPE_CHECKING:
+    from module.core.identifier_service import IdentifierService, IdentifierServiceError
 
 
 class CommandRouter:
@@ -64,14 +66,105 @@ class CommandRouter:
     """
 
     def __init__(
-        self, state_manager: StateManager, keyboard_manager: KeyboardManager = None
+        self,
+        state_manager: StateManager,
+        keyboard_manager: Optional[KeyboardManager] = None,
+        identifier_service: Optional["IdentifierService"] = None,
+        task_manager: Optional[Any] = None,
+        task_executor: Optional[Any] = None,
     ):
         """
         :param state_manager: 状态管理器实例
         :param keyboard_manager: 键盘管理器实例（可选，默认创建新实例）
+        :param identifier_service: 标识符解析服务（可选，默认从 AppContext 延迟获取）
+        :param task_manager: TaskManager 实例（可选，默认从 AppContext 延迟获取）
+        :param task_executor: TaskExecutor 实例（可选，默认从 AppContext 延迟获取）
         """
         self.state_manager = state_manager
         self.keyboard_manager = keyboard_manager or KeyboardManager()
+        self._identifier_service_cache: Optional["IdentifierService"] = (
+            identifier_service
+        )
+        self._task_manager_cache: Optional[Any] = task_manager
+        self._task_executor_cache: Optional[Any] = task_executor
+        self._resolved_chat_id_cache: dict[str, str] = {}
+
+    @property
+    def _task_manager(self):
+        """获取 TaskManager 实例（延迟加载）。"""
+        if self._task_manager_cache is not None:
+            return self._task_manager_cache
+        from module.integration import get_context
+
+        ctx = get_context()
+        if ctx:
+            self._task_manager_cache = getattr(ctx, "task_manager", None)
+        return self._task_manager_cache
+
+    @property
+    def _task_executor(self):
+        """获取 TaskExecutor 实例（延迟加载）。"""
+        if self._task_executor_cache is not None:
+            return self._task_executor_cache
+        from module.integration import get_context
+
+        ctx = get_context()
+        if ctx:
+            self._task_executor_cache = getattr(ctx, "task_executor", None)
+        return self._task_executor_cache
+
+    @property
+    def _identifier_service(self) -> Optional["IdentifierService"]:
+        """获取 IdentifierService 实例。
+
+        优先使用构造函数注入的实例；若未注入，则尝试从 AppContext 单例获取 client 创建。
+        """
+        if self._identifier_service_cache is not None:
+            return self._identifier_service_cache
+        from module.integration import get_context
+
+        ctx = get_context()
+        if ctx and getattr(ctx, "client", None):
+            from module.core.identifier_service import IdentifierService
+
+            self._identifier_service_cache = IdentifierService(ctx.client)
+        return self._identifier_service_cache
+
+    def _format_resolve_error(self, error: "IdentifierServiceError") -> str:
+        """将 IdentifierServiceError 映射为用户友好的 Bot 错误提示。"""
+        from module.core.identifier_service import (
+            InvalidIdentifierError,
+            UserNotFoundError,
+            AccessDeniedError,
+            RateLimitedError,
+            ResolveTimeoutError,
+        )
+
+        if isinstance(error, InvalidIdentifierError):
+            return "❌❌❌链接格式无效❌❌❌"
+        if isinstance(error, UserNotFoundError):
+            return "❌❌❌找不到频道❌❌❌"
+        if isinstance(error, AccessDeniedError):
+            return "❌❌❌无权访问该频道❌❌❌"
+        if isinstance(error, RateLimitedError):
+            return "❌❌❌请求过于频繁，请稍后重试❌❌❌"
+        if isinstance(error, ResolveTimeoutError):
+            return "❌❌❌解析超时，请重试❌❌❌"
+        return f"❌❌❌解析失败:{error.message}❌❌❌"
+
+    @staticmethod
+    def _message_user_id(message: pyrogram.types.Message) -> int:
+        """安全获取消息发送者用户 ID。
+
+        Bot 收到的命令消息理论上一定包含 from_user；若不存在则返回 0 避免崩溃。
+        """
+        user = message.from_user
+        return user.id if user is not None else 0
+
+    @staticmethod
+    def _message_text(message: pyrogram.types.Message) -> str:
+        """安全获取消息文本，None 时返回空字符串。"""
+        return message.text or ""
 
     # ==================== 帮助/开始/表格命令 ====================
 
@@ -115,15 +208,16 @@ class CommandRouter:
             f"📨 转发`视频`、`图片`、`音频`、`语音`、`GIF`、`文档`、`视频笔记`类型的消息给我,即可创建下载任务。\n"
         )
 
-        if not all([client, message]):
+        if client is None or message is None:
             return {"keyboard": keyboard, "text": text}
 
         await client.send_message(
-            chat_id=message.from_user.id,
+            chat_id=self._message_user_id(message),
             text=text,
             link_preview_options=LINK_PREVIEW_OPTIONS,
             reply_markup=keyboard,
         )
+        return None
 
     async def start(
         self, client: pyrogram.Client, message: pyrogram.types.Message
@@ -144,14 +238,15 @@ class CommandRouter:
         """
         keyboard = KeyboardManager.build_table_keyboard()
         text: str = "🧐🧐🧐请选择输出「统计表」的类型:"
-        if not all([client, message]):
+        if client is None or message is None:
             return {"keyboard": keyboard, "text": text}
         await client.send_message(
-            chat_id=message.from_user.id,
+            chat_id=self._message_user_id(message),
             text=text,
             link_preview_options=LINK_PREVIEW_OPTIONS,
             reply_markup=keyboard,
         )
+        return None
 
     # ==================== 下载命令 ====================
 
@@ -159,8 +254,8 @@ class CommandRouter:
         self,
         client: pyrogram.Client,
         message: pyrogram.types.Message,
-        user_client: pyrogram.Client = None,
-        bot_client: pyrogram.Client = None,
+        user_client: Optional[pyrogram.Client] = None,
+        bot_client: Optional[pyrogram.Client] = None,
         with_upload: Union[dict, None] = None,
     ) -> Union[Dict[str, Union[set, pyrogram.types.Message]], None]:
         """解析下载链接命令。
@@ -172,10 +267,11 @@ class CommandRouter:
         :param with_upload: 上传配置
         :return: 解析结果字典或 None
         """
-        text: str = message.text
+        text = self._message_text(message)
+        user_id = self._message_user_id(message)
         if text == "/download":
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="⚠️⚠️⚠️请提供下载链接⚠️⚠️⚠️语法:\n`/download https://t.me/x/x`",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -184,7 +280,7 @@ class CommandRouter:
             if text[len("https://t.me/") :].count("/") >= 1:
                 try:
                     await client.delete_messages(
-                        chat_id=message.from_user.id, message_ids=message.id
+                        chat_id=user_id, message_ids=message.id
                     )
                     if user_client:
                         bot_username = (
@@ -200,14 +296,14 @@ class CommandRouter:
                             )
                 except Exception as e:
                     await client.send_message(
-                        chat_id=message.from_user.id,
+                        chat_id=user_id,
                         reply_parameters=ReplyParameters(message_id=message.id),
                         text=f"{e}\n⬇️⬇️⬇️请使用以下命令分配下载任务⬇️⬇️⬇️\n`/download {text}`",
                         link_preview_options=LINK_PREVIEW_OPTIONS,
                     )
             else:
                 await client.send_message(
-                    chat_id=message.from_user.id,
+                    chat_id=user_id,
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text="⬇️⬇️⬇️请使用以下命令分配下载任务⬇️⬇️⬇️\n`/download https://t.me/x/x`",
                     link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -219,7 +315,7 @@ class CommandRouter:
         ):
             await self.help(client, message)
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="❌❌❌链接错误❌❌❌\n请查看帮助后重试。",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -228,6 +324,8 @@ class CommandRouter:
             link: list = text.split()
             link.remove("/download") if "/download" in link else None
             link = [_.rstrip("/") for _ in link]
+            right_link: set = set()
+            invalid_link: set = set()
             if (
                 safe_index(link, 0, "").startswith("https://t.me/")
                 and not safe_index(link, 1, "https://t.me/").startswith("https://t.me/")
@@ -239,15 +337,11 @@ class CommandRouter:
                     start_id=start_id, end_id=end_id, client=client, message=message
                 ):
                     return None
-                right_link: set = set()
-                invalid_link: set = set()
                 for i in range(start_id, end_id + 1):
                     right_link.add(f"{link[0]}/{i}?single")
             else:
-                right_link: set = set(
-                    [_ for _ in link if _.startswith("https://t.me/")]
-                )
-                invalid_link: set = set(
+                right_link = set([_ for _ in link if _.startswith("https://t.me/")])
+                invalid_link = set(
                     [_ for _ in link if not _.startswith("https://t.me/")]
                 )
             if right_link:
@@ -259,12 +353,13 @@ class CommandRouter:
                         message=message,
                         text=TextFormatter.update_text(
                             right_link=right_link,
-                            invalid_link=invalid_link if invalid_link else None,
+                            invalid_link=invalid_link,
                         ),
                     ),
                 }
             else:
                 return None
+        return None
 
     # ==================== 下载频道命令 ====================
 
@@ -272,7 +367,7 @@ class CommandRouter:
         self,
         client: pyrogram.Client,
         message: pyrogram.types.Message,
-        user_client: pyrogram.Client = None,
+        user_client: Optional[pyrogram.Client] = None,
     ) -> None:
         """解析下载频道命令。
 
@@ -280,18 +375,19 @@ class CommandRouter:
         :param message: 用户消息
         :param user_client: 用户客户端
         """
+        user_id = self._message_user_id(message)
+        text = self._message_text(message)
         if BotCallbackText.DOWNLOAD_CHAT_ID != "download_chat_id":
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="⚠️⚠️⚠️请执行或取消上一次频道下载任务设置⚠️⚠️⚠️",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
             )
             return None
-        text: str = message.text
         if text == "/download_chat":
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="⚠️⚠️⚠️请提供下载链接⚠️⚠️⚠️语法:\n`/download_chat https://t.me/x/x`",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -301,37 +397,42 @@ class CommandRouter:
         if len(command) != 2:
             await self.help(client, message)
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="❌❌❌命令语法错误❌❌❌\n请查看帮助后重试。",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
             )
             return None
         chat_link = command[1]
+        identifier_service = self._identifier_service
+        if identifier_service is None:
+            await client.send_message(
+                chat_id=user_id,
+                reply_parameters=ReplyParameters(message_id=message.id),
+                text="❌❌❌Telegram 客户端未连接❌❌❌",
+                link_preview_options=LINK_PREVIEW_OPTIONS,
+            )
+            return None
         try:
-            meta = await parse_link(client=user_client, link=chat_link)
-        except ValueError:
-            meta = None
-        if not isinstance(meta, dict):
+            resolved = await identifier_service.resolve(chat_link)
+        except Exception as e:
+            from module.core.identifier_service import IdentifierServiceError
+
+            if isinstance(e, IdentifierServiceError):
+                error_text = self._format_resolve_error(e)
+            else:
+                error_text = f"❌❌❌解析失败:{e}❌❌❌"
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
-                text="❌❌❌找不到频道❌❌❌",
+                text=error_text,
                 link_preview_options=LINK_PREVIEW_OPTIONS,
             )
             return None
-        chat_id = meta.get("chat_id")
-        if not chat_id:
-            await client.send_message(
-                chat_id=message.from_user.id,
-                reply_parameters=ReplyParameters(message_id=message.id),
-                text="❌❌❌无法获取频道名❌❌❌",
-                link_preview_options=LINK_PREVIEW_OPTIONS,
-            )
-            return None
+        chat_id = resolved.chat_id
         if self.state_manager.has_download_filter(str(chat_id)):
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text=f"⚠️⚠️⚠️该频道已在下载中⚠️⚠️⚠️\n{chat_link}",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -348,7 +449,7 @@ class CommandRouter:
         )
         comment: str = "开" if include_comment else "关"
         await client.send_message(
-            chat_id=message.from_user.id,
+            chat_id=user_id,
             reply_parameters=ReplyParameters(message_id=message.id),
             text=f"💬下载频道:`{chat_id}`\n"
             f"⏮️当前选择的起始日期为:未定义\n"
@@ -361,6 +462,7 @@ class CommandRouter:
             ),
             link_preview_options=LINK_PREVIEW_OPTIONS,
         )
+        return None
 
     # ==================== 转发命令 ====================
 
@@ -373,11 +475,12 @@ class CommandRouter:
         :param message: 用户消息
         :return: 解析结果字典或 None
         """
-        text: str = message.text
+        text = self._message_text(message)
+        user_id = self._message_user_id(message)
         args: list = text.split(maxsplit=5)
         if text == "/forward":
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="❌❌❌命令语法无效❌❌❌\n"
                 "⬇️⬇️⬇️语法如下⬇️⬇️⬇️\n"
@@ -395,7 +498,7 @@ class CommandRouter:
                 return None
         except Exception as e:
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text=f"❌❌❌命令错误❌❌❌\n{e}\n请使用`/forward https://t.me/A https://t.me/B 1 100`",
             )
@@ -412,13 +515,13 @@ class CommandRouter:
         self,
         client: pyrogram.Client,
         message: pyrogram.types.Message,
-        user_client: pyrogram.Client = None,
-        bot_client: pyrogram.Client = None,
-        last_message: pyrogram.types.Message = None,
+        user_client: Optional[pyrogram.Client] = None,
+        bot_client: Optional[pyrogram.Client] = None,
+        last_message: Optional[pyrogram.types.Message] = None,
         delete: bool = False,
-        save_directory: str = None,
+        save_directory: Optional[str] = None,
         recursion: bool = False,
-        valid_link_cache: dict = None,
+        valid_link_cache: Optional[dict] = None,
     ) -> Union[Dict, None]:
         """解析上传命令。
 
@@ -435,11 +538,14 @@ class CommandRouter:
         """
         if not recursion:
             valid_link_cache = {}
+        if valid_link_cache is None:
+            valid_link_cache = {}
 
-        text: str = message.text
+        text = self._message_text(message)
+        user_id = self._message_user_id(message)
         if text == "/upload" or text == "/upload_r":
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="⚠️⚠️⚠️请提供参数⚠️⚠️⚠️语法:\n`/upload 本地文件 目标频道`或`/upload_r 本地文件夹 目标频道`",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -461,12 +567,14 @@ class CommandRouter:
             file_path = parts[0]
             target_link = parts[1]
             if not recursion:
+                if user_client is None:
+                    return None
                 if target_link not in valid_link_cache:
                     valid_link_cache[target_link] = await get_valid_chat_id(
                         link=target_link,
                         user_client=user_client,
-                        bot_client=bot_client,
-                        bot_message=last_message,
+                        bot_client=cast(pyrogram.Client, bot_client),
+                        bot_message=cast(pyrogram.types.Message, last_message),
                         error_msg=f"⬇️⬇️⬇️目标频道不存在⬇️⬇️⬇️\n{target_link}",
                     )
                 if not valid_link_cache[target_link]:
@@ -484,7 +592,7 @@ class CommandRouter:
                 for file_name in upload_files:
                     new_message = copy.copy(message)
                     new_message.text = (
-                        f"/upload {os.path.join(file_path, file_name)} {target_link}"
+                        f"/upload {os.path.join(file_path, file_name)} {target_link}"  # type: ignore
                     )
                     upload_folder.append(
                         self.get_upload_link_from_bot(
@@ -501,7 +609,7 @@ class CommandRouter:
                     )
                 if upload_folder:
                     await client.send_message(
-                        chat_id=message.from_user.id,
+                        chat_id=user_id,
                         reply_parameters=ReplyParameters(message_id=message.id),
                         text=f"📤📤📤上传任务已创建,请耐心等待📤📤📤\n`{file_path}`",
                         link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -509,7 +617,7 @@ class CommandRouter:
                     await asyncio.gather(*upload_folder)
                 else:
                     await client.send_message(
-                        chat_id=message.from_user.id,
+                        chat_id=user_id,
                         reply_parameters=ReplyParameters(message_id=message.id),
                         text=f"⚠️⚠️⚠️文件夹为空⚠️⚠️⚠️\n`{file_path}`",
                         link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -518,7 +626,7 @@ class CommandRouter:
             if not os.path.isfile(file_path):
                 log.error(f'上传出错,{_t(KeyWord.REASON)}:"{file_path}"不存在。')
                 await client.send_message(
-                    chat_id=message.from_user.id,
+                    chat_id=user_id,
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text=f"⚠️⚠️⚠️上传文件不存在⚠️⚠️⚠️\n`{file_path}`",
                     link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -527,25 +635,25 @@ class CommandRouter:
             file_size = os.path.getsize(file_path)
             if file_size == 0:
                 await client.send_message(
-                    chat_id=message.from_user.id,
+                    chat_id=user_id,
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text=f"⚠️⚠️⚠️上传文件大小为0⚠️⚠️⚠️\n`{file_path}`",
                     link_preview_options=LINK_PREVIEW_OPTIONS,
                 )
 
-            if not is_allow_upload(
-                file_size=file_size,
-                is_premium=user_client.me.is_premium if user_client else False,
-            ):
+            is_premium = (
+                getattr(user_client.me, "is_premium", False) if user_client else False
+            )
+            if not is_allow_upload(file_size=file_size, is_premium=is_premium):
                 from module.utils.stdio import (
                     MetaData,
                 )  # lazy import to avoid parser side effects
 
-                format_file_size: str = MetaData.suitable_unit_display(
+                format_file_size: str = MetaData.suitable_unit_display(  # type: ignore[attr-defined]
                     file_size, unit="MiB", mebibyte=True
                 )
                 await client.send_message(
-                    chat_id=message.from_user.id,
+                    chat_id=user_id,
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text=f"⚠️⚠️⚠️上传大小超过限制({format_file_size})⚠️⚠️⚠️\n"
                     f"`{file_path}`\n"
@@ -554,7 +662,7 @@ class CommandRouter:
                 )
             if not recursion:
                 await client.send_message(
-                    chat_id=message.from_user.id,
+                    chat_id=user_id,
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text=f"📤📤📤上传任务已创建,请耐心等待📤📤📤\n`{file_path}`",
                     link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -567,7 +675,7 @@ class CommandRouter:
                     "upload_task": UploadTask(
                         chat_id=None,
                         file_path=file_path,
-                        file_id=user_client.rnd_id() if user_client else 0,
+                        file_id=cast(int, user_client.rnd_id()) if user_client else 0,
                         file_size=os.path.getsize(file_path),
                         file_part=[],
                         status=UploadStatus.PENDING,
@@ -576,12 +684,13 @@ class CommandRouter:
         if not recursion:
             await self.help(client, message)
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 text="❌❌❌命令错误❌❌❌\n请查看帮助后重试。",
                 link_preview_options=LINK_PREVIEW_OPTIONS,
             )
             return None
+        return None
 
     # ==================== 退出命令 ====================
 
@@ -594,7 +703,7 @@ class CommandRouter:
         :param message: 用户消息
         """
         last_message = await client.send_message(
-            chat_id=message.from_user.id,
+            chat_id=self._message_user_id(message),
             text="🚧已收到退出命令。",
             reply_parameters=ReplyParameters(message_id=message.id),
             link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -609,23 +718,53 @@ class CommandRouter:
 
     # ==================== 监听命令 ====================
 
+    async def _resolve_link_to_chat_id(self, link: str) -> Optional[str]:
+        """解析 link 为 chat_id 字符串，使用内部缓存避免重复请求。"""
+        if link in self._resolved_chat_id_cache:
+            return self._resolved_chat_id_cache[link]
+        identifier_service = self._identifier_service
+        if identifier_service is None:
+            return None
+        try:
+            resolved = await identifier_service.resolve(link)
+            chat_id = str(resolved.chat_id)
+            self._resolved_chat_id_cache[link] = chat_id
+            return chat_id
+        except Exception:
+            return None
+
     async def on_listen(
         self, client: pyrogram.Client, message: pyrogram.types.Message
-    ) -> Union[Dict[str, list], None]:
+    ) -> None:
         """处理监听命令（/listen_download 和 /listen_forward）。
+
+        新架构：直接调用 TaskManager.create_task() 创建 LISTEN_* 任务，
+        不再返回 dict 给 downloader.py 处理后续注册。
 
         :param client: Pyrogram 客户端
         :param message: 用户消息
-        :return: 解析结果字典或 None
         """
-        text: str = message.text
+        text = self._message_text(message)
+        user_id = self._message_user_id(message)
         args: list = text.split()
-        command: str = args[0]
+        if not args:
+            return
         links: list = args[1:]
+
+        # 获取 TaskManager
+        task_manager = self._task_manager
+        if task_manager is None:
+            await client.send_message(
+                chat_id=user_id,
+                reply_parameters=ReplyParameters(message_id=message.id),
+                text="❌❌❌任务管理器未初始化❌❌❌",
+            )
+            return
+
         if text.startswith("/listen_download"):
             if len(args) == 1:
                 await client.send_message(
-                    chat_id=message.from_user.id,
+                    chat_id=user_id,
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text="❌❌❌命令语法错误❌❌❌\n"
                     "⬇️⬇️⬇️语法如下⬇️⬇️⬇️\n"
@@ -633,65 +772,83 @@ class CommandRouter:
                     "⬇️⬇️⬇️请使用⬇️⬇️⬇️\n"
                     "`/listen_download https://t.me/A https://t.me/B https://t.me/n`\n",
                 )
-                return None
-            last_message: Union[pyrogram.types.Message, str, None] = None
-            invalid_links: list = []
-            for link in links:
-                if not link.startswith("https://t.me/"):
-                    invalid_links.append(link)
-                    if not last_message:
-                        last_message = await client.send_message(
-                            chat_id=message.from_user.id,
-                            reply_parameters=ReplyParameters(message_id=message.id),
-                            text=BotMessage.INVALID,
-                        )
-                    last_message = await MessageHelper.safe_edit_message(
-                        client=client,
-                        message=message,
-                        last_message_id=last_message.id,
-                        text=safe_message(f"{last_message.text}\n{link}"),
-                    )
-                for meta in self.state_manager.listen_forward_chat:
-                    listen_link, target_link = meta.split()
-                    if listen_link == link:
-                        invalid_links.append(listen_link)
-                        if not last_message:
-                            last_message = await client.send_message(
-                                chat_id=message.from_user.id,
-                                reply_parameters=ReplyParameters(message_id=message.id),
-                                text="❌同一频道不能同时存在两个监听\n(您已使用`/listen_forward`创建了以下链接的监听转发)",
-                            )
-                        last_message = await MessageHelper.safe_edit_message(
-                            client=client,
-                            message=message,
-                            last_message_id=last_message.id,
-                            text=safe_message(f"{last_message.text}\n{listen_link}"),
-                        )
+                return
 
-            if invalid_links:
-                for ivl in invalid_links:
-                    if ivl in links:
-                        links.remove(ivl)
-                if not links:
-                    await MessageHelper.safe_edit_message(
-                        client=client,
-                        message=message,
-                        last_message_id=last_message.id,
-                        text="❌❌❌没有找到有效的链接❌❌❌",
+            links = list(dict.fromkeys(links))  # 去重
+            created_tasks: list[str] = []
+            failed_links: list[tuple[str, str]] = []  # (link, reason)
+
+            for link in links:
+                try:
+                    task = await task_manager.create_task(
+                        task_type=TaskType.LISTEN_DOWNLOAD,
+                        params={"source_identifier": link},
                     )
-                    return None
-            links: list = list(set(links))
+                    created_tasks.append(task.task_id)
+                except Exception as exc:
+                    from module.core.task_manager import TaskConflictError
+
+                    if isinstance(exc, TaskConflictError):
+                        failed_links.append((link, "该频道已有监听任务"))
+                    else:
+                        failed_links.append((link, str(exc)))
+
+            # 发送结果消息
+            if created_tasks:
+                success_text = "✅ 监听下载任务已创建:\n"
+                for task_id in created_tasks:
+                    task_obj = await task_manager.get_task(task_id)
+                    chat_info = f"chat_id={task_obj.chat_id}" if task_obj else ""
+                    success_text += f"📥 `{task_id[:8]}...` ({chat_info})\n"
+
+                if failed_links:
+                    success_text += "\n❌ 以下链接创建失败:\n"
+                    for link, reason in failed_links:
+                        success_text += f"• {link}: {reason}\n"
+
+                # 发送取消按钮
+                from pyrogram.types.bots_and_keyboards import (
+                    InlineKeyboardButton,
+                    InlineKeyboardMarkup,
+                )
+
+                buttons = []
+                for task_id in created_tasks:
+                    buttons.append(
+                        [
+                            InlineKeyboardButton(
+                                f"❌ 取消 {task_id[:8]}...",
+                                callback_data=f"{BotCallbackText.REMOVE_LISTEN_DOWNLOAD}_{task_id}",
+                            )
+                        ]
+                    )
+
+                await client.send_message(
+                    chat_id=user_id,
+                    reply_parameters=ReplyParameters(message_id=message.id),
+                    text=success_text,
+                    reply_markup=InlineKeyboardMarkup(buttons) if buttons else None,
+                )
+            elif failed_links:
+                error_text = "❌❌❌所有链接创建失败❌❌❌\n"
+                for link, reason in failed_links:
+                    error_text += f"• {link}: {reason}\n"
+                await client.send_message(
+                    chat_id=user_id,
+                    reply_parameters=ReplyParameters(message_id=message.id),
+                    text=error_text,
+                )
 
         elif text.startswith("/listen_forward"):
             e: str = ""
             len_args: int = len(args)
             if len_args != 3:
                 if len_args == 1:
-                    e: str = "命令缺少监听频道与转发频道"
+                    e = "命令缺少监听频道与转发频道"
                 elif len_args == 2:
-                    e: str = "命令缺少转发频道"
+                    e = "命令缺少转发频道"
                 await client.send_message(
-                    chat_id=message.from_user.id,
+                    chat_id=user_id,
                     reply_parameters=ReplyParameters(message_id=message.id),
                     text=f"❌❌❌{e}❌❌❌\n"
                     "⬇️⬇️⬇️语法如下⬇️⬇️⬇️\n"
@@ -699,89 +856,134 @@ class CommandRouter:
                     "⬇️⬇️⬇️请使用⬇️⬇️⬇️\n"
                     f"`/listen_forward https://t.me/A https://t.me/B`\n",
                 )
-                return None
+                return
             listen_link: str = args[1]
             target_link: str = args[2]
-            if self.state_manager.has_listen_download(listen_link):
-                await client.send_message(
-                    chat_id=message.from_user.id,
-                    reply_parameters=ReplyParameters(message_id=message.id),
-                    text="❌同一频道不能同时存在两个监听\n(您已使用`/listen_download`创建了以下链接的监听下载)\n"
-                    f"{listen_link}",
+
+            try:
+                # 解析目标频道
+                identifier_service = self._identifier_service
+                if identifier_service is None:
+                    await client.send_message(
+                        chat_id=user_id,
+                        reply_parameters=ReplyParameters(message_id=message.id),
+                        text="❌❌❌Telegram 客户端未连接❌❌❌",
+                    )
+                    return
+                target_resolved = await identifier_service.resolve(target_link)
+                target_chat_id = target_resolved.chat_id
+
+                task = await task_manager.create_task(
+                    task_type=TaskType.LISTEN_FORWARD,
+                    params={
+                        "source_identifier": listen_link,
+                        "target_identifier": target_link,
+                        "target_chat_id": target_chat_id,
+                    },
                 )
-                return None
-            if not listen_link.startswith("https://t.me/"):
-                e = "监听频道链接错误"
-            if not target_link.startswith("https://t.me/"):
-                e = "转发频道链接错误"
-            if e != "":
-                await client.send_message(
-                    chat_id=message.from_user.id,
-                    reply_parameters=ReplyParameters(message_id=message.id),
-                    text=f"❌❌❌{e}❌❌❌\n"
-                    "⬇️⬇️⬇️语法如下⬇️⬇️⬇️\n"
-                    f"`/listen_forward 监听频道 转发频道`\n"
-                    "⬇️⬇️⬇️请使用⬇️⬇️⬇️\n"
-                    f"`/listen_forward https://t.me/A https://t.me/B`\n",
+
+                from pyrogram.types.bots_and_keyboards import (
+                    InlineKeyboardButton,
+                    InlineKeyboardMarkup,
                 )
-                return None
-        return {"command": command, "links": links}
+
+                await client.send_message(
+                    chat_id=user_id,
+                    reply_parameters=ReplyParameters(message_id=message.id),
+                    text=f"✅ 监听转发任务已创建:\n"
+                    f"📥 `{task.task_id[:8]}...`\n"
+                    f"📤 {listen_link} ➡️ {target_link}",
+                    reply_markup=InlineKeyboardMarkup(
+                        [
+                            [
+                                InlineKeyboardButton(
+                                    "❌ 取消",
+                                    callback_data=f"{BotCallbackText.REMOVE_LISTEN_FORWARD}_{task.task_id}",
+                                )
+                            ]
+                        ]
+                    ),
+                )
+            except Exception as exc:
+                from module.core.task_manager import TaskConflictError
+                from module.core.identifier_service import IdentifierServiceError
+
+                if isinstance(exc, TaskConflictError):
+                    error_text = f"❌ 该频道已有监听任务: {listen_link}"
+                elif isinstance(exc, IdentifierServiceError):
+                    error_text = self._format_resolve_error(exc)
+                else:
+                    error_text = f"❌❌❌创建监听转发任务失败:{exc}❌❌❌"
+                await client.send_message(
+                    chat_id=user_id,
+                    reply_parameters=ReplyParameters(message_id=message.id),
+                    text=error_text,
+                )
 
     async def listen_info(
         self, client: pyrogram.Client, message: pyrogram.types.Message
     ) -> None:
         """监听信息命令：显示当前监听状态。
 
+        新架构：从 TaskManager 查询 LISTEN_* 任务替代遍历 StateManager 内存字典。
+
         :param client: Pyrogram 客户端
         :param message: 用户消息
         """
+        user_id = self._message_user_id(message)
 
-        async def __listen_info(_listen_chat: dict, _text: str):
-            last_message = await client.send_message(
-                chat_id=message.from_user.id,
-                reply_parameters=ReplyParameters(message_id=message.id),
-                link_preview_options=LINK_PREVIEW_OPTIONS,
-                text=_text,
-            )
-            for link in _listen_chat:
-                args: list = link.split()
-                len_args: int = len(args)
-                if len_args == 1:
-                    last_message = await MessageHelper.safe_edit_message(
-                        client=client,
-                        message=message,
-                        last_message_id=last_message.id,
-                        text=safe_message(f"{last_message.text}\n{link}"),
-                    )
-                elif len_args == 2:
-                    forward_emoji = " ➡️ "
-                    last_message = await MessageHelper.safe_edit_message(
-                        client=client,
-                        message=message,
-                        last_message_id=last_message.id,
-                        text=safe_message(
-                            f"{last_message.text}\n{args[0]}{forward_emoji}{args[1]}"
-                        ),
-                    )
-
-        if not self.state_manager.has_any_listen():
+        # 获取 TaskManager
+        task_manager = self._task_manager
+        if task_manager is None:
             await client.send_message(
-                chat_id=message.from_user.id,
+                chat_id=user_id,
+                reply_parameters=ReplyParameters(message_id=message.id),
+                text="❌❌❌任务管理器未初始化❌❌❌",
+            )
+            return
+
+        # 查询监听下载任务
+        listen_download_tasks, _ = await task_manager.list_tasks(
+            task_type=TaskType.LISTEN_DOWNLOAD, status=TaskStatus.RUNNING
+        )
+        # 查询监听转发任务
+        listen_forward_tasks, _ = await task_manager.list_tasks(
+            task_type=TaskType.LISTEN_FORWARD, status=TaskStatus.RUNNING
+        )
+
+        if not listen_download_tasks and not listen_forward_tasks:
+            await client.send_message(
+                chat_id=user_id,
                 reply_parameters=ReplyParameters(message_id=message.id),
                 link_preview_options=LINK_PREVIEW_OPTIONS,
                 text="😲目前没有正在监听的频道。",
             )
-        else:
-            if self.state_manager.listen_download_chat:
-                await __listen_info(
-                    self.state_manager.listen_download_chat,
-                    "🕵️以下链接为已创建的`监听下载`频道:\n",
-                )
-            if self.state_manager.listen_forward_chat:
-                await __listen_info(
-                    self.state_manager.listen_forward_chat,
-                    "📲以下链接为已创建的`监听转发`频道:\n",
-                )
+            return
+
+        if listen_download_tasks:
+            text = "🕵️以下为正在监听下载的任务:\n"
+            for task in listen_download_tasks:
+                source_identifier = task.params.get("source_identifier", "未知")
+                text += f"• {source_identifier} (task_id: `{task.task_id[:8]}...`)\n"
+            await client.send_message(
+                chat_id=user_id,
+                reply_parameters=ReplyParameters(message_id=message.id),
+                link_preview_options=LINK_PREVIEW_OPTIONS,
+                text=text,
+            )
+
+        if listen_forward_tasks:
+            text = "📲以下为正在监听转发的任务:\n"
+            for task in listen_forward_tasks:
+                source = task.params.get("source_identifier", "未知")
+                target = task.params.get("target_identifier", "未知")
+                text += f"• {source} ➡️ {target} (task_id: `{task.task_id[:8]}...`)\n"
+            await client.send_message(
+                chat_id=user_id,
+                reply_parameters=ReplyParameters(message_id=message.id),
+                link_preview_options=LINK_PREVIEW_OPTIONS,
+                text=text,
+            )
 
     # ==================== 关键词输入处理 ====================
 
@@ -801,16 +1003,20 @@ class CommandRouter:
         :param _client: Pyrogram 客户端
         :param message: 用户消息
         """
-        text: str = message.text.strip()
+        text = self._message_text(message).strip()
 
         if not text:
+            return None
+
+        query_message = callback_query.message
+        if query_message is None:
             return None
 
         keywords = [kw.strip() for kw in text.split() if kw.strip()]
         for keyword in keywords:
             if self.state_manager.has_added_keyword(keyword):
                 try:
-                    await callback_query.message.edit_text(
+                    await query_message.edit_text(
                         text=f"🚛`{keyword}`已被添加,选择处理方式后继续。",
                         reply_markup=InlineKeyboardMarkup(
                             [
@@ -833,7 +1039,7 @@ class CommandRouter:
             else:
                 self.state_manager.add_keyword(str(chat_id), keyword)
                 try:
-                    await callback_query.message.edit_text(
+                    await query_message.edit_text(
                         text=callback_prompt(),
                         reply_markup=KeyboardManager.build_keyword_filter_keyboard(
                             self.state_manager.adding_keywords
@@ -858,14 +1064,15 @@ class CommandRouter:
             return
 
         # 记录未知命令日志
-        user_id = message.from_user.id
-        user_name = message.from_user.username or user_id
+        user = message.from_user
+        user_id = self._message_user_id(message)
+        user_name = user.username if user is not None else user_id
         command_text = message.text[:50] if message.text else "None"
         log.warning(f"未知命令 - 用户: {user_name}, 命令: {command_text}")
 
         await self.help(client, message)
         await client.send_message(
-            chat_id=message.from_user.id,
+            chat_id=user_id,
             reply_parameters=ReplyParameters(message_id=message.id),
             text="⚠️⚠️⚠️未知命令⚠️⚠️⚠️\n请查看帮助后重试。",
             link_preview_options=LINK_PREVIEW_OPTIONS,
@@ -937,3 +1144,50 @@ class CommandRouter:
             return None
         if isinstance(data, str):
             return data
+        return None
+
+    async def handle_remove_listen_callback(
+        self,
+        client: pyrogram.Client,
+        callback_query: CallbackQuery,
+    ) -> bool:
+        """处理 REMOVE_LISTEN_* 回调：取消监听任务。
+
+        解析 callback_data 中的 task_id（格式: rld_{task_id} 或 rlf_{task_id}），
+        调用 TaskExecutor.cancel_listen_task() 取消监听。
+
+        :param client: Pyrogram 客户端
+        :param callback_query: 回调查询
+        :return: 是否成功处理（True=已处理，False=不匹配的回调格式）
+        """
+        await callback_query.answer()
+        data = callback_query.data
+        if not isinstance(data, str):
+            return False
+
+        # 解析新格式: rld_{task_id} 或 rlf_{task_id}
+        task_id: str | None = None
+        if data.startswith(BotCallbackText.REMOVE_LISTEN_DOWNLOAD + "_"):
+            task_id = data[len(BotCallbackText.REMOVE_LISTEN_DOWNLOAD) + 1 :]
+        elif data.startswith(BotCallbackText.REMOVE_LISTEN_FORWARD + "_"):
+            task_id = data[len(BotCallbackText.REMOVE_LISTEN_FORWARD) + 1 :]
+
+        if not task_id:
+            return False
+
+        # 调用 TaskExecutor 取消监听
+        executor = self._task_executor
+        if executor:
+            try:
+                await executor.cancel_listen_task(task_id)
+            except Exception as e:
+                log.error(f"取消监听任务 {task_id} 失败: {e}")
+
+        # 编辑消息显示已取消
+        if callback_query.message:
+            try:
+                await callback_query.message.edit_text("❌ 监听任务已取消")
+            except MessageNotModified:
+                pass
+
+        return True

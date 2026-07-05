@@ -20,9 +20,54 @@ import pytest
 
 from module.bot.command_router import CommandRouter
 from module.bot.state_manager import StateManager
+from module.core.identifier_service import (
+    IdentifierService,
+    ResolvedChat,
+    InvalidIdentifierError,
+    UserNotFoundError,
+    AccessDeniedError,
+    RateLimitedError,
+)
+from module.enums import BotCallbackText
 
 
 # ==================== Fixtures ====================
+
+
+@pytest.fixture
+def mock_identifier_service():
+    """提供可配置的 mock IdentifierService。"""
+    service = MagicMock(spec=IdentifierService)
+
+    def _resolve_side_effect(link):
+        # 根据输入返回不同 chat_id，便于 listen_forward 测试
+        if "target" in link or "forward" in link:
+            chat_id = -1009876543210
+        elif "source" in link or "listen" in link:
+            chat_id = -1001111111111
+        else:
+            chat_id = -1001234567890
+        return ResolvedChat(
+            chat_id=chat_id,
+            chat_type="channel",
+            chat_name="Test Channel",
+            username="testchannel",
+            message_count=-1,
+            media_count=-1,
+            has_access=True,
+            is_private=False,
+        )
+
+    service.resolve = AsyncMock(side_effect=_resolve_side_effect)
+    return service
+
+
+@pytest.fixture(autouse=True)
+def reset_bot_callback_text():
+    """每个测试结束后重置 BotCallbackText.DOWNLOAD_CHAT_ID。"""
+    original = BotCallbackText.DOWNLOAD_CHAT_ID
+    yield
+    BotCallbackText.DOWNLOAD_CHAT_ID = original
 
 
 @pytest.fixture
@@ -54,9 +99,34 @@ def state():
 
 
 @pytest.fixture
-def router(state):
-    """提供 CommandRouter 实例。"""
-    return CommandRouter(state)
+def mock_task_manager():
+    """提供 mock TaskManager。"""
+
+    tm = MagicMock()
+    tm.create_task = AsyncMock()
+    tm.get_task = AsyncMock()
+    tm.list_tasks = AsyncMock(return_value=([], 0))
+    tm.cancel_task = AsyncMock()
+    return tm
+
+
+@pytest.fixture
+def mock_task_executor():
+    """提供 mock TaskExecutor。"""
+    te = MagicMock()
+    te.cancel_listen_task = AsyncMock()
+    return te
+
+
+@pytest.fixture
+def router(state, mock_identifier_service, mock_task_manager, mock_task_executor):
+    """提供注入 mock 依赖的 CommandRouter 实例。"""
+    return CommandRouter(
+        state,
+        identifier_service=mock_identifier_service,
+        task_manager=mock_task_manager,
+        task_executor=mock_task_executor,
+    )
 
 
 # ==================== 初始化测试 ====================
@@ -323,13 +393,27 @@ class TestListenCommands:
         mock_client.send_message.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_listen_download_valid(self, router, mock_client, mock_message):
-        """/listen_download 有效链接应返回命令和链接。"""
+    async def test_listen_download_valid(
+        self, router, mock_client, mock_message, mock_task_manager
+    ):
+        """/listen_download 有效链接应调用 TaskManager.create_task。"""
+        from module.core.task_manager import Task, TaskType, TaskStatus
+
+        mock_task = Task(
+            task_id="test_task_id_12345678",
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            status=TaskStatus.PENDING,
+            params={"source_identifier": "https://t.me/channel1"},
+        )
+        mock_task_manager.create_task = AsyncMock(return_value=mock_task)
+        mock_task_manager.get_task = AsyncMock(return_value=mock_task)
+
         mock_message.text = "/listen_download https://t.me/channel1"
         result = await router.on_listen(mock_client, mock_message)
-        assert result is not None
-        assert result["command"] == "/listen_download"
-        assert "https://t.me/channel1" in result["links"]
+        assert result is None
+        mock_task_manager.create_task.assert_called_once()
+        mock_client.send_message.assert_called()
 
     @pytest.mark.asyncio
     async def test_listen_forward_no_args(self, router, mock_client, mock_message):
@@ -347,24 +431,68 @@ class TestListenCommands:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_listen_forward_valid(self, router, mock_client, mock_message):
-        """/listen_forward 有效参数应返回命令和链接。"""
+    async def test_listen_forward_valid(
+        self,
+        router,
+        mock_client,
+        mock_message,
+        mock_task_manager,
+        mock_identifier_service,
+    ):
+        """/listen_forward 有效参数应调用 TaskManager.create_task。"""
+        from module.core.task_manager import Task, TaskType, TaskStatus
+
+        mock_task = Task(
+            task_id="test_task_id_87654321",
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            status=TaskStatus.PENDING,
+            params={
+                "source_identifier": "https://t.me/source",
+                "target_identifier": "https://t.me/target",
+                "target_chat_id": -1009876543210,
+            },
+        )
+        mock_task_manager.create_task = AsyncMock(return_value=mock_task)
+        mock_task_manager.get_task = AsyncMock(return_value=mock_task)
+
         mock_message.text = "/listen_forward https://t.me/source https://t.me/target"
         result = await router.on_listen(mock_client, mock_message)
-        assert result is not None
-        assert result["command"] == "/listen_forward"
-        assert len(result["links"]) == 2
+        assert result is None
+        mock_task_manager.create_task.assert_called_once()
+        mock_client.send_message.assert_called()
 
     @pytest.mark.asyncio
-    async def test_listen_forward_invalid_link(self, router, mock_client, mock_message):
+    async def test_listen_forward_invalid_link(
+        self, router, mock_client, mock_message, mock_identifier_service
+    ):
         """/listen_forward 无效链接时应提示。"""
+
+        def _resolve(link):
+            if link == "bad_link":
+                raise InvalidIdentifierError()
+            return ResolvedChat(
+                chat_id=-1009876543210 if "target" in link else -1001111111111,
+                chat_type="channel",
+                chat_name="Test",
+                username="test",
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+
+        mock_identifier_service.resolve = AsyncMock(side_effect=_resolve)
         mock_message.text = "/listen_forward bad_link https://t.me/target"
         result = await router.on_listen(mock_client, mock_message)
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_listen_info_no_listens(self, router, mock_client, mock_message):
-        """无监听时应提示没有监听。"""
+    async def test_listen_info_no_listens(
+        self, router, mock_client, mock_message, mock_task_manager
+    ):
+        """无监听任务时应提示没有监听。"""
+        mock_task_manager.list_tasks = AsyncMock(return_value=([], 0))
         mock_message.text = "/listen_info"
         await router.listen_info(mock_client, mock_message)
         mock_client.send_message.assert_called_once()
@@ -372,11 +500,56 @@ class TestListenCommands:
         assert "没有" in kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_listen_info_with_listens(self, router, mock_client, mock_message):
-        """有监听时应显示监听列表。"""
-        router.state_manager.add_listen_download("channel_123", "https://t.me/test")
+    async def test_listen_info_with_listens(
+        self, router, mock_client, mock_message, mock_task_manager
+    ):
+        """有监听任务时应从 TaskManager 查询并显示。"""
+        from module.core.task_manager import Task, TaskType, TaskStatus
+
+        mock_download_task = Task(
+            task_id="dl_task_id_12345678",
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            chat_id=-1001234567890,
+            status=TaskStatus.RUNNING,
+            params={"source_identifier": "https://t.me/test"},
+        )
+        mock_task_manager.list_tasks = AsyncMock(return_value=([mock_download_task], 1))
+        mock_message.text = "/listen_info"
         await router.listen_info(mock_client, mock_message)
-        mock_client.send_message.assert_called_once()
+        mock_client.send_message.assert_called()
+        # 验证 list_tasks 被调用
+        assert mock_task_manager.list_tasks.call_count >= 2
+
+    @pytest.mark.asyncio
+    async def test_listen_info_with_forward_tasks(
+        self, router, mock_client, mock_message, mock_task_manager
+    ):
+        """有监听转发任务时应从 TaskManager 查询并显示。"""
+        from module.core.task_manager import Task, TaskType, TaskStatus
+
+        mock_forward_task = Task(
+            task_id="fw_task_id_87654321",
+            task_type=TaskType.LISTEN_FORWARD,
+            chat_id=-1001234567890,
+            status=TaskStatus.RUNNING,
+            params={
+                "source_identifier": "https://t.me/src",
+                "target_identifier": "https://t.me/dst",
+            },
+        )
+
+        # 第一个调用返回空下载列表，第二个调用返回转发列表
+        mock_task_manager.list_tasks = AsyncMock(
+            side_effect=[
+                ([], 0),  # 下载任务
+                ([mock_forward_task], 1),  # 转发任务
+            ]
+        )
+        mock_message.text = "/listen_info"
+        await router.listen_info(mock_client, mock_message)
+        mock_client.send_message.assert_called()
+        args, kwargs = mock_client.send_message.call_args
+        assert "监听转发" in kwargs["text"]
 
 
 # ==================== 关键词输入处理测试 ====================
@@ -486,6 +659,91 @@ class TestCallbackData:
         assert result is None
 
 
+# ==================== REMOVE_LISTEN 回调测试 ====================
+
+
+class TestRemoveListenCallback:
+    """REMOVE_LISTEN_* 回调处理测试。"""
+
+    @pytest.mark.asyncio
+    async def test_remove_listen_download_callback(
+        self, router, mock_client, mock_task_executor
+    ):
+        """rld_{task_id} 回调应调用 cancel_listen_task。"""
+        from pyrogram.types.bots_and_keyboards import CallbackQuery
+
+        mock_cq = MagicMock(spec=CallbackQuery)
+        mock_cq.answer = AsyncMock()
+        mock_cq.data = "rld_test_task_id_12345678"
+        mock_cq.message = MagicMock()
+        mock_cq.message.edit_text = AsyncMock()
+
+        result = await router.handle_remove_listen_callback(mock_client, mock_cq)
+        assert result is True
+        mock_task_executor.cancel_listen_task.assert_called_once_with(
+            "test_task_id_12345678"
+        )
+        mock_cq.message.edit_text.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_remove_listen_forward_callback(
+        self, router, mock_client, mock_task_executor
+    ):
+        """rlf_{task_id} 回调应调用 cancel_listen_task。"""
+        from pyrogram.types.bots_and_keyboards import CallbackQuery
+
+        mock_cq = MagicMock(spec=CallbackQuery)
+        mock_cq.answer = AsyncMock()
+        mock_cq.data = "rlf_test_task_id_87654321"
+        mock_cq.message = MagicMock()
+        mock_cq.message.edit_text = AsyncMock()
+
+        result = await router.handle_remove_listen_callback(mock_client, mock_cq)
+        assert result is True
+        mock_task_executor.cancel_listen_task.assert_called_once_with(
+            "test_task_id_87654321"
+        )
+        mock_cq.message.edit_text.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_remove_listen_callback_no_executor(self, router, mock_client):
+        """无 TaskExecutor 时回调应优雅降级。"""
+        from pyrogram.types.bots_and_keyboards import CallbackQuery
+
+        # 使用没有 task_executor 的 router
+        router_no_exec = CommandRouter(
+            StateManager(),
+            identifier_service=MagicMock(),
+            task_manager=MagicMock(),
+        )
+
+        mock_cq = MagicMock(spec=CallbackQuery)
+        mock_cq.answer = AsyncMock()
+        mock_cq.data = "rld_test_task_id"
+        mock_cq.message = MagicMock()
+        mock_cq.message.edit_text = AsyncMock()
+
+        result = await router_no_exec.handle_remove_listen_callback(
+            mock_client, mock_cq
+        )
+        assert result is True
+        mock_cq.message.edit_text.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_remove_listen_callback_unknown_format(self, router, mock_client):
+        """未知格式回调应返回 False。"""
+        from pyrogram.types.bots_and_keyboards import CallbackQuery
+
+        mock_cq = MagicMock(spec=CallbackQuery)
+        mock_cq.answer = AsyncMock()
+        mock_cq.data = "unknown_callback_data"
+        mock_cq.message = MagicMock()
+        mock_cq.message.edit_text = AsyncMock()
+
+        result = await router.handle_remove_listen_callback(mock_client, mock_cq)
+        assert result is False
+
+
 # ==================== 下载频道命令测试 ====================
 
 
@@ -514,32 +772,56 @@ class TestDownloadChatCommand:
         assert "命令语法错误" in kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_download_chat_parse_link_fails(
-        self, router, mock_client, mock_message
+    async def test_download_chat_not_found(
+        self, router, mock_client, mock_message, mock_identifier_service
     ):
-        """/download_chat parse_link 失败时应提示找不到频道。"""
-        mock_message.text = "/download_chat https://t.me/test"
-        with patch(
-            "module.bot.command_router.parse_link",
-            AsyncMock(side_effect=ValueError("bad link")),
-        ):
-            await router.get_download_chat_link_from_bot(mock_client, mock_message)
+        """/download_chat 解析不到频道时应提示找不到频道。"""
+        mock_message.text = "/download_chat https://t.me/notfound"
+        mock_identifier_service.resolve = AsyncMock(side_effect=UserNotFoundError())
+        await router.get_download_chat_link_from_bot(mock_client, mock_message)
         mock_client.send_message.assert_called_once()
         args, kwargs = mock_client.send_message.call_args
         assert "找不到频道" in kwargs["text"]
 
     @pytest.mark.asyncio
-    async def test_download_chat_no_chat_id(self, router, mock_client, mock_message):
-        """/download_chat 无法获取频道名时应提示。"""
-        mock_message.text = "/download_chat https://t.me/test"
-        with patch(
-            "module.bot.command_router.parse_link",
-            AsyncMock(return_value={"chat_id": None}),
-        ):
-            await router.get_download_chat_link_from_bot(mock_client, mock_message)
+    async def test_download_chat_access_denied(
+        self, router, mock_client, mock_message, mock_identifier_service
+    ):
+        """/download_chat 无权访问时应提示无权访问。"""
+        mock_message.text = "/download_chat https://t.me/private"
+        mock_identifier_service.resolve = AsyncMock(side_effect=AccessDeniedError())
+        await router.get_download_chat_link_from_bot(mock_client, mock_message)
         mock_client.send_message.assert_called_once()
         args, kwargs = mock_client.send_message.call_args
-        assert "无法获取频道名" in kwargs["text"]
+        assert "无权访问" in kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_download_chat_invalid_identifier(
+        self, router, mock_client, mock_message, mock_identifier_service
+    ):
+        """/download_chat 无效标识符时应提示格式无效。"""
+        mock_message.text = "/download_chat bad_link"
+        mock_identifier_service.resolve = AsyncMock(
+            side_effect=InvalidIdentifierError()
+        )
+        await router.get_download_chat_link_from_bot(mock_client, mock_message)
+        mock_client.send_message.assert_called_once()
+        args, kwargs = mock_client.send_message.call_args
+        assert "格式无效" in kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_download_chat_rate_limited(
+        self, router, mock_client, mock_message, mock_identifier_service
+    ):
+        """/download_chat 触发限流时应提示稍后重试。"""
+        mock_message.text = "/download_chat https://t.me/busy"
+        mock_identifier_service.resolve = AsyncMock(
+            side_effect=RateLimitedError(retry_after=30)
+        )
+        await router.get_download_chat_link_from_bot(mock_client, mock_message)
+        mock_client.send_message.assert_called_once()
+        args, kwargs = mock_client.send_message.call_args
+        assert "过于频繁" in kwargs["text"]
 
     @pytest.mark.asyncio
     async def test_download_chat_already_exists(
@@ -547,12 +829,8 @@ class TestDownloadChatCommand:
     ):
         """/download_chat 频道已存在时应提示。"""
         mock_message.text = "/download_chat https://t.me/test"
-        router.state_manager.create_download_filter("channel_123")
-        with patch(
-            "module.bot.command_router.parse_link",
-            AsyncMock(return_value={"chat_id": "channel_123"}),
-        ):
-            await router.get_download_chat_link_from_bot(mock_client, mock_message)
+        router.state_manager.create_download_filter("-1001234567890")
+        await router.get_download_chat_link_from_bot(mock_client, mock_message)
         mock_client.send_message.assert_called_once()
         args, kwargs = mock_client.send_message.call_args
         assert "已在下载中" in kwargs["text"]
@@ -561,17 +839,23 @@ class TestDownloadChatCommand:
     async def test_download_chat_success(self, router, mock_client, mock_message):
         """/download_chat 成功时应创建过滤器并发送状态消息。"""
         mock_message.text = "/download_chat https://t.me/test"
-        with patch(
-            "module.bot.command_router.parse_link",
-            AsyncMock(return_value={"chat_id": "channel_123"}),
-        ):
-            await router.get_download_chat_link_from_bot(mock_client, mock_message)
+        await router.get_download_chat_link_from_bot(mock_client, mock_message)
         # 应创建过滤器并发送消息
-        assert router.state_manager.has_download_filter("channel_123") is True
+        assert router.state_manager.has_download_filter("-1001234567890") is True
         mock_client.send_message.assert_called_once()
         args, kwargs = mock_client.send_message.call_args
         assert "下载频道" in kwargs["text"]
-        assert "channel_123" in kwargs["text"]
+        assert "-1001234567890" in kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_download_chat_supports_username(
+        self, router, mock_client, mock_message, mock_identifier_service
+    ):
+        """/download_chat 应支持 @username 输入。"""
+        mock_message.text = "/download_chat @testchannel"
+        await router.get_download_chat_link_from_bot(mock_client, mock_message)
+        mock_identifier_service.resolve.assert_awaited_once_with("@testchannel")
+        assert router.state_manager.has_download_filter("-1001234567890") is True
 
 
 # ==================== 关键词模式 Handler 管理测试 ====================

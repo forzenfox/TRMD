@@ -15,9 +15,13 @@ import shutil
 import logging
 import asyncio
 from enum import Enum
-from typing import Optional, Union
+from typing import Optional, Union, TYPE_CHECKING
 from dataclasses import dataclass, field
 from contextlib import contextmanager
+
+if TYPE_CHECKING:
+    from module.core.identifier_service import IdentifierService, ResolvedChat
+    from module.core.config_manager import ConfigManager
 
 log = logging.getLogger("rich")
 
@@ -33,6 +37,8 @@ class TaskType(Enum):
     DOWNLOAD = "download"
     FORWARD = "forward"
     UPLOAD = "upload"
+    LISTEN_DOWNLOAD = "listen_download"
+    LISTEN_FORWARD = "listen_forward"
 
 
 class TaskStatus(Enum):
@@ -204,6 +210,12 @@ class TaskStateError(TaskManagerError):
     pass
 
 
+class TaskConflictError(TaskManagerError):
+    """任务冲突，例如同一 chat_id 重复创建监听任务。"""
+
+    pass
+
+
 class ExecutorError(TaskManagerError):
     """执行器内部错误。"""
 
@@ -250,6 +262,8 @@ class TaskManager:
         task_size_warning_gb: int = 5,
         task_size_max_gb: int = 10,
         min_disk_space_gb: int = 2,
+        identifier_service: Optional["IdentifierService"] = None,
+        config_manager: Optional["ConfigManager"] = None,
     ):
         self._db_path = db_path or ":memory:"
         self._max_concurrent_tasks = max_concurrent_tasks
@@ -257,6 +271,8 @@ class TaskManager:
         self._task_size_warning_gb = task_size_warning_gb
         self._task_size_max_gb = task_size_max_gb
         self._min_disk_space_gb = min_disk_space_gb
+        self._identifier_service = identifier_service
+        self._config_manager = config_manager
 
         self._tasks: dict[str, Task] = {}
         self._task_queue: list[str] = []
@@ -613,10 +629,109 @@ class TaskManager:
     # 公开接口
     # ============================================================
 
+    async def _resolve_chat_id(
+        self,
+        task_type: TaskType,
+        chat_id: Optional[int],
+        params: Optional[dict],
+    ) -> "ResolvedChat":
+        """解析并返回标准化对话信息。
+
+        优先级:
+        1. 显式传入的 chat_id（若有效）。
+        2. params.source_identifier（通过 IdentifierService 解析）。
+        3. params.chat_id（向后兼容）。
+
+        :raises ValidationError: 没有任何有效标识符。
+        :raises IdentifierServiceError: 解析失败（由上层转换为 HTTP 错误码）。
+        """
+        from module.core.identifier_service import ResolvedChat
+
+        if chat_id:
+            return ResolvedChat(
+                chat_id=int(chat_id),
+                chat_type="unknown",
+                chat_name=f"chat_{chat_id}",
+                username=None,
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+
+        p = params or {}
+        source_identifier = p.get("source_identifier")
+        if source_identifier and self._identifier_service:
+            return await self._identifier_service.resolve(source_identifier)
+
+        fallback_chat_id = p.get("chat_id")
+        if fallback_chat_id:
+            return ResolvedChat(
+                chat_id=int(fallback_chat_id),
+                chat_type="unknown",
+                chat_name=f"chat_{fallback_chat_id}",
+                username=None,
+                message_count=-1,
+                media_count=-1,
+                has_access=True,
+                is_private=False,
+            )
+
+        raise ValidationError("chat_id 或 source_identifier 必须提供一个")
+
+    @staticmethod
+    def _derive_source_type(resolved_chat: "ResolvedChat") -> str:
+        """根据 ResolvedChat.chat_type 推导内部 source_type。"""
+        if resolved_chat.chat_type in {"channel", "supergroup", "group"}:
+            return "channel"
+        if resolved_chat.chat_type in {"private", "bot"}:
+            return "private"
+        return "unknown"
+
+    def _check_listen_conflict(self, chat_id: int, task_type: TaskType) -> None:
+        """检查同一 chat_id + task_type 是否已存在进行中的监听任务。"""
+        if task_type not in (TaskType.LISTEN_DOWNLOAD, TaskType.LISTEN_FORWARD):
+            return
+        for task in self._tasks.values():
+            if (
+                task.task_type == task_type
+                and task.chat_id == chat_id
+                and task.status in (TaskStatus.RUNNING, TaskStatus.PENDING)
+            ):
+                raise TaskConflictError("该聊天已存在进行中的监听任务")
+
+    def _resolve_enable_repository_backup(
+        self, task_type: TaskType, params: dict
+    ) -> Optional[bool]:
+        """解析仓库备份参数：任务级覆盖优先，否则继承全局配置。"""
+        if task_type not in (TaskType.DOWNLOAD, TaskType.LISTEN_DOWNLOAD):
+            return None
+
+        explicit = params.get("enable_repository_backup")
+        if explicit is not None:
+            return bool(explicit)
+
+        if self._config_manager:
+            return bool(
+                self._config_manager.get("repository.auto_backup_downloads", False)
+            )
+        return False
+
+    @staticmethod
+    def _truncate_recent_count(params: dict) -> dict:
+        """若 range_mode=recent 且 recent_count > 1000，截断为 1000。"""
+        if params.get("range_mode") != "recent":
+            return params
+        recent_count = params.get("recent_count")
+        if isinstance(recent_count, int) and recent_count > 1000:
+            log.warning(f"recent_count {recent_count} 超过上限，截断为 1000")
+            return {**params, "recent_count": 1000}
+        return params
+
     async def create_task(
         self,
         task_type: TaskType,
-        chat_id: int,
+        chat_id: Optional[int] = None,
         params: Optional[dict] = None,
         auto_start: bool = False,
     ) -> Task:
@@ -624,9 +739,10 @@ class TaskManager:
 
         内部执行参数校验和强制级资源预检：
         - 无效 task_type → 抛出 ValidationError
-        - chat_id 为空 → 抛出 ValidationError
+        - chat_id / source_identifier 为空 → 抛出 ValidationError
         - 任务大小 > task_size_max_gb → 抛出 ResourceLimitError
         - 磁盘空间不足 → 抛出 ResourceLimitError
+        - 同一 chat_id 重复监听任务 → 抛出 TaskConflictError
 
         警告级检查（5GB~10GB）由 API 层单独处理。
         """
@@ -635,34 +751,45 @@ class TaskManager:
         # 参数校验
         if not isinstance(task_type, TaskType):
             raise ValidationError(f"无效的任务类型: {task_type}")
-        if not chat_id:
-            raise ValidationError("chat_id 不能为空")
+
+        params = params or {}
+
+        # 解析源对话标识符
+        resolved_chat = await self._resolve_chat_id(task_type, chat_id, params)
+        resolved_chat_id = resolved_chat.chat_id
+
+        # 监听任务排他性校验
+        self._check_listen_conflict(resolved_chat_id, task_type)
 
         # 消息范围参数校验（UPLOAD 任务不需要消息范围）
         if task_type != TaskType.UPLOAD:
-            range_mode = (params or {}).get("range_mode", "all")
-            valid_modes = {"id_range", "multiple_ids", "date_range", "all"}
+            range_mode = params.get("range_mode", "all")
+            valid_modes = {"id_range", "multiple_ids", "date_range", "all", "recent"}
             if range_mode not in valid_modes:
                 raise ValidationError(f"无效的 range_mode: {range_mode}")
 
             if range_mode == "id_range":
-                if not (params or {}).get("min_id") and not (params or {}).get(
-                    "message_range_start"
-                ):
+                if not params.get("min_id") and not params.get("message_range_start"):
                     raise ValidationError("id_range 模式需要提供 min_id")
             elif range_mode == "multiple_ids":
-                if not (params or {}).get("message_list") and not (params or {}).get(
-                    "message_ids"
-                ):
+                if not params.get("message_list") and not params.get("message_ids"):
                     raise ValidationError("multiple_ids 模式需要提供 message_list")
             elif range_mode == "date_range":
-                if not (params or {}).get("start_date") and not (params or {}).get(
-                    "date_start"
-                ):
+                if not params.get("start_date") and not params.get("date_start"):
                     raise ValidationError("date_range 模式需要提供 start_date")
+            elif range_mode == "recent":
+                recent_count = params.get("recent_count")
+                if not recent_count or recent_count <= 0:
+                    raise ValidationError("recent 模式需要提供 recent_count > 0")
+                params = self._truncate_recent_count(params)
+
+        # 仓库备份参数继承/覆盖
+        enable_backup = self._resolve_enable_repository_backup(task_type, params)
+        if enable_backup is not None:
+            params = {**params, "enable_repository_backup": enable_backup}
 
         # 强制级资源预检
-        estimated_size = (params or {}).get("estimated_size", 0)
+        estimated_size = params.get("estimated_size", 0)
         size_level, size_msg = self.check_size_threshold(estimated_size)
         if size_level == "exceeded":
             raise ResourceLimitError(size_msg or "任务大小超过上限")
@@ -674,13 +801,15 @@ class TaskManager:
             )
 
         task_id = f"task_{uuid.uuid4().hex[:8]}"
+        source_type = self._derive_source_type(resolved_chat)
         task = Task(
             task_id=task_id,
             task_type=task_type,
-            chat_id=chat_id,
-            params=params or {},
+            chat_id=resolved_chat_id,
+            params=params,
             max_retry_count=self._max_retry_count,
             created_at=datetime.now().isoformat(),
+            extra={"source_type": source_type},
         )
         async with self._lock:
             self._tasks[task_id] = task

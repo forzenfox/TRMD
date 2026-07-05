@@ -90,22 +90,6 @@ class Bot:
     # ==================== 向后兼容的状态属性 ====================
 
     @property
-    def listen_download_chat(self) -> dict:
-        return self._state.listen_download_chat
-
-    @listen_download_chat.setter
-    def listen_download_chat(self, value: dict):
-        self._state.listen_download_chat = value
-
-    @property
-    def listen_forward_chat(self) -> dict:
-        return self._state.listen_forward_chat
-
-    @listen_forward_chat.setter
-    def listen_forward_chat(self, value: dict):
-        self._state.listen_forward_chat = value
-
-    @property
     def handle_media_groups(self) -> dict:
         return self._state.handle_media_groups
 
@@ -308,26 +292,9 @@ class Bot:
 
     async def on_listen(
         self, client: pyrogram.Client, message: pyrogram.types.Message
-    ) -> Union[Dict[str, list], None]:
+    ) -> None:
         """处理监听命令。（委托给 CommandRouter）"""
-        return self._commands.on_listen(client, message)
-
-    @staticmethod
-    async def listen_download(client: pyrogram.Client, message: pyrogram.types.Message):
-        pass
-
-    @staticmethod
-    async def listen_forward(client: pyrogram.Client, message: pyrogram.types.Message):
-        pass
-
-    async def cancel_listen(
-        self,
-        client: pyrogram.Client,
-        message: pyrogram.types.Message,
-        link: str,
-        command: str,
-    ):
-        pass
+        await self._commands.on_listen(client, message)
 
     async def handle_batch_message(
         self, client: pyrogram.Client, message: pyrogram.types.Message

@@ -2,9 +2,10 @@
 
 > **项目名称**: Telegram_Restricted_Media_Downloader
 > **模块**: TaskManager（任务管理器）
-> **文档版本**: v1.1
+> **文档版本**: v1.3
 > **创建日期**: 2026-06-18
-> **状态**: 已更新（集成仓库模式）
+> **更新日期**: 2026-07-03
+> **状态**: 已更新（集成仓库模式 + 私聊/监听任务）
 > **作者**: SOLO
 
 ---
@@ -15,11 +16,11 @@
 
 TaskManager 是核心业务层中负责**任务全生命周期管理**的模块，目标是为 Bot 端和 WebUI 端提供统一、可靠、可观测的任务调度能力：
 
-1. **统一任务抽象**：将下载、转发、上传三种业务动作抽象为同一类 `Task`，屏蔽底层 Telegram API 差异。
+1. **统一任务抽象**：将下载、转发、上传、监听下载、监听转发五种业务动作抽象为同一类 `Task`，屏蔽底层 Telegram API 差异。
 2. **状态可观测**：任务状态持久化到 SQLite，支持进程重启后恢复，并实时对外暴露进度。
 3. **资源可保护**：通过阈值与并发限制，防止单任务或并发任务耗尽磁盘、带宽和 API 配额。
 4. **重试可信任**：重试时避免重复下载/上传、避免无效 API 调用、避免不必要带宽消耗。
-5. **向后兼容**：新 TaskManager 的引入不破坏现有 Bot 命令（`/download`、`/forward`、`/upload`、`/upload_r` 等）的行为与返回文案。
+5. **向后兼容**：新 TaskManager 的引入不破坏现有 Bot 命令（`/download`、`/forward`、`/upload`、`/upload_r`、`/listen_download`、`/listen_forward` 等）的行为与返回文案。
 
 ### 1.2 职责边界
 
@@ -50,10 +51,12 @@ TaskManager 是核心业务层中负责**任务全生命周期管理**的模块�
 |------|------|---------|
 | `pending` | 任务已创建，等待启动或排队 | `pending` → `queued` / `running` / `cancelled` |
 | `queued` | 任务在队列中等待资源（超出 `max_concurrent_tasks`） | `queued` → `running` / `cancelled` |
-| `running` | 任务正在执行 | `running` → `completed` / `failed` / `cancelled` |
-| `completed` | 任务全部子任务成功 | 终态 |
+| `running` | 任务正在执行 | `running` → `completed` / `failed` / `cancelled`；`LISTEN_*` 任务不会进入 `completed`，合法终态为 `running` / `failed` / `cancelled` |
+| `completed` | 任务全部子任务成功 | 终态（`LISTEN_*` 任务不会进入此状态） |
 | `failed` | 任务执行失败且存在不可恢复错误，或达到最大重试次数 | 终态（可 `retry` 后重新进入 `pending`） |
 | `cancelled` | 用户取消或超时取消 | 终态（可 `retry` 后重新进入 `pending`） |
+
+> **注意**：`LISTEN_DOWNLOAD` / `LISTEN_FORWARD` 为长期监听任务，创建并启动后持续运行；除非被取消或失败，否则一直保持 `running` 状态，不会以 `completed` 结束。
 
 ### 2.2 子任务/文件项状态（Item Status）
 
@@ -114,7 +117,8 @@ Bot 端 `/batch` 命令使用独立的轻量状态机，由 `InteractionManager`
 | `pending` | `start_task()` / 自动调度 | `queued` / `running` | 若并发未满则直接运行，否则入队 |
 | `queued` | 调度器释放槽位 | `running` | 按 FIFO 出队 |
 | `queued` | `cancel_task()` | `cancelled` | 从队列中移除 |
-| `running` | 所有子任务 `success` / `skipped` | `completed` | 释放并发槽 |
+| `running` | 所有子任务 `success` / `skipped`（非监听任务） | `completed` | 释放并发槽 |
+| `running` | `LISTEN_*` 任务持续运行，不会因此进入 `completed` | — | 保持 `running` |
 | `running` | 存在子任务 `failed` 且不可恢复 | `failed` | 释放并发槽 |
 | `running` | `cancel_task()` | `cancelled` | 向执行器发送取消信号 |
 | `failed` / `cancelled` | `retry_task()` | `pending` | 重置失败/取消的子任务为 `pending` |
@@ -133,9 +137,11 @@ from typing import Optional, Union
 
 
 class TaskType(str, Enum):
-    DOWNLOAD = "download"      # 下载到本地
-    FORWARD = "forward"        # 先下载再上传到目标频道
-    UPLOAD = "upload"          # 上传本地文件到目标频道
+    DOWNLOAD = "download"            # 下载到本地（频道/私聊）
+    FORWARD = "forward"              # 先下载再上传到目标频道（频道/私聊）
+    UPLOAD = "upload"                # 上传本地文件到目标频道
+    LISTEN_DOWNLOAD = "listen_download"   # 实时监听并下载新消息 (⏳ 待实现)
+    LISTEN_FORWARD = "listen_forward"     # 实时监听并转发新消息 (⏳ 待实现)
 
 
 class TaskStatus(str, Enum):
@@ -156,6 +162,15 @@ class ItemStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class RangeMode(str, Enum):
+    """消息范围选择模式。"""
+    DATE_RANGE = "date_range"
+    ID_RANGE = "id_range"
+    MULTIPLE_IDS = "multiple_ids"
+    ALL = "all"
+    RECENT = "recent"          # 最近 N 条消息，配合 params.recent_count 使用 (⏳ 待实现)
+
+
 @dataclass
 class Task:
     """任务聚合根对象。"""
@@ -163,7 +178,11 @@ class Task:
     id: str                                 # 全局唯一任务 ID，UUID4
     task_type: TaskType                     # 任务类型
     status: TaskStatus = TaskStatus.PENDING
-    params: dict = field(default_factory=dict)   # 原始业务参数（源频道、目标频道、范围等）
+    params: dict = field(default_factory=dict)   # 原始业务参数
+                                              #   - chat_id / source_identifier / target_identifier
+                                              #   - range_mode / recent_count / start_id / end_id / date_range / multiple_ids
+                                              #   - media_types / min_size / max_size
+                                              #   - enable_repository_backup / with_delete 等
     created_at: datetime = field(default_factory=datetime.utcnow)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -175,7 +194,10 @@ class Task:
     error_message: Optional[str] = None     # 失败时的汇总错误信息
     retry_count: int = 0                    # 已重试次数
     max_retry_count: int = 5                # 从配置读取，默认 5
-    extra: dict = field(default_factory=dict)    # 扩展字段（如 with_delete、media_group_id）
+    extra: dict = field(default_factory=dict)    # 扩展字段
+                                              #   - source_type: "channel" | "private"
+                                              #   - handler: 监听任务注册的 Pyrogram Handler 引用
+                                              #   - media_group_id、with_delete 等
 ```
 
 ### 3.2 TaskItem 类（子任务/文件项）
@@ -203,7 +225,7 @@ class TaskItem:
     last_progress_bytes: int = 0            # 最后记录进度（用于断点续传）
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    extra: dict = field(default_factory=dict)
+    extra: dict = field(default_factory=dict)    # 监听任务中存放 message_id / chat_id 等，用于去重
 ```
 
 ### 3.3 数据库表结构
@@ -215,9 +237,9 @@ class TaskItem:
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `id` | TEXT PRIMARY KEY | 任务 UUID |
-| `task_type` | TEXT NOT NULL | download / forward / upload |
+| `task_type` | TEXT NOT NULL | download / forward / upload / listen_download / listen_forward |
 | `status` | TEXT NOT NULL | pending / queued / running / completed / failed / cancelled |
-| `params` | TEXT NOT NULL | JSON 序列化参数 |
+| `params` | TEXT NOT NULL | JSON 序列化参数，含 chat_id / source_identifier / target_identifier、range_mode / recent_count、media_types / min_size / max_size、enable_repository_backup 等 |
 | `created_at` | TEXT NOT NULL | ISO-8601 UTC 时间 |
 | `started_at` | TEXT | ISO-8601 UTC 时间 |
 | `completed_at` | TEXT | ISO-8601 UTC 时间 |
@@ -400,10 +422,24 @@ class TaskManager:
     ) -> Task:
         """
         创建任务。
-        1. 参数校验与消息范围解析。
-        2. 资源预检（磁盘空间、任务大小阈值）。
-        3. 生成 Task 与 TaskItem，落库。
-        4. 若 auto_start=True 且并发未满，则启动；否则 queued。
+        1. 参数校验与标识符解析。
+           - 优先识别 `params.source_identifier`（username / chat_id / t.me 链接），
+             走 IdentifierService.resolve() 解析为 chat_id；不存在时回退到 `params.chat_id`。
+           - 推导 `source_type`（channel / private）并写入 `Task.extra`。
+           - 对 `LISTEN_DOWNLOAD` / `LISTEN_FORWARD` 任务，检查同一 chat_id + task_type
+	             是否已存在 running / pending 任务；存在则抛出 `TaskConflictError`，
+	             API 转换为 409 `LISTEN_ALREADY_EXISTS`。(⏳ 待实现)
+        2. 消息范围解析，支持 `recent` 模式。(⏳ 待实现)
+           - API 层校验 `recent_count > 0`，否则返回 400 `INVALID_RECENT_COUNT`。
+           - TaskManager 层若 `recent_count > 1000`，自动截断至 1000 并记录 warning。
+        3. 媒体类型与文件大小过滤（`media_types`、`min_size`、`max_size`）。(⏳ 待实现)
+        4. 仓库备份配置继承/覆盖：(⏳ 待实现)
+           - `params.enable_repository_backup` 为 null 时，读取全局配置 `repository.auto_backup_downloads`。
+           - 仅对 DOWNLOAD / LISTEN_DOWNLOAD 生效。
+        5. 资源预检（磁盘空间、任务大小阈值）。
+        6. 生成 Task 与 TaskItem，落库。
+           - `LISTEN_*` 任务初始 `items=[]`，不预设 total_items。
+        7. 若 auto_start=True 且并发未满，则启动；否则 queued。
         """
 
     async def start_task(self, task_id: str) -> bool:
@@ -426,7 +462,37 @@ class TaskManager:
         取消任务。
         - pending / queued：直接取消。
         - running：发送取消信号，等待执行器安全退出后标记 cancelled。
+          对 `LISTEN_*` 任务，需同步移除已注册的 Pyrogram Handler。
         - completed / failed：不可取消，返回 False。
+        """
+
+    async def add_items(
+        self,
+        task_id: str,
+        items: list[TaskItem]
+    ) -> list[TaskItem]:
+        """
+        批量新增子任务/文件项。
+        - 主要用于 `LISTEN_*` 任务：新消息到达后动态生成 `TaskItem` 并持久化。
+        - 同一 `source_id`（消息 ID）重复添加时，TaskManager 内部去重，避免同一消息
+          生成多个 Item。
+        - 返回实际写入的 Item 列表。
+        """
+
+    async def update_item_status(
+        self,
+        task_id: str,
+        item_id: str,
+        status: ItemStatus,
+        result: Optional[dict] = None
+    ) -> bool:
+        """
+        更新子任务状态。
+        - 由执行器在处理监听消息、下载/上传/转发完成后调用。
+        - `result` 可包含 file_path、telegram_file_id、uploaded_message_id、
+          error_code、error_message 等字段，用于回填 Item。
+        - 同步更新 Task 维度的 success_items / failed_items / skipped_items / total_items
+          统计计数。
         """
 
     # ---------------- 查询 ----------------
@@ -529,15 +595,49 @@ class TaskManager:
 [参数校验] ──非法──▶ 抛出 ValidationError
         │
         ▼
-[消息范围解析] ──无法解析──▶ 抛出 ValidationError
+[标识符解析]
+        │
+        ├── params 含 source_identifier ──▶ IdentifierService.resolve() 解析为 chat_id
+        │                                    推导 source_type(channel/private) 写入 Task.extra
+        └── params 含 chat_id ──▶ 沿用现有频道解析逻辑
         │
         ▼
-[L1 来源级去重检查]（仅 DOWNLOAD / FORWARD 类型，仓库模式启用时）
+[LISTEN_* 排他性校验]
+        │
+        ├── 同一 chat_id + task_type 已存在 running/pending 任务
+        │       └── 抛出 TaskConflictError → API 返回 409 LISTEN_ALREADY_EXISTS
+        └── 未命中 ──▶ 继续创建
+        │
+        ▼
+[消息范围解析] ──无法解析──▶ 抛出 ValidationError
+        │
+        ├── range_mode == recent
+        │       ├── recent_count <= 0 ──▶ API 返回 400 INVALID_RECENT_COUNT
+        │       └── recent_count > 1000 ──▶ TaskManager 截断至 1000，记录 warning
+        └── 其他模式按既有逻辑处理
+        │
+        ▼
+[媒体类型与大小过滤]
+        │
+        ├── media_types 存在 ──▶ 仅保留匹配媒体类型的消息
+        ├── min_size / max_size 存在 ──▶ 仅保留文件大小在区间内的消息
+        └── 监听任务在运行时同样应用过滤条件
+        │
+        ▼
+[仓库备份配置解析]
+        │
+        ├── task_type 为 DOWNLOAD / LISTEN_DOWNLOAD
+        │       └── params.enable_repository_backup 为 null
+        │           └── 读取全局 repository.auto_backup_downloads 填充
+        └── 其他任务类型忽略该字段
+        │
+        ▼
+[L1 来源级去重检查]（仅 DOWNLOAD / FORWARD / LISTEN_* 类型，仓库模式启用时）
         │
         ├── source_chat_id + source_message_id 在 repository_sources 中存在
         │       │
-        │       ├── FORWARD 类型 ──▶ 标记 skipped (DUPLICATE_FILE)，触发仓库分发到目标频道
-        │       └── DOWNLOAD 类型 ──▶ 标记 skipped (DUPLICATE_FILE)，跳过下载
+        │       ├── FORWARD / LISTEN_FORWARD 类型 ──▶ 标记 skipped (DUPLICATE_FILE)，触发仓库分发到目标频道
+        │       └── DOWNLOAD / LISTEN_DOWNLOAD 类型 ──▶ 标记 skipped (DUPLICATE_FILE)，跳过下载
         │
         └── 未命中 ──▶ 继续创建
         │
@@ -557,6 +657,9 @@ class TaskManager:
         ▼
 [生成 Task + TaskItem，写入 SQLite]
         │
+        ├── LISTEN_* 任务：items=[]，total_items=0，不预生成子任务
+        └── 其他任务：按解析后的消息列表生成 TaskItem
+        │
         ▼
 [auto_start=True 且并发未满] ──▶ pending → running
 [auto_start=False 或并发已满] ──▶ pending → queued
@@ -566,19 +669,28 @@ class TaskManager:
 
 1. `create_task()` 或 `start_task()` 被调用。
 2. TaskManager 检查当前 `running_count < max_concurrent_tasks`。
-   - 若满足，更新任务状态为 `running`，并提交给对应执行器（下载执行器 / 转发执行器 / 上传执行器）。
+   - 若满足，更新任务状态为 `running`，并提交给 `TaskExecutor.execute_task()` 执行。
    - 若不满足，更新任务状态为 `queued`，加入 `asyncio.Queue`。
 3. 执行器以异步方式处理子任务，通过回调向 TaskManager 报告进度与结果。
 
 ### 5.3 执行阶段
 
-执行器由 TaskManager 内部持有，按任务类型分发：
+所有任务类型统一由 `TaskExecutor` 执行，通过 `TaskExecutor.execute_task()` 按任务类型分发到对应的内部方法：
 
-| 任务类型 | 执行器 | 说明 |
-|----------|--------|------|
-| `download` | `DownloadExecutor` | 调用 `downloader.py` 中的下载逻辑 |
-| `forward` | `ForwardExecutor` | 先下载到本地，再调用上传逻辑；可配置 `with_delete`；仓库模式下集成 `RepositoryManager` 分发 |
-| `upload` | `UploadExecutor` | 调用 `uploader.py` 中的上传逻辑 |
+| 任务类型 | 执行方法 | 说明 |
+|----------|----------|------|
+| `download` | `_execute_download()` | 调用 `downloader.py` 中的下载逻辑 |
+| `forward` | `_execute_forward()` | 先下载到本地，再调用上传逻辑；可配置 `with_delete`；仓库模式下集成 `RepositoryManager` 分发 |
+| `upload` | `_execute_upload()` | 调用 `uploader.py` 中的上传逻辑 |
+| `listen_download` | `_start_listener()` + `_handle_listen_download()` | `execute_task()` 中调用 `_start_listener()` 注册 `NewMessage` Handler，Handler 回调为 `_handle_listen_download()`；新消息到达后动态创建 `TaskItem`，复用 `_execute_download()` 逻辑 |
+| `listen_forward` | `_start_listener()` + `_handle_listen_forward()` | `execute_task()` 中调用 `_start_listener()` 注册 `NewMessage` Handler，Handler 回调为 `_handle_listen_forward()`；新消息到达后动态创建 `TaskItem`，复用 `_execute_forward()` + `RepositoryManager` 降级链 |
+
+`TaskExecutor` 监听相关内部方法：
+
+- **`_start_listener(task)`**：在 `execute_task()` 执行到 `LISTEN_*` 任务时调用。通过 `IdentifierService.resolve()` 得到 `chat_id` 后，构造 `MessageHandler(filters=chat(chat_id), callback=...)` 并注册到 `User Client`；将 handler 引用保存到 `Task.extra["handler"]`，任务状态进入 `running`。
+- **`_stop_listener(task)`**：在任务被取消或失败时调用。从 `Task.extra["handler"]` 取出引用，调用 `self._client.remove_handler(handler)` 移除；更新任务状态为 `cancelled` 或 `failed`。
+- **`_handle_listen_download(client, message)`**：`LISTEN_DOWNLOAD` 任务的 Handler 回调，对新消息执行过滤检查、创建 TaskItem，并复用 `_execute_download()` 逻辑。
+- **`_handle_listen_forward(client, message)`**：`LISTEN_FORWARD` 任务的 Handler 回调，对新消息执行过滤检查、创建 TaskItem，并复用 `_execute_forward()` + `RepositoryManager` 降级链。
 
 执行器内部约束：
 
@@ -652,9 +764,54 @@ class TaskManager:
                     └── 失败 ──▶ 标记 failed，按重试策略处理
 ```
 
+### 5.3.3 监听任务动态 Item 管理
+
+`LISTEN_DOWNLOAD` / `LISTEN_FORWARD` 任务在创建时不预生成子任务，而是在运行期间按消息动态创建：
+
+```
+[新消息到达]
+        │
+        ▼
+[过滤检查]
+        │
+        ├── 媒体类型不匹配 ──▶ 忽略
+        ├── 文件大小不在 [min_size, max_size] 区间 ──▶ 忽略
+        └── 通过
+        │
+        ▼
+[source_id(message_id) 去重]
+        │
+        ├── 该任务下已存在相同 source_id 的 Item ──▶ 忽略（防重复处理）
+        └── 未存在
+        │
+        ▼
+[TaskManager.add_items()] 创建 TaskItem
+        │
+        ├── item.source_id = message.id
+        ├── item.extra["message_id"] = message.id
+        ├── item.extra["chat_id"] = chat_id
+        └── item.status = pending
+        │
+        ▼
+[执行下载/转发逻辑]
+        │
+        ▼
+[TaskManager.update_item_status()] 更新状态
+        │
+        ├── success / failed / skipped
+        └── 同步更新 Task.total_items / success_items / failed_items / skipped_items
+```
+
+规则说明：
+
+- `Task.total_items` 不预置，每新增一条有效消息自动 `+1`。
+- `Task.success_items` / `failed_items` / `skipped_items` 在 `update_item_status()` 时按目标状态增量更新。
+- 去重键为 `task_id + source_id`（即消息 ID），同一消息不会生成多个 Item。
+- 监听任务的 Item 同样持久化到 `tm_task_items`，支持 WebUI 实时查看与进程重启后恢复。
+
 ### 5.4 完成阶段
 
-- 当所有子任务状态为 `success` / `skipped` 时，任务状态变为 `completed`。
+- 当所有子任务状态为 `success` / `skipped` 时，非监听任务状态变为 `completed`；`LISTEN_*` 任务不会进入 `completed`，持续保持 `running`。
 - 当存在子任务为 `failed` 且已耗尽重试次数或错误不可恢复时，任务状态变为 `failed`。
 - 任务完成后：
   1. 释放并发槽，`running_count -= 1`。
@@ -668,8 +825,10 @@ class TaskManager:
 |----------|------|
 | `pending` | 直接标记 `cancelled`，不入队。 |
 | `queued` | 从队列中移除并标记 `cancelled`。 |
-| `running` | 设置 `cancel_event`，执行器收到后优雅停止；所有未完成的子任务标记 `cancelled`；已完成的子任务保留。 |
+| `running` | 设置 `cancel_event`，执行器收到后优雅停止；所有未完成的子任务标记 `cancelled`；已完成的子任务保留。对 `LISTEN_*` 任务，还需调用 `_stop_listener()` 移除已注册的 Pyrogram Handler。 |
 | `completed` / `failed` | 不可取消，返回 `False`。 |
+
+`LISTEN_*` 任务取消后进入 `cancelled` 终态；再次启用需重新创建任务。
 
 ### 5.6 Bot 端兼容路径
 
@@ -678,6 +837,8 @@ class TaskManager:
 - `/download <link> [start_id] [end_id]` → 创建 `TaskType.DOWNLOAD`。
 - `/forward <origin> <target> <start> <end>` → 创建 `TaskType.FORWARD`。
 - `/upload <file> <target>` / `/upload_r <folder> <target>` → 创建 `TaskType.UPLOAD`。
+- `/listen_download <identifier>` → 创建 `TaskType.LISTEN_DOWNLOAD`。
+- `/listen_forward <origin> <target>` → 创建 `TaskType.LISTEN_FORWARD`。
 - 命令返回给用户的文案保持原样，只在内部将任务提交给 TaskManager。
 
 ---
@@ -689,9 +850,9 @@ class TaskManager:
 | 配置项 | 默认值 | 作用范围 | 控制方式 |
 |--------|--------|----------|----------|
 | `max_concurrent_tasks` | 1 | TaskManager 全局 | `asyncio.Semaphore` |
-| `max_download_concurrency` | 3 | 单个任务内 | 下载执行器 `Semaphore` |
-| `max_upload_concurrency` | 1 | 单个任务内 | 上传执行器 `Semaphore` |
-| `max_forward_concurrency` | 1 | 单个任务内 | 转发执行器 `Semaphore` |
+| `max_download_concurrency` | 3 | 单个任务内 | `TaskExecutor._execute_download()` 内部 `Semaphore` |
+| `max_upload_concurrency` | 1 | 单个任务内 | `TaskExecutor._execute_upload()` 内部 `Semaphore` |
+| `max_forward_concurrency` | 1 | 单个任务内 | `TaskExecutor._execute_forward()` 内部 `Semaphore` |
 
 ### 6.2 资源限制配置
 
@@ -734,13 +895,15 @@ log:
 
 repository:
   enabled: true
-  repo_chat_id: -100xxxxxxxxxx    # 仓库频道 ID
-  auto_dedup: true                # 启用自动去重
-  dedup_levels:                   # 启用的去重级别
-    - L1_source                   # 来源级去重（source_chat_id + source_message_id）
-    - L2_file_unique_id           # 文件级去重（file_unique_id）
-    - L3_content_hash             # 内容级去重（content_hash / SHA256）
-  distribution_method: copy_message  # 首选分发方式（copy_message / file_id_send）
+  repo_chat_id: -100xxxxxxxxxx         # 仓库频道 ID
+  auto_backup_downloads: true          # 全局自动备份开关：所有 DOWNLOAD / LISTEN_DOWNLOAD 任务默认是否备份到仓库
+  repository_channel: "@my_repo"       # 仓库频道 username（当 auto_backup_downloads=true 时必需）
+  auto_dedup: true                     # 启用自动去重
+  dedup_levels:                        # 启用的去重级别
+    - L1_source                        # 来源级去重（source_chat_id + source_message_id）
+    - L2_file_unique_id                # 文件级去重（file_unique_id）
+    - L3_content_hash                  # 内容级去重（content_hash / SHA256）
+  distribution_method: copy_message    # 首选分发方式（copy_message / file_id_send）
 ```
 
 ### 6.3 任务大小边界判断
@@ -879,6 +1042,14 @@ class TaskNotFoundError(TaskManagerError):
 class TaskStateError(TaskManagerError):
     """任务状态不允许当前操作。"""
 
+class TaskConflictError(TaskManagerError):
+    """任务冲突，如同一 chat_id 上重复创建监听任务。
+
+    API 层映射：routes/tasks.py 捕获此异常后，调用
+    error_json_response(code=409, message="该对话已存在运行中的监听任务")
+    返回 409 响应。
+    """
+
 class ExecutorError(TaskManagerError):
     """执行器内部错误。"""
 ```
@@ -890,6 +1061,7 @@ class ExecutorError(TaskManagerError):
 | 参数校验失败 | 抛出 `ValidationError`，不创建任务 | Bot / WebUI 返回语法错误提示 |
 | 资源超限 | 抛出 `ResourceLimitError` | 弹窗/消息提示超出限制 |
 | 任务不存在 | 抛出 `TaskNotFoundError` | 提示任务 ID 无效 |
+| 同一 chat_id 重复监听 | 抛出 `TaskConflictError` | API 返回 409 `LISTEN_ALREADY_EXISTS` |
 | 状态不允许 | 返回 `False` | 提示当前状态不可操作 |
 | 单个子任务失败 | 记录错误码与重试次数，按重试策略处理 | 进度中显示失败数 |
 | 执行器未捕获异常 | TaskManager 捕获后标记任务 `failed`，记录 traceback | 任务失败通知 |
@@ -951,25 +1123,53 @@ class ExecutorError(TaskManagerError):
 25. `test_queue_fifo_order`：队列按创建顺序执行。
 26. `test_task_completion_triggers_next_in_queue`：任务完成后自动启动队列下一个。
 
+#### 私聊/Identifier 与范围
+
+35. `test_create_task_with_source_identifier_resolves_chat_id`：通过 username 创建任务时正确解析 chat_id。
+36. `test_create_task_source_identifier_and_chat_id_mutual_fallback`：source_identifier 优先，缺失时回退到 chat_id。
+37. `test_create_task_recent_count_truncated_to_1000`：recent_count > 1000 时截断并记录 warning。
+38. `test_create_task_recent_count_zero_raises_validation_error`：recent_count <= 0 时抛出 ValidationError。
+39. `test_create_task_media_types_filter_applied`：仅匹配 media_types 的消息生成 Item。
+40. `test_create_task_size_filter_excludes_out_of_range`：min_size / max_size 过滤边界正确。
+41. `test_source_type_derived_from_resolved_chat`：channel / private 正确写入 Task.extra。
+
+#### 监听任务
+
+42. `test_create_listen_download_task_success`：成功创建 LISTEN_DOWNLOAD 任务，初始 items 为空。
+43. `test_create_listen_task_does_not_enter_completed`：监听任务所有已有子任务成功后仍保持 running。
+44. `test_duplicate_listen_task_returns_409`：同一 chat_id + task_type 重复创建抛出 TaskConflictError。
+45. `test_add_items_deduplicates_by_message_id`：相同 message_id 不会重复生成 Item。
+46. `test_update_item_status_increments_task_stats`：update_item_status 正确更新 Task 统计。
+47. `test_cancel_listen_task_removes_handler`：取消监听任务时移除 Pyrogram Handler。
+48. `test_listen_task_handler_restored_on_initialize`：重启后 running 状态监听任务重新注册 Handler。
+
+#### 仓库备份配置
+
+49. `test_enable_repository_backup_inherits_global_config`：未指定时继承 repository.auto_backup_downloads。
+50. `test_enable_repository_backup_overrides_global_config`：显式指定时覆盖全局配置。
+51. `test_enable_repository_backup_ignored_for_non_download_tasks`：FORWARD / UPLOAD / LISTEN_FORWARD 忽略该字段。
+
 #### 持久化
 
-27. `test_task_persisted_to_sqlite`：创建后数据库存在记录。
-28. `test_item_persisted_to_sqlite`：子任务随任务一起落库。
-29. `test_load_unfinished_tasks_on_initialize`：重启后加载 queued / running 任务。
-30. `test_progress_persisted`：子任务进度更新写入数据库。
+52. `test_task_persisted_to_sqlite`：创建后数据库存在记录。
+53. `test_item_persisted_to_sqlite`：子任务随任务一起落库。
+54. `test_load_unfinished_tasks_on_initialize`：重启后加载 queued / running 任务。
+55. `test_progress_persisted`：子任务进度更新写入数据库。
+56. `test_listen_items_persisted_on_the_fly`：监听任务动态 Item 写入数据库。
 
 #### 错误处理
 
-31. `test_invalid_task_type_raises_validation_error`：非法 task_type 抛出异常。
-32. `test_missing_required_params_raises_validation_error`：缺少必填参数抛出异常。
-33. `test_executor_error_marks_task_failed`：执行器异常被捕获并标记任务失败。
-34. `test_database_write_failure_logged`：数据库写入失败记录日志。
+57. `test_invalid_task_type_raises_validation_error`：非法 task_type 抛出异常。
+58. `test_missing_required_params_raises_validation_error`：缺少必填参数抛出异常。
+59. `test_executor_error_marks_task_failed`：执行器异常被捕获并标记任务失败。
+60. `test_database_write_failure_logged`：数据库写入失败记录日志。
 
 ### 9.3 Mock 点
 
 | 被测对象 | Mock 目标 | 说明 |
 |----------|----------|------|
 | TaskManager | `pyrogram.Client` | 所有 Telegram API 调用 |
+| TaskManager | `IdentifierService.resolve()` | 标识符解析结果 Mock |
 | TaskManager | `shutil.disk_usage` | 磁盘空间检查 |
 | TaskManager | `sqlite3` / `aiosqlite` | 数据库操作（可选，使用内存数据库更快） |
 | 执行器 | `downloader.py` / `uploader.py` 函数 | 不执行真实 IO |
@@ -999,16 +1199,17 @@ class ExecutorError(TaskManagerError):
 
 ```
 TaskManager
-    ├── module/enums.py           # TaskType / TaskStatus / ItemStatus 等枚举
-    ├── module/config.py          # 读取 config.yaml 统一配置
-    ├── module/client.py          # TelegramClient 封装
-    ├── module/downloader.py      # 下载执行细节
-    ├── module/uploader.py        # 上传执行细节
-    ├── module/task.py            # 现有 DownloadTask / UploadTask（执行器内部复用）
-    ├── module/path_tool.py       # safe_delete / calc_sha256
-    ├── module/monitor.py         # 进度/事件推送（可选）
-    ├── module/language.py        # 文案国际化（Bot 通知）
-    └── module/repository_manager.py  # 仓库管理器（去重查询、文件注册、分发执行）
+    ├── module/enums.py                  # TaskType / TaskStatus / ItemStatus / RangeMode 等枚举
+    ├── module/config.py                 # 读取 config.yaml 统一配置
+    ├── module/client.py                 # TelegramClient 封装
+    ├── module/core/identifier_service.py # 统一标识符解析服务（source_identifier / chat_id / t.me 链接）
+    ├── module/downloader.py             # 下载执行细节
+    ├── module/uploader.py               # 上传执行细节
+    ├── module/task.py                   # 现有 DownloadTask / UploadTask（执行器内部复用）
+    ├── module/path_tool.py              # safe_delete / calc_sha256
+    ├── module/monitor.py                # 进度/事件推送（可选）
+    ├── module/language.py               # 文案国际化（Bot 通知）
+    └── module/repository_manager.py     # 仓库管理器（去重查询、文件注册、分发执行）
 ```
 
 ### 10.2 外部依赖
@@ -1071,6 +1272,8 @@ module/monitor.py      # 读取 tm_task_events 展示任务日志
 |------|------|---------|------|
 | v1.0 | 2026-06-18 | 初始版本，完成 TaskManager 模块级设计 | SOLO |
 | v1.1 | 2026-06-21 | 集成仓库模式（Repository Mode）：新增 repository_files / repository_sources / file_distributions 数据库表；TaskItem 新增 file_unique_id 字段；配置合并为 config.yaml 统一结构；新增仓库相关错误码；执行流程增加 L1/L2/L3 去重检查与仓库分发集成；TaskManager 构造函数新增 repository_manager 参数；UploadTask 新增 source_chat_id / source_message_id 可选参数 | SOLO |
+| v1.2 | 2026-07-03 | 扩展私聊/监听任务：TaskType 新增 LISTEN_DOWNLOAD / LISTEN_FORWARD；状态机明确 LISTEN_* 任务不进入 completed；create_task() 支持 params.source_identifier 与 params.chat_id 并存；新增 chat_id + task_type 排他性校验与 409 LISTEN_ALREADY_EXISTS；扩展 RangeMode.recent 与 recent_count 参数；新增 media_types / min_size / max_size 过滤；新增动态 TaskItem 管理规则（add_items / update_item_status）与 message_id 去重；新增 source_type 内部推导并写入 Task.extra；新增 params.enable_repository_backup 仓库备份配置；新增 TaskConflictError 异常 | SOLO |
+| v1.3 | 2026-07-03 | 统一监听任务执行方式：移除独立的 ListenDownloadExecutor / ListenForwardExecutor 执行器类，统一为 TaskExecutor 内部方法；执行器分发表改为 TaskExecutor.execute_task() 分发到 _execute_download() / _execute_forward() / _execute_upload() / _handle_listen_download() / _handle_listen_forward()；新增 _start_listener() / _stop_listener() 方法定义；启动阶段与并发控制表同步更新 | SOLO |
 
 ---
 

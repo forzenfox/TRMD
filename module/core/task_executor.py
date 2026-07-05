@@ -7,14 +7,19 @@
 import os
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Any, Callable
+
+import pyrogram
+from pyrogram.handlers import MessageHandler
 
 from module.core.config_manager import ConfigManager
 
 from module.core.task_manager import (
     TaskManager,
     Task,
+    TaskItem,
     TaskType,
+    TaskStatus,
     ItemStatus,
     ExecutorError,
 )
@@ -31,11 +36,11 @@ class TaskExecutor:
         self,
         task_manager: TaskManager,
         file_manager: FileManager,
-        client: object,
-        downloader: object = None,
-        uploader: object = None,
+        client: Any,
+        downloader: Any = None,
+        uploader: Any = None,
         config_manager: Optional[ConfigManager] = None,
-        repository_manager: Optional[object] = None,
+        repository_manager: Optional[Any] = None,
     ):
         """
         Args:
@@ -105,11 +110,19 @@ class TaskExecutor:
                 await self._execute_forward(task)
             elif task.task_type == TaskType.UPLOAD:
                 await self._execute_upload(task)
+            elif task.task_type == TaskType.LISTEN_DOWNLOAD:
+                await self._execute_listen_download(task)
+            elif task.task_type == TaskType.LISTEN_FORWARD:
+                await self._execute_listen_forward(task)
             else:
                 raise ExecutorError(f"未知任务类型: {task.task_type}")
 
-            # 任务成功完成
-            await self._task_manager.complete_task(task.task_id)
+            # 监听任务为长期运行任务，不进入 completed 状态
+            if task.task_type not in (
+                TaskType.LISTEN_DOWNLOAD,
+                TaskType.LISTEN_FORWARD,
+            ):
+                await self._task_manager.complete_task(task.task_id)
 
         except asyncio.CancelledError:
             log.info(f"任务 {task.task_id} 被取消")
@@ -120,6 +133,366 @@ class TaskExecutor:
             log.error(f"任务 {task.task_id} 执行失败: {e}")
             await self._task_manager.fail_task(task.task_id, str(e))
 
+    async def _execute_listen_download(self, task: Task) -> None:
+        """执行监听下载任务。注册 Handler 后保持 running 状态。
+
+        Args:
+            task: 监听下载任务
+        """
+        task_id = task.task_id
+
+        async def _callback(
+            client: pyrogram.Client, message: pyrogram.types.Message
+        ) -> None:
+            await self._handle_listen_download(task_id, client, message)
+
+        await self._start_listener(task, _callback)
+        log.info(f"监听下载任务 {task.task_id} Handler 已注册, chat_id={task.chat_id}")
+
+    async def _execute_listen_forward(self, task: Task) -> None:
+        """执行监听转发任务。注册 Handler 后保持 running 状态。
+
+        Args:
+            task: 监听转发任务
+        """
+        task_id = task.task_id
+
+        async def _callback(
+            client: pyrogram.Client, message: pyrogram.types.Message
+        ) -> None:
+            await self._handle_listen_forward(task_id, client, message)
+
+        await self._start_listener(task, _callback)
+        log.info(f"监听转发任务 {task.task_id} Handler 已注册, chat_id={task.chat_id}")
+
+    async def _start_listener(self, task: Task, callback: Callable) -> None:
+        """注册监听 Handler 到 User Client。
+
+        Args:
+            task: 监听任务
+            callback: 消息回调函数
+        """
+        chat_id = task.chat_id
+        if not chat_id:
+            raise ExecutorError(f"监听任务 {task.task_id} 缺少 chat_id")
+
+        # 幂等检查：如果已有 handler，先移除再重新注册
+        existing = task.extra.get("_handler")
+        if existing is not None:
+            try:
+                self._client.remove_handler(existing)
+            except Exception:
+                pass
+
+        handler = MessageHandler(callback, filters=pyrogram.filters.chat(chat_id))
+        self._client.add_handler(handler)
+        task.extra["_handler"] = handler
+
+    async def _stop_listener(self, task: Task) -> None:
+        """移除监听 Handler 并清理引用。
+
+        幂等操作：多次调用不会报错。
+
+        Args:
+            task: 监听任务
+        """
+        handler = task.extra.pop("_handler", None)
+        if handler:
+            try:
+                self._client.remove_handler(handler)
+                log.info(
+                    f"监听任务 {task.task_id} Handler 已移除, chat_id={task.chat_id}"
+                )
+            except Exception as e:
+                log.warning(f"移除监听任务 {task.task_id} Handler 失败: {e}")
+
+    async def cancel_listen_task(self, task_id: str) -> None:
+        """取消监听任务：先移除 Handler，再更新任务状态。
+
+        Args:
+            task_id: 任务 ID
+        """
+        task = await self._task_manager.get_task(task_id)
+        if task is None:
+            log.warning(f"取消监听任务失败：任务 {task_id} 不存在")
+            return
+
+        await self._stop_listener(task)
+        await self._task_manager.cancel_task(task_id)
+
+    async def recover_listeners(self) -> None:
+        """恢复所有 running 状态的监听任务 Handler。
+
+        应用重启后调用，遍历数据库中所有 running 状态的 LISTEN_* 任务，
+        重新注册 MessageHandler。恢复失败的任务标记为 failed。
+        """
+        # 查询所有 running 状态的监听任务
+        listen_download_tasks, _ = await self._task_manager.list_tasks(
+            task_type=TaskType.LISTEN_DOWNLOAD, status=TaskStatus.RUNNING
+        )
+        listen_forward_tasks, _ = await self._task_manager.list_tasks(
+            task_type=TaskType.LISTEN_FORWARD, status=TaskStatus.RUNNING
+        )
+
+        all_tasks = list(listen_download_tasks) + list(listen_forward_tasks)
+
+        if not all_tasks:
+            log.info("没有需要恢复的监听任务")
+            return
+
+        log.info(f"开始恢复 {len(all_tasks)} 个监听任务")
+
+        for task in all_tasks:
+            try:
+                if task.task_type == TaskType.LISTEN_DOWNLOAD:
+                    task_id = task.task_id
+
+                    async def _dl_callback(
+                        client: pyrogram.Client, message: pyrogram.types.Message
+                    ) -> None:
+                        await self._handle_listen_download(task_id, client, message)
+
+                    await self._start_listener(task, _dl_callback)
+                elif task.task_type == TaskType.LISTEN_FORWARD:
+                    task_id = task.task_id
+
+                    async def _fw_callback(
+                        client: pyrogram.Client, message: pyrogram.types.Message
+                    ) -> None:
+                        await self._handle_listen_forward(task_id, client, message)
+
+                    await self._start_listener(task, _fw_callback)
+
+                log.info(f"监听任务 {task.task_id} 已恢复, chat_id={task.chat_id}")
+            except Exception as e:
+                log.error(f"恢复监听任务 {task.task_id} 失败: {e}")
+                await self._task_manager.fail_task(task.task_id, f"恢复失败: {e}")
+
+        log.info(f"监听任务恢复完成: 共 {len(all_tasks)} 个")
+
+    async def _handle_listen_download(
+        self, task_id: str, client: pyrogram.Client, message: pyrogram.types.Message
+    ) -> None:
+        """监听下载回调：收到新消息时触发下载。
+
+        执行流程：
+        1. 检查消息是否有媒体（无媒体跳过）
+        2. 应用 media_types 过滤
+        3. 消息去重（source_id == message.id）
+        4. 创建 TaskItem 并持久化
+        5. 执行下载并更新状态
+
+        Args:
+            task_id: 监听任务 ID
+            client: Pyrogram Client
+            message: 新消息对象
+        """
+        task = await self._task_manager.get_task(task_id)
+        if task is None:
+            return
+
+        # 检查媒体
+        if not message.media:
+            return
+
+        # 媒体类型过滤
+        media_types = (
+            task.params.get("media_types") or task.params.get("filter_types") or []
+        )
+        if media_types:
+            media_type = self._get_media_type(message)
+            if media_type and media_type not in media_types:
+                return
+
+        # 去重检查
+        source_id = message.id
+        for item in task.items:
+            if item.source_id == source_id:
+                return  # 已处理过
+
+        # 创建 TaskItem 并持久化
+        item_id = f"{task_id}_msg_{source_id}"
+        item = self._create_item(task, item_id, message_id=source_id)
+        await self._task_manager.add_items(task_id, [item])
+
+        # 执行下载
+        chat_id = task.chat_id
+        try:
+            await self._task_manager.update_item_status(
+                task_id, item_id, ItemStatus.RUNNING
+            )
+
+            # 提取元数据
+            file_unique_id = self._extract_file_unique_id(message)
+            telegram_file_id = self._extract_telegram_file_id(message)
+
+            # L2 去重检查
+            if self._should_use_repository() and file_unique_id:
+                assert self._repository_manager is not None
+                dedup = self._repository_manager.check_dedup(
+                    source_chat_id=chat_id,
+                    source_message_id=source_id,
+                    file_unique_id=file_unique_id,
+                )
+                if dedup:
+                    await self._task_manager.update_item_status(
+                        task_id,
+                        item_id,
+                        ItemStatus.SKIPPED,
+                        error_code="DUPLICATE_IN_REPOSITORY",
+                        error_message="文件已在仓库中存在，跳过下载",
+                    )
+                    return
+
+            # 下载文件
+            if self._downloader:
+                downloaded = await self._downloader.download_range(
+                    chat_id=chat_id,
+                    start_id=source_id,
+                    end_id=source_id,
+                    task_id=task_id,
+                    progress_callback=self._on_item_progress,
+                )
+                if downloaded:
+                    await self._task_manager.update_item_status(
+                        task_id,
+                        item_id,
+                        ItemStatus.SUCCESS,
+                        file_unique_id=file_unique_id,
+                        telegram_file_id=telegram_file_id,
+                    )
+                else:
+                    await self._task_manager.update_item_status(
+                        task_id,
+                        item_id,
+                        ItemStatus.FAILED,
+                        error_code="DOWNLOAD_FAILED",
+                        error_message="下载失败",
+                    )
+            else:
+                # 降级：标记成功（消息已获取，无 downloader 时无法实际下载）
+                await self._task_manager.update_item_status(
+                    task_id,
+                    item_id,
+                    ItemStatus.SUCCESS,
+                    file_unique_id=file_unique_id,
+                    telegram_file_id=telegram_file_id,
+                )
+        except Exception as e:
+            log.error(f"监听下载任务 {task_id} 处理消息 {source_id} 失败: {e}")
+            await self._task_manager.update_item_status(
+                task_id,
+                item_id,
+                ItemStatus.FAILED,
+                error_code="EXECUTION_ERROR",
+                error_message=str(e),
+            )
+
+    async def _handle_listen_forward(
+        self, task_id: str, client: pyrogram.Client, message: pyrogram.types.Message
+    ) -> None:
+        """监听转发回调：收到新消息时触发转发。
+
+        执行流程：
+        1. 检查消息是否有媒体（无媒体跳过）
+        2. 应用 media_types 过滤
+        3. 消息去重（source_id == message.id）
+        4. 创建 TaskItem 并持久化
+        5. 执行转发并更新状态
+
+        Args:
+            task_id: 监听任务 ID
+            client: Pyrogram Client
+            message: 新消息对象
+        """
+        task = await self._task_manager.get_task(task_id)
+        if task is None:
+            return
+
+        # 检查媒体
+        if not message.media:
+            return
+
+        # 媒体类型过滤
+        media_types = (
+            task.params.get("media_types") or task.params.get("filter_types") or []
+        )
+        if media_types:
+            media_type = self._get_media_type(message)
+            if media_type and media_type not in media_types:
+                return
+
+        # 去重检查
+        source_id = message.id
+        for item in task.items:
+            if item.source_id == source_id:
+                return  # 已处理过
+
+        # 创建 TaskItem 并持久化
+        item_id = f"{task_id}_msg_{source_id}"
+        item = self._create_item(task, item_id, message_id=source_id)
+        await self._task_manager.add_items(task_id, [item])
+
+        # 执行转发
+        chat_id = task.chat_id
+        target_chat_id = task.params.get("target_chat_id")
+        try:
+            await self._task_manager.update_item_status(
+                task_id, item_id, ItemStatus.RUNNING
+            )
+
+            # L2 去重检查（仓库模式）
+            if self._should_use_repository() and target_chat_id:
+                assert self._repository_manager is not None
+                file_unique_id = self._extract_file_unique_id(message)
+                if file_unique_id:
+                    dedup = self._repository_manager.check_dedup(
+                        source_chat_id=chat_id,
+                        source_message_id=source_id,
+                        file_unique_id=file_unique_id,
+                    )
+                    if dedup:
+                        # 仓库已有，尝试从仓库分发
+                        target_msg_id = (
+                            await self._repository_manager.distribute_to_target(
+                                client=client,
+                                file_unique_id=file_unique_id,
+                                target_chat_id=target_chat_id,
+                            )
+                        )
+                        if target_msg_id:
+                            await self._task_manager.update_item_status(
+                                task_id,
+                                item_id,
+                                ItemStatus.SUCCESS,
+                                target_id=target_chat_id,
+                                uploaded_message_id=target_msg_id,
+                            )
+                            return
+
+            # 执行转发
+            result_message = await client.copy_message(
+                chat_id=target_chat_id,
+                from_chat_id=chat_id,
+                message_id=source_id,
+            )
+            await self._task_manager.update_item_status(
+                task_id,
+                item_id,
+                ItemStatus.SUCCESS,
+                target_id=target_chat_id,
+                uploaded_message_id=result_message.id,
+            )
+        except Exception as e:
+            log.error(f"监听转发任务 {task_id} 处理消息 {source_id} 失败: {e}")
+            await self._task_manager.update_item_status(
+                task_id,
+                item_id,
+                ItemStatus.FAILED,
+                error_code="EXECUTION_ERROR",
+                error_message=str(e),
+            )
+
     async def _resolve_message_ids(self, task: Task) -> list[int]:
         """根据任务 params 中的 range_mode 解析消息 ID 列表。
 
@@ -128,6 +501,7 @@ class TaskExecutor:
         - multiple_ids: 直接返回 message_list 中的消息 ID
         - date_range: 通过 Telegram API 按日期范围获取消息 ID
         - all: 通过 Telegram API 遍历频道所有消息获取 ID
+        - recent: 获取最近 N 条消息 ID
         """
         range_mode = task.params.get("range_mode", "id_range")
 
@@ -147,6 +521,9 @@ class TaskExecutor:
 
         elif range_mode == "all":
             return await self._resolve_all_ids(task)
+
+        elif range_mode == "recent":
+            return await self._resolve_recent_ids(task)
 
         # id_range 模式（默认）
         start = task.params.get("min_id") or task.params.get("message_range_start")
@@ -230,6 +607,33 @@ class TaskExecutor:
 
         return message_ids
 
+    async def _resolve_recent_ids(self, task: Task) -> list[int]:
+        """获取最近 N 条消息 ID 列表。
+
+        使用 client.get_chat_history(chat_id, limit=recent_count) 获取消息。
+        recent_count 已在 TaskManager 中截断至 1000。
+        """
+        chat_id = task.chat_id
+        recent_count = task.params.get("recent_count")
+        if not recent_count or recent_count <= 0:
+            raise ExecutorError(
+                f"任务 {task.task_id} recent 模式缺少有效的 recent_count 参数"
+            )
+
+        message_ids = []
+        try:
+            async for message in self._client.get_chat_history(
+                chat_id, limit=int(recent_count)
+            ):
+                message_ids.append(message.id)
+        except Exception as e:
+            raise ExecutorError(f"任务 {task.task_id} 获取最近消息失败: {e}")
+
+        if not message_ids:
+            log.warning(f"任务 {task.task_id}: 频道 {chat_id} 内未找到消息")
+
+        return message_ids
+
     @staticmethod
     def _parse_message_id_list(items: list) -> list[int]:
         """解析消息 ID 列表，支持纯数字和链接格式。
@@ -255,10 +659,81 @@ class TaskExecutor:
                 ids.append(int(item_str))
         return ids
 
+    @staticmethod
+    def _get_message_file_size(message) -> Optional[int]:
+        """获取消息媒体文件大小（字节），无媒体返回 None。"""
+        if not message or not message.media:
+            return None
+        media = message.media
+        for attr in ("video", "document", "audio", "animation", "voice", "video_note"):
+            obj = getattr(media, attr, None)
+            if obj:
+                return getattr(obj, "file_size", None)
+        if hasattr(media, "photo") and media.photo:
+            # Photo 大小取最大尺寸
+            sizes = getattr(media.photo, "sizes", [])
+            if sizes:
+                return getattr(sizes[-1], "file_size", None)
+        return None
+
+    def _filter_media_messages_by_criteria(
+        self, task: Task, messages: list
+    ) -> list[int]:
+        """根据媒体类型与文件大小过滤消息，返回通过过滤的消息 ID 列表。
+
+        过滤条件读取 task.params：
+        - media_types: 允许的媒体类型列表，为空时不过滤类型。
+        - min_size / max_size: 文件大小字节范围，为 None 时不限制。
+
+        向后兼容：若 params 中仍使用旧字段 filter_types，则作为 media_types 的 fallback。
+        """
+        params = task.params
+        media_types = params.get("media_types") or params.get("filter_types") or []
+        min_size = params.get("min_size")
+        max_size = params.get("max_size")
+
+        if not media_types and min_size is None and max_size is None:
+            return [msg.id for msg in messages if msg]
+
+        result = []
+        for message in messages:
+            if not message:
+                continue
+            media_type = self._get_media_type(message)
+            if media_types and media_type not in media_types:
+                continue
+            if message.media:
+                file_size = self._get_message_file_size(message)
+                if file_size is not None:
+                    if min_size is not None and file_size < min_size:
+                        continue
+                    if max_size is not None and file_size > max_size:
+                        continue
+            result.append(message.id)
+        return result
+
+    async def _apply_media_filter(
+        self, task: Task, message_ids: list[int]
+    ) -> list[int]:
+        """如有过滤条件，获取消息对象并应用媒体/大小过滤。"""
+        params = task.params
+        media_types = params.get("media_types") or params.get("filter_types")
+        min_size = params.get("min_size")
+        max_size = params.get("max_size")
+        if not media_types and min_size is None and max_size is None:
+            return message_ids
+
+        chat_id = task.chat_id
+        messages = await asyncio.gather(
+            *[self._client.get_messages(chat_id, msg_id) for msg_id in message_ids]
+        )
+        return self._filter_media_messages_by_criteria(task, messages)
+
     async def _execute_download(self, task: Task) -> None:
         """执行下载任务。"""
         chat_id = task.chat_id
         message_ids = await self._resolve_message_ids(task)
+        message_ids = await self._apply_media_filter(task, message_ids)
         filter_types = task.params.get("filter_types", [])
         downloaded_files: list[str] = []
 
@@ -357,6 +832,7 @@ class TaskExecutor:
 
             # 下载完成后计算 SHA256 并执行 L3 去重
             if self._should_use_repository():
+                assert self._repository_manager is not None
                 for item in task.items:
                     if item.status == ItemStatus.SUCCESS and item.file_path:
                         file_sha256 = self._repository_manager.compute_content_hash(
@@ -385,6 +861,7 @@ class TaskExecutor:
         filter_types = task.params.get("filter_types", [])
 
         message_ids = await self._resolve_message_ids(task)
+        message_ids = await self._apply_media_filter(task, message_ids)
 
         # 创建子任务项并持久化到数据库
         if not task.items:
@@ -639,10 +1116,9 @@ class TaskExecutor:
         item_id: str,
         message_id: Optional[int] = None,
         file_path: Optional[str] = None,
-    ) -> object:
+    ) -> TaskItem:
         """创建子任务项。"""
         from datetime import datetime
-        from module.core.task_manager import TaskItem
 
         now = datetime.now().isoformat()
         return TaskItem(

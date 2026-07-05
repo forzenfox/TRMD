@@ -6,12 +6,16 @@
 
 import asyncio
 import logging
-import re
-from typing import Optional
+from typing import Optional, cast
 
 from fastapi import APIRouter, Depends, Request, Query
 
-from module.api.dependencies import require_token, get_task_manager, get_task_executor
+from module.api.dependencies import (
+    require_token,
+    get_task_manager,
+    get_task_executor,
+    get_identifier_service,
+)
 from module.api.responses import json_response, error_json_response
 from module.api.models.task import TaskCreate, TaskOut
 from module.api.exceptions import (
@@ -26,13 +30,12 @@ from module.core.task_manager import (
     TaskType,
     TaskStatus,
     TaskStateError,
+    TaskConflictError as CoreTaskConflictError,
 )
+from module.core.identifier_service import IdentifierService, IdentifierServiceError
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
 logger = logging.getLogger(__name__)
-
-# 匹配纯数字 ID（支持 Telegram 负数格式 -100...）
-_RE_NUMERIC_ID = re.compile(r"^-?\d+$")
 
 
 def _get_client(request: Request):
@@ -46,33 +49,16 @@ def _get_client(request: Request):
         return None
 
 
-async def _resolve_chat_id(client, channel_input: str) -> Optional[int]:
-    """将用户输入的频道标识解析为数字 chat_id。
-
-    支持格式：
-    - 纯数字 ID 直接返回
-    - @username 通过 client.get_chat 解析
-    - https://t.me/channel 通过 client.get_chat 解析
-    """
-    text = (channel_input or "").strip()
-    if not text:
-        return None
-
-    # 纯数字 ID 直接返回
-    if _RE_NUMERIC_ID.match(text):
-        return int(text)
-
-    # 需要通过 Telegram API 解析 URL/username
-    if client is None:
-        logger.warning("Telegram Client 未连接，无法解析频道: %s", text)
-        return None
-
-    try:
-        chat = await client.get_chat(text)
-        return int(chat.id)
-    except Exception as e:
-        logger.warning("解析频道失败: %s → %s", text, e)
-        return None
+def _handle_identifier_error(e: IdentifierServiceError):
+    """将 IdentifierServiceError 转换为统一错误响应。"""
+    status_code = e.status_code
+    data = {"retry_after": e.retry_after} if e.retry_after is not None else None
+    return error_json_response(
+        code=status_code,
+        message=e.message,
+        data=data,
+        status_code=status_code,
+    )
 
 
 def _task_to_out(task: Task) -> TaskOut:
@@ -160,14 +146,18 @@ async def create_task(
     body: TaskCreate,
     token: str = Depends(require_token),
     task_manager: TaskManager = Depends(get_task_manager),
+    identifier_service: IdentifierService = Depends(get_identifier_service),
 ):
     """创建任务。"""
+    # TaskCreate 的 model_validator 已将 params 规范化为 dict
+    params = cast(dict, body.params)
+
     # 检查任务大小 - 处理警告级（强制级已由 TaskManager.create_task 内部处理）
-    estimated_size = body.params.get("estimated_size", 0)
+    estimated_size = params.get("estimated_size", 0)
 
     size_level, size_msg = task_manager.check_size_threshold(estimated_size)
     if size_level == "warning":
-        size_human = body.params.get("size_human", size_msg or "")
+        size_human = params.get("size_human", size_msg or "")
         raise TaskSizeWarning(size_human)
 
     # 磁盘空间 - 在 API 层提前检查以提供人类可读的错误码
@@ -179,11 +169,13 @@ async def create_task(
     if not task_manager.check_disk_space(estimated_size, download_dir=download_dir):
         raise InsufficientDiskSpace()
 
-    # 映射任务类型
+    # 映射任务类型（阶段 2 已支持 listen_*）
     type_map = {
         "download": TaskType.DOWNLOAD,
         "forward": TaskType.FORWARD,
         "upload": TaskType.UPLOAD,
+        "listen_download": TaskType.LISTEN_DOWNLOAD,
+        "listen_forward": TaskType.LISTEN_FORWARD,
     }
     task_type = type_map.get(body.task_type)
     if task_type is None:
@@ -191,23 +183,30 @@ async def create_task(
             code=400, message=f"无效的任务类型: {body.task_type}", status_code=400
         )
 
-    # 提取参数
-    params = body.params
-    client = _get_client(request)
+    # 源端标识：优先 source_identifier，由 TaskManager 内部解析；否则回退到 chat_id
+    source_identifier = params.get("source_identifier")
+    chat_id = None
+    if not source_identifier:
+        raw_chat_id = params.get("chat_id")
+        try:
+            chat_id = int(raw_chat_id) if raw_chat_id is not None else None
+        except (ValueError, TypeError):
+            return error_json_response(
+                code=400, message="chat_id 格式无效", status_code=400
+            )
 
-    # 解析源频道（支持 URL/用户名/纯数字）
-    chat_id = await _resolve_chat_id(client, params.get("chat_id", ""))
-    if chat_id is None or chat_id == 0:
-        return error_json_response(
-            code=400,
-            message="无效的源频道，请输入频道链接、@username 或数字 ID",
-            status_code=400,
-        )
+    # 解析目标频道（转发/监听转发任务需要）：优先 target_identifier，回退 forward_target
+    target_input = params.get("target_identifier") or params.get("forward_target")
+    target_chat_id = None
+    if target_input:
+        try:
+            resolved_target = await identifier_service.resolve(target_input)
+            target_chat_id = resolved_target.chat_id
+        except IdentifierServiceError as e:
+            return _handle_identifier_error(e)
 
-    # 解析目标频道（转发任务需要）
-    target_chat_id = await _resolve_chat_id(client, params.get("forward_target"))
-    # forward 任务必须提供有效目标频道
-    if task_type == TaskType.FORWARD and (
+    # forward / listen_forward 任务必须提供有效目标频道
+    if task_type in (TaskType.FORWARD, TaskType.LISTEN_FORWARD) and (
         target_chat_id is None or target_chat_id == 0
     ):
         return error_json_response(
@@ -227,8 +226,7 @@ async def create_task(
     delete_after = params.get("delete_after_upload", True)
 
     # 构建任务扩展参数（用于持久化存储，供 UI 展示和执行参考）
-    task_params = {
-        "chat_id": chat_id,
+    task_params: dict = {
         "target_chat_id": target_chat_id,
         "message_range_start": message_range[0] if message_range else None,
         "message_range_end": message_range[1] if message_range else None,
@@ -242,16 +240,31 @@ async def create_task(
         "start_date": params.get("start_date"),
         "end_date": params.get("end_date"),
         "message_list": params.get("message_list", []),
+        "source_identifier": source_identifier,
+        "target_identifier": params.get("target_identifier"),
+        "recent_count": params.get("recent_count"),
+        "media_types": params.get("media_types"),
+        "enable_repository_backup": params.get("enable_repository_backup"),
     }
+    # source_identifier 存在时交给 TaskManager 解析，不要设置 chat_id；否则使用 chat_id 回退
+    if source_identifier:
+        task_params["source_identifier"] = source_identifier
+    elif chat_id is not None:
+        task_params["chat_id"] = chat_id
+
     # 移除 None 值，保持干净（保留空列表，供前端识别字段存在）
     task_params = {k: v for k, v in task_params.items() if v is not None}
 
-    # 创建任务
-    task = await task_manager.create_task(
-        task_type=task_type,
-        chat_id=chat_id,
-        params=task_params,
-    )
+    # 创建任务（源端解析下沉到 TaskManager，由其统一推导 source_type）
+    try:
+        task = await task_manager.create_task(
+            task_type=task_type,
+            params=task_params,
+        )
+    except IdentifierServiceError as e:
+        return _handle_identifier_error(e)
+    except CoreTaskConflictError as e:
+        raise TaskConflictError("LISTEN_ALREADY_EXISTS") from e
 
     return json_response(data=_task_to_out(task).model_dump(), status_code=201)
 
@@ -268,6 +281,8 @@ async def start_task(
     try:
         started = await task_manager.start_task(task_id)
         task = await task_manager.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
 
         # 触发 TaskExecutor 异步执行任务（不阻塞 API 响应）
         if executor is not None:
@@ -300,6 +315,8 @@ async def cancel_task(
     try:
         await task_manager.cancel_task(task_id, reason=reason)
         task = await task_manager.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
         return json_response(data=_task_to_out(task).model_dump(), message="任务已取消")
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)
@@ -318,6 +335,8 @@ async def retry_task(
     try:
         await task_manager.retry_task(task_id)
         task = await task_manager.get_task(task_id)
+        if task is None:
+            raise TaskNotFoundError(task_id)
         return json_response(data=_task_to_out(task).model_dump(), message="任务已重试")
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)

@@ -47,16 +47,19 @@ class TaskManager {
   _resetCreateForm() {
     return {
       taskName: '',
-      taskType: 'download', // download, forward, upload
+      taskType: 'download', // download, forward, upload, listen_download, listen_forward
       sourceChat: '',
       targetChat: '',
-      messageRangeMode: 'id_range', // date_range, id_range, multiple_ids, all
+      messageRangeMode: 'id_range', // date_range, id_range, multiple_ids, all, recent
       startDate: '',
       endDate: '',
       minId: '',
       maxId: '',
       rawItems: '',
+      recentCount: '',
       typeFilters: [], // video, photo, document, audio, etc.
+      minSize: '', maxSize: '',
+      minSizeUnit: 'MB', maxSizeUnit: 'MB',
       savePath: '',
       deleteAfterUpload: true,  // 默认上传后删除本地文件（符合设计文档 4.2.1.3）
       sendAsMediaGroup: false,
@@ -192,7 +195,17 @@ class TaskManager {
         params.end_date = range.end_date;
       } else if (range.mode === 'multiple_ids') {
         params.message_list = range.message_list;
+      } else if (range.mode === 'recent') {
+        params.recent_count = range.recent_count;
       }
+    };
+
+    // 辅助：添加媒体大小过滤
+    const _addSizeFilter = () => {
+      const minBytes = this._convertSizeToBytes(this.createForm.minSize, this.createForm.minSizeUnit);
+      const maxBytes = this._convertSizeToBytes(this.createForm.maxSize, this.createForm.maxSizeUnit);
+      if (minBytes !== null) params.min_size = minBytes;
+      if (maxBytes !== null) params.max_size = maxBytes;
     };
 
     if (this.createForm.taskType === 'download') {
@@ -202,6 +215,7 @@ class TaskManager {
       if (this.createForm.typeFilters.length > 0) {
         params.filter_types = this.createForm.typeFilters;
       }
+      _addSizeFilter();
     } else if (this.createForm.taskType === 'forward') {
       params.chat_id = this.createForm.sourceChat;
       params.forward_target = this.createForm.targetChat;
@@ -210,9 +224,21 @@ class TaskManager {
       if (this.createForm.typeFilters.length > 0) {
         params.filter_types = this.createForm.typeFilters;
       }
+      _addSizeFilter();
     } else if (this.createForm.taskType === 'upload') {
       params.chat_id = this.createForm.target_chat;
       params.file_paths = this.createForm.selectedFiles || [];
+    } else if (this.createForm.taskType === 'listen_download') {
+      params.source_identifier = this.createForm.sourceChat;
+      if (this.createForm.typeFilters.length > 0) {
+        params.media_types = this.createForm.typeFilters;
+      }
+    } else if (this.createForm.taskType === 'listen_forward') {
+      params.source_identifier = this.createForm.sourceChat;
+      params.target_identifier = this.createForm.targetChat;
+      if (this.createForm.typeFilters.length > 0) {
+        params.media_types = this.createForm.typeFilters;
+      }
     }
 
     return {
@@ -388,10 +414,28 @@ class TaskManager {
       
       case 'all':
         return { mode: 'all' };
-      
+
+      case 'recent':
+        return {
+          mode: 'recent',
+          recent_count: parseInt(this.createForm.recentCount),
+        };
+
       default:
         return { mode: 'all' };
     }
+  }
+
+  /**
+   * 将文件大小转换为字节
+   * @param {string|number} value - 大小值
+   * @param {string} unit - 单位（MB/GB）
+   * @returns {number|null} 字节数，无效输入返回 null
+   */
+  _convertSizeToBytes(value, unit) {
+    if (!value || value <= 0) return null;
+    const multiplier = unit === 'GB' ? 1024 * 1024 * 1024 : 1024 * 1024;
+    return parseInt(value) * multiplier;
   }
 
   /**
@@ -402,6 +446,8 @@ class TaskManager {
       download: '下载',
       forward: '转发',
       upload: '上传',
+      listen_download: '监听下载',
+      listen_forward: '监听转发',
     };
     const typeName = typeNames[this.createForm.taskType] || '任务';
     const timestamp = new Date().toLocaleString('zh-CN', {
@@ -583,12 +629,12 @@ class TaskManager {
     const errors = [];
 
     // 验证源频道
-    if ((form.taskType === 'download' || form.taskType === 'forward') && !form.sourceChat) {
+    if ((form.taskType === 'download' || form.taskType === 'forward' || form.taskType === 'listen_download' || form.taskType === 'listen_forward') && !form.sourceChat) {
       errors.push('请输入源频道');
     }
 
     // 验证目标频道
-    if ((form.taskType === 'forward' || form.taskType === 'upload') && !form.targetChat) {
+    if ((form.taskType === 'forward' || form.taskType === 'upload' || form.taskType === 'listen_forward') && !form.targetChat) {
       errors.push('请输入目标频道');
     }
 
@@ -614,6 +660,13 @@ class TaskManager {
         const count = this.getParsedItemCount();
         if (count === 0) {
           errors.push('请输入至少一个消息 ID 或链接');
+        }
+      } else if (form.messageRangeMode === 'recent') {
+        const count = parseInt(form.recentCount);
+        if (!count || count <= 0) {
+          errors.push('请输入有效的消息数量（大于 0）');
+        } else if (count > 1000) {
+          errors.push('消息数量不能超过 1000 条');
         }
       }
     }
@@ -786,6 +839,8 @@ class TaskManager {
       download: '下载',
       forward: '转发',
       upload: '上传',
+      listen_download: '🕵️ 监听下载',
+      listen_forward: '📲 监听转发',
     };
     return textMap[type] || type;
   }
@@ -800,6 +855,7 @@ class TaskManager {
       date_range: '日期范围',
       multiple_ids: '消息列表',
       all: '全部消息',
+      recent: '最近N条',
     };
     return textMap[rangeMode] || rangeMode || '-';
   }

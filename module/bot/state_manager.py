@@ -23,10 +23,6 @@ class StateManager:
     """
 
     def __init__(self):
-        # 监听频道状态
-        self.listen_download_chat: dict = {}
-        self.listen_forward_chat: dict = {}
-
         # 媒体组处理状态
         self.handle_media_groups: dict = {}
 
@@ -36,60 +32,6 @@ class StateManager:
         # 关键词管理状态
         self.adding_keywords: list = []
         self.keyword_handler: Union[MessageHandler, None] = None
-
-    # ==================== 监听状态管理 ====================
-
-    def add_listen_download(self, chat_id: str, link: str) -> None:
-        """添加下载监听。
-
-        :param chat_id: 频道 ID
-        :param link: 频道链接
-        """
-        self.listen_download_chat[chat_id] = link
-
-    def remove_listen_download(self, chat_id: str) -> None:
-        """移除下载监听。
-
-        :param chat_id: 频道 ID
-        """
-        self.listen_download_chat.pop(chat_id, None)
-
-    def has_listen_download(self, chat_id: str) -> bool:
-        """检查是否存在下载监听。
-
-        :param chat_id: 频道 ID
-        :return: 是否存在
-        """
-        return chat_id in self.listen_download_chat
-
-    def add_listen_forward(self, meta_key: str) -> None:
-        """添加转发监听。
-
-        :param meta_key: 监听+转发链接的组合键
-        """
-        self.listen_forward_chat[meta_key] = True
-
-    def remove_listen_forward(self, meta_key: str) -> None:
-        """移除转发监听。
-
-        :param meta_key: 监听+转发链接的组合键
-        """
-        self.listen_forward_chat.pop(meta_key, None)
-
-    def has_listen_forward(self, meta_key: str) -> bool:
-        """检查是否存在转发监听。
-
-        :param meta_key: 监听+转发链接的组合键
-        :return: 是否存在
-        """
-        return meta_key in self.listen_forward_chat
-
-    def has_any_listen(self) -> bool:
-        """检查是否有任何监听。
-
-        :return: 是否有监听
-        """
-        return bool(self.listen_download_chat or self.listen_forward_chat)
 
     # ==================== 下载频道过滤器管理 ====================
 

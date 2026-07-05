@@ -33,57 +33,6 @@ def state_with_filter(state):
     return state
 
 
-# ==================== 监听状态管理测试 ====================
-
-
-class TestListenState:
-    """监听状态管理测试。"""
-
-    def test_add_listen_download(self, state):
-        """应能添加下载监听。"""
-        state.add_listen_download("channel_123", "https://t.me/test")
-        assert state.has_listen_download("channel_123") is True
-
-    def test_remove_listen_download(self, state):
-        """应能移除下载监听。"""
-        state.add_listen_download("channel_123", "https://t.me/test")
-        state.remove_listen_download("channel_123")
-        assert state.has_listen_download("channel_123") is False
-
-    def test_has_listen_download_not_exists(self, state):
-        """不存在的下载监听应返回 False。"""
-        assert state.has_listen_download("nonexistent") is False
-
-    def test_add_listen_forward(self, state):
-        """应能添加转发监听。"""
-        state.add_listen_forward("source target")
-        assert state.has_listen_forward("source target") is True
-
-    def test_remove_listen_forward(self, state):
-        """应能移除转发监听。"""
-        state.add_listen_forward("source target")
-        state.remove_listen_forward("source target")
-        assert state.has_listen_forward("source target") is False
-
-    def test_has_listen_forward_not_exists(self, state):
-        """不存在的转发监听应返回 False。"""
-        assert state.has_listen_forward("nonexistent") is False
-
-    def test_has_any_listen_empty(self, state):
-        """无监听时应返回 False。"""
-        assert state.has_any_listen() is False
-
-    def test_has_any_listen_with_download(self, state):
-        """有下载监听时应返回 True。"""
-        state.add_listen_download("channel_123", "https://t.me/test")
-        assert state.has_any_listen() is True
-
-    def test_has_any_listen_with_forward(self, state):
-        """有转发监听时应返回 True。"""
-        state.add_listen_forward("source target")
-        assert state.has_any_listen() is True
-
-
 # ==================== 下载过滤器管理测试 ====================
 
 

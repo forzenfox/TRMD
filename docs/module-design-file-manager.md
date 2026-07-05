@@ -1,11 +1,20 @@
 # FileManager 模块设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
-> **文档版本**: v1.1
+> **文档版本**: v1.2
 > **创建日期**: 2026-06-18
-> **更新日期**: 2026-06-21
-> **状态**: 已实现（含仓库模式）
-> **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)
+> **更新日期**: 2026-07-03
+> **状态**: 已更新设计（待实现 v1.2 扩展）
+> **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)、[private-chat-download-by-username-prd.md](./private-chat-download-by-username-prd.md)
+
+---
+
+## 变更记录
+
+| 版本 | 日期 | 变更内容 | 状态 |
+|------|------|----------|------|
+| v1.2 | 2026-07-03 | 新增下载任务仓库备份集成（DOWNLOAD / LISTEN_DOWNLOAD）；强化 `source_chat_id` / `source_message_id` 来源追踪语义；补充私聊消息无公开 `source_link` 的说明 | 已更新设计（待实现） |
+| v1.1 | 2026-06-21 | 初始实现：文件浏览、上传、媒体组拆分、仓库模式回调 | 已实现 |
 
 ---
 
@@ -21,6 +30,7 @@ FileManager 是 Bot 与 WebUI 共享的**核心文件管理层**，目标是为�
 | **向后兼容** | 不破坏现有 `/upload`、`/upload_r` 命令及 `TelegramUploader` 的工作流程；新能力以扩展接口形式提供。 |
 | **资源保护** | 单文件内存缓存上限 512MB，流式处理大文件；转发任务默认上传后删除本地文件。 |
 | **Telegram 限制适配** | 媒体组上传自动遵守「最多 10 个文件、不支持 document/贴纸/GIF」的限制。 |
+| **下载任务仓库备份** | 为 `DOWNLOAD` / `LISTEN_DOWNLOAD` 任务提供可选的自动仓库备份能力。 |
 | **可测试性** | 所有 IO 与 Telegram 交互均可注入 Mock，便于 TDD 与单元测试。 |
 
 ### 1.2 职责边界
@@ -241,8 +251,11 @@ class FileManager:
         """上传单个本地文件到指定聊天。
 
         Args:
-            source_chat_id: 来源频道 ID（仓库模式下用于记录来源）。
+            source_chat_id: 来源对话 ID（仓库模式下用于记录来源）。
+                            频道与私聊来源均需提供；私聊消息无公开 source_link，
+                            因此 source_chat_id + source_message_id 是仓库映射的主要来源标识。
             source_message_id: 来源消息 ID（仓库模式下用于记录来源）。
+                               与 source_chat_id 共同构成来源追踪键，私聊场景下尤为重要。
         """
 
     async def upload_media_group(
@@ -259,8 +272,11 @@ class FileManager:
         """将多个本地文件以媒体组形式上传，自动拆分与降级。
 
         Args:
-            source_chat_id: 来源频道 ID（仓库模式下用于记录来源）。
+            source_chat_id: 来源对话 ID（仓库模式下用于记录来源）。
+                            频道与私聊来源均需提供；私聊消息无公开 source_link，
+                            因此 source_chat_id + source_message_id 是仓库映射的主要来源标识。
             source_message_id: 来源消息 ID（仓库模式下用于记录来源）。
+                               与 source_chat_id 共同构成来源追踪键，私聊场景下尤为重要。
         """
 
     # ---------- 清理接口 ----------
@@ -446,6 +462,10 @@ async def upload_media_group(self, chat_id, file_paths, config, ...):
      且目标 chat_id 为仓库频道
      且 source_chat_id / source_message_id 已提供：
      → 调用 repository_manager.on_upload_success() 记录来源与文件信息。
+   - 触发来源可以是频道也可以是私聊：`on_upload_success()` 不区分 `source_type`，
+     仅依赖 source_chat_id + source_message_id 作为唯一来源键。
+   - 私聊消息没有公开 `source_link`，因此 source_chat_id + source_message_id
+     是仓库映射的唯一可靠来源标识。
 8. 根据 delete_after_upload 策略决定是否清理本地文件。
 ```
 
@@ -477,8 +497,8 @@ async def upload_media_group(self, chat_id, file_paths, config, ...):
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `source_chat_id` | `int | str | None` | `None` | 来源频道 ID。 |
-| `source_message_id` | `int | None` | `None` | 来源消息 ID。 |
+| `source_chat_id` | `int | str | None` | `None` | 来源对话 ID（频道或私聊）。 |
+| `source_message_id` | `int | None` | `None` | 来源消息 ID。与 source_chat_id 共同组成来源键；私聊消息无公开 source_link，此组合是仓库映射的主要来源标识。 |
 
 ### 6.5 流式与内存控制
 
@@ -486,6 +506,59 @@ async def upload_media_group(self, chat_id, file_paths, config, ...):
 |----------|----------|
 | ≤ memory_limit_mb（512MB） | 可直接读取文件头计算 MD5/SHA256，或将 BytesIO 传入 Pyrogram。 |
 | > memory_limit_mb | 仅传递文件路径，由 Pyrogram `save_file(path=...)` 内部流式分片；禁止全量读入内存。 |
+
+### 6.6 下载任务仓库备份集成
+
+`DOWNLOAD` 与 `LISTEN_DOWNLOAD` 任务完成本地下载后，若 `Task.params.enable_repository_backup == true`，
+FileManager 与 RepositoryManager 应协作将文件上传至仓库频道。
+
+**触发条件：**
+
+- 任务类型为 `DOWNLOAD` 或 `LISTEN_DOWNLOAD`。
+- `Task.params.enable_repository_backup` 为 `true`（任务级显式开启或继承全局配置 `repository.auto_backup_downloads`）。
+- 本地文件下载成功且完整。
+
+**备份流程（三级职责调用链）：**
+
+> 此调用链与 PRD v2.3 描述一致。PRD 中的"TaskExecutor 调用 RepositoryManager"是决策层面的描述，实际执行链路经过 FileManager。
+
+```
+1. TaskExecutor 决策：检测到 enable_repository_backup == true，决定触发仓库备份。
+2. FileManager 执行：调用 upload_single() / upload_media_group() 将本地文件上传至仓库频道，
+   传入 source_chat_id 与 source_message_id（来自原始消息）。
+3. RepositoryManager 记录：上传成功后，FileManager 触发 RepositoryManager.on_upload_success()
+   记录来源映射（repository_sources）和分发记录（file_distributions）。
+4. 根据 delete_after_upload 策略清理本地副本。
+```
+
+**LISTEN_DOWNLOAD 仓库备份触发路径：**
+
+`LISTEN_DOWNLOAD` 任务的每条消息下载完成后，若 `enable_repository_backup == true`，同样通过上述三级调用链执行仓库备份：
+
+```
+新消息到达 → TaskExecutor._handle_listen_download()
+    │
+    ▼
+复用 _execute_download() 下载文件到本地
+    │
+    ▼
+检测 enable_repository_backup == true
+    │
+    ▼
+调用 FileManager.upload_single() 上传至仓库频道（传入 source_chat_id / source_message_id）
+    │
+    ▼
+FileManager 触发 RepositoryManager.on_upload_success() 记录来源映射
+    │
+    ▼
+根据 delete_after_upload 策略清理本地副本
+```
+
+**来源标识：**
+
+- 频道任务：`source_chat_id` + `source_message_id` 与原始 `source_link` 互为补充。
+- 私聊任务：私聊消息无公开 `source_link`，`source_chat_id` + `source_message_id` 是仓库映射的主要来源标识。
+- `RepositoryManager.on_upload_success()` 对频道来源与私聊来源统一处理，不区分 `source_type`。
 
 ---
 
@@ -665,6 +738,14 @@ class MediaGroupInvalid(FileManagerError): ...
 | FM-PROG-02 | 媒体组上传触发进度 | 每个文件均触发进度回调 |
 | FM-PROG-03 | 单次回调覆盖全局回调 | 仅单次回调生效 |
 
+#### 仓库模式回调
+
+| ID | 用例 | 期望结果 |
+|----|------|---------|
+| FM-REPO-01 | 上传成功后提供 source_chat_id / source_message_id | 调用 RepositoryManager.on_upload_success() |
+| FM-REPO-02 | 私聊来源上传成功（无 source_link） | 以 source_chat_id + source_message_id 调用 on_upload_success() |
+| FM-REPO-03 | 未提供来源 ID | 不触发 on_upload_success() |
+
 ### 10.3 Mock 点
 
 | 依赖 | Mock 方式 | 说明 |
@@ -674,6 +755,7 @@ class MediaGroupInvalid(FileManagerError): ...
 | `os.scandir` | `unittest.mock.patch` | 用于测试隐藏文件过滤、权限异常。 |
 | `path_tool.safe_delete` | `unittest.mock.patch` | 验证清理策略，不实际删除。 |
 | 进度回调 | `AsyncMock` | 验证调用次数与参数。 |
+| `RepositoryManager` | `MagicMock` / `AsyncMock` | 验证仓库模式回调触发及参数。 |
 | 配置 | 传入 dict | 不读取真实 config.yaml。 |
 
 ### 10.4 覆盖率目标
@@ -715,6 +797,7 @@ class MediaGroupInvalid(FileManagerError): ...
 | `module/api/routes/files.py` | WebUI 文件浏览、上传 API。 |
 | `module/bot.py` | `/upload`、`/upload_r` 等命令。 |
 | `module/core/task_manager.py` | 创建上传任务时调用 FileManager。 |
+| `module/core/task_executor.py` | 下载任务完成后调用 FileManager 执行仓库备份上传。 |
 | `module/core/repository_manager.py` | 通过 FileManager 的 `repository_manager` 属性注入，接收上传成功回调。 |
 
 ---

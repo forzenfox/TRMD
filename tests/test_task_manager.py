@@ -15,7 +15,7 @@ import os
 import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
@@ -27,7 +27,38 @@ from module.core.task_manager import (
     TaskStatus,
     ItemStatus,
     TaskStateError,
+    TaskConflictError,
+    ValidationError,
 )
+from module.core.identifier_service import IdentifierService, ResolvedChat
+from module.core.config_manager import ConfigManager
+
+
+# ============================================================
+# 测试：TaskType 枚举
+# ============================================================
+
+
+class TestTaskTypeEnum:
+    """测试 TaskType 枚举扩展。"""
+
+    def test_task_type_has_listen_download(self):
+        """TaskType 应包含 LISTEN_DOWNLOAD。"""
+        task_type = TaskType("listen_download")
+        assert task_type == TaskType.LISTEN_DOWNLOAD
+        assert task_type.value == "listen_download"
+
+    def test_task_type_has_listen_forward(self):
+        """TaskType 应包含 LISTEN_FORWARD。"""
+        task_type = TaskType("listen_forward")
+        assert task_type == TaskType.LISTEN_FORWARD
+        assert task_type.value == "listen_forward"
+
+    def test_task_type_backward_compat(self):
+        """原有任务类型应保持不变。"""
+        assert TaskType("download") == TaskType.DOWNLOAD
+        assert TaskType("forward") == TaskType.FORWARD
+        assert TaskType("upload") == TaskType.UPLOAD
 
 
 @pytest.fixture
@@ -43,6 +74,53 @@ def db_path():
 def task_manager(db_path):
     """创建 TaskManager 实例。"""
     return TaskManager(db_path=db_path, max_concurrent_tasks=2)
+
+
+@pytest.fixture
+def mock_identifier_service():
+    """提供 mock IdentifierService，根据标识符返回 ResolvedChat。"""
+    svc = MagicMock(spec=IdentifierService)
+
+    async def _resolve(identifier: str):
+        text = (identifier or "").strip()
+        if text.lstrip("-").isdigit():
+            chat_id = int(text)
+            chat_type = "private" if chat_id > 0 else "channel"
+        else:
+            chat_id = -1001234567890
+            chat_type = "channel"
+        return ResolvedChat(
+            chat_id=chat_id,
+            chat_type=chat_type,
+            chat_name="Test Chat",
+            username="testchat",
+            message_count=-1,
+            media_count=-1,
+            has_access=True,
+            is_private=False,
+        )
+
+    svc.resolve = AsyncMock(side_effect=_resolve)
+    return svc
+
+
+@pytest.fixture
+def mock_config_manager():
+    """提供 mock ConfigManager，默认全局仓库备份关闭。"""
+    cm = MagicMock(spec=ConfigManager)
+    cm.get = MagicMock(return_value=False)
+    return cm
+
+
+@pytest.fixture
+def task_manager_with_services(db_path, mock_identifier_service, mock_config_manager):
+    """创建已注入 IdentifierService 与 ConfigManager 的 TaskManager 实例。"""
+    return TaskManager(
+        db_path=db_path,
+        max_concurrent_tasks=2,
+        identifier_service=mock_identifier_service,
+        config_manager=mock_config_manager,
+    )
 
 
 # ============================================================
@@ -1163,3 +1241,217 @@ class TestCancelTaskWithReason:
         await task_manager.start_task(task.task_id)
         await task_manager.cancel_task(task.task_id, reason="资源不足")
         assert task.error_message == "资源不足"
+
+
+# ============================================================
+# 测试：阶段 2 新特性
+# ============================================================
+
+
+class TestPhase2SourceIdentifierAndRecent:
+    """测试 source_identifier 解析、recent 模式与 source_type 推导。"""
+
+    @pytest.mark.asyncio
+    async def test_create_task_with_source_identifier_resolves_chat_id(
+        self, task_manager_with_services
+    ):
+        """source_identifier 经 IdentifierService 解析为 chat_id。"""
+        tm = task_manager_with_services
+        task = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            params={
+                "source_identifier": "@testchannel",
+                "range_mode": "recent",
+                "recent_count": 10,
+            },
+        )
+        assert task.chat_id == -1001234567890
+        assert task.params["source_identifier"] == "@testchannel"
+
+    @pytest.mark.asyncio
+    async def test_source_type_derived_from_resolved_chat(
+        self, task_manager_with_services
+    ):
+        """根据 ResolvedChat.chat_type 推导 source_type 并存入 Task.extra。"""
+        tm = task_manager_with_services
+        channel_task = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            params={
+                "source_identifier": "@testchannel",
+                "range_mode": "recent",
+                "recent_count": 10,
+            },
+        )
+        assert channel_task.extra.get("source_type") == "channel"
+
+        private_task = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            params={
+                "source_identifier": "123456",
+                "range_mode": "recent",
+                "recent_count": 10,
+            },
+        )
+        assert private_task.extra.get("source_type") == "private"
+
+    @pytest.mark.asyncio
+    async def test_create_task_recent_count_truncated_to_1000(
+        self, task_manager_with_services
+    ):
+        """recent_count > 1000 时截断为 1000。"""
+        tm = task_manager_with_services
+        task = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            params={
+                "source_identifier": "@testchannel",
+                "range_mode": "recent",
+                "recent_count": 1500,
+            },
+        )
+        assert task.params["recent_count"] == 1000
+
+    @pytest.mark.asyncio
+    async def test_create_task_recent_count_zero_raises_validation_error(
+        self, task_manager_with_services
+    ):
+        """recent_count <= 0 时抛出 ValidationError。"""
+        tm = task_manager_with_services
+        with pytest.raises(ValidationError, match="recent_count"):
+            await tm.create_task(
+                task_type=TaskType.DOWNLOAD,
+                params={
+                    "source_identifier": "@testchannel",
+                    "range_mode": "recent",
+                    "recent_count": 0,
+                },
+            )
+
+
+class TestPhase2ListenConflict:
+    """测试监听任务排他性校验。"""
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listen_download_task_raises_conflict(
+        self, task_manager_with_services
+    ):
+        """同一 chat_id + LISTEN_DOWNLOAD 重复创建抛 TaskConflictError。"""
+        tm = task_manager_with_services
+        await tm.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            params={"source_identifier": "@testchannel"},
+        )
+        with pytest.raises(TaskConflictError):
+            await tm.create_task(
+                task_type=TaskType.LISTEN_DOWNLOAD,
+                params={"source_identifier": "@testchannel"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_duplicate_listen_forward_task_raises_conflict(
+        self, task_manager_with_services
+    ):
+        """同一 chat_id + LISTEN_FORWARD 重复创建抛 TaskConflictError。"""
+        tm = task_manager_with_services
+        await tm.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            params={
+                "source_identifier": "@testchannel",
+                "target_chat_id": -1009876543210,
+            },
+        )
+        with pytest.raises(TaskConflictError):
+            await tm.create_task(
+                task_type=TaskType.LISTEN_FORWARD,
+                params={
+                    "source_identifier": "@testchannel",
+                    "target_chat_id": -1009876543210,
+                },
+            )
+
+    @pytest.mark.asyncio
+    async def test_listen_conflict_only_applies_to_same_task_type(
+        self, task_manager_with_services
+    ):
+        """同一 chat_id 可同时存在 LISTEN_DOWNLOAD 与 LISTEN_FORWARD。"""
+        tm = task_manager_with_services
+        await tm.create_task(
+            task_type=TaskType.LISTEN_DOWNLOAD,
+            params={"source_identifier": "@testchannel"},
+        )
+        task = await tm.create_task(
+            task_type=TaskType.LISTEN_FORWARD,
+            params={
+                "source_identifier": "@testchannel",
+                "target_chat_id": -1009876543210,
+            },
+        )
+        assert task.task_type == TaskType.LISTEN_FORWARD
+
+
+class TestPhase2RepositoryBackup:
+    """测试仓库备份参数继承与覆盖。"""
+
+    @pytest.mark.asyncio
+    async def test_enable_repository_backup_inherits_global_config(
+        self, task_manager_with_services, mock_config_manager
+    ):
+        """未指定 enable_repository_backup 时继承全局配置。"""
+        mock_config_manager.get.return_value = True
+        tm = task_manager_with_services
+        task = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            params={
+                "source_identifier": "@testchannel",
+                "range_mode": "recent",
+                "recent_count": 10,
+            },
+        )
+        assert task.params["enable_repository_backup"] is True
+        mock_config_manager.get.assert_called_with(
+            "repository.auto_backup_downloads", False
+        )
+
+    @pytest.mark.asyncio
+    async def test_enable_repository_backup_overrides_global_config(
+        self, task_manager_with_services, mock_config_manager
+    ):
+        """显式指定 enable_repository_backup 时覆盖全局配置。"""
+        mock_config_manager.get.return_value = True
+        tm = task_manager_with_services
+        task = await tm.create_task(
+            task_type=TaskType.DOWNLOAD,
+            params={
+                "source_identifier": "@testchannel",
+                "range_mode": "recent",
+                "recent_count": 10,
+                "enable_repository_backup": False,
+            },
+        )
+        assert task.params["enable_repository_backup"] is False
+
+    @pytest.mark.asyncio
+    async def test_enable_repository_backup_ignored_for_non_download_tasks(
+        self, task_manager_with_services, mock_config_manager
+    ):
+        """FORWARD / UPLOAD / LISTEN_FORWARD 不处理仓库备份字段。"""
+        mock_config_manager.get.return_value = True
+        tm = task_manager_with_services
+        for task_type in (
+            TaskType.FORWARD,
+            TaskType.UPLOAD,
+            TaskType.LISTEN_FORWARD,
+        ):
+            base_params = {"source_identifier": "@testchannel"}
+            if task_type == TaskType.FORWARD:
+                base_params["target_chat_id"] = -1009876543210
+                base_params["range_mode"] = "all"
+            elif task_type == TaskType.UPLOAD:
+                base_params = {
+                    "file_paths": ["/tmp/test.mp4"],
+                    "chat_id": -1001234567890,
+                }
+            task = await tm.create_task(
+                task_type=task_type,
+                params=base_params,
+            )
+            assert "enable_repository_backup" not in task.params

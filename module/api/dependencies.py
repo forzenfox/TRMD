@@ -109,6 +109,21 @@ def get_task_executor(request: Request):
     return ctx.task_executor if ctx else None
 
 
+def get_identifier_service(request: Request):
+    """获取 IdentifierService 实例。
+
+    从 AppContext 单例读取已启动的 Telegram Client；若 client 未连接，
+    仍返回 IdentifierService 实例，由 resolve() 在实际解析时抛出 503，
+    避免依赖注入在 Pydantic body 校验前提前失败。
+    """
+    from module.integration import get_context
+    from module.core.identifier_service import IdentifierService
+
+    ctx = get_context()
+    client = ctx.client if ctx else None
+    return IdentifierService(client)
+
+
 def get_cache_manager():
     """获取 CacheManager 实例（从 AppContext 单例读取）。"""
     from module.integration import get_context

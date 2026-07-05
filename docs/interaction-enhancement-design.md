@@ -1,11 +1,11 @@
 # Telegram Bot 交互体验增强设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader
-> **文档版本**: v7.1
+> **文档版本**: v7.2
 > **创建日期**: 2026-06-12
-> **更新日期**: 2026-06-24
+> **更新日期**: 2026-07-03
 > **作者**: SOLO
-> **状态**: 已实现（部分功能待集成）
+> **状态**: 设计中（私聊对话文件操作 + 监听任务架构迁移）
 
 ---
 
@@ -13,6 +13,7 @@
 
 | 版本 | 日期 | 变更内容 | 状态 |
 |------|------|----------|------|
+| v7.2 | 2026-07-03 | 1. **新增私聊对话文件操作能力**：支持 Bot / 用户 / Saved Messages 通过 username / chat_id 访问<br>2. **新增 IdentifierService 统一解析服务**：替代多处 `_resolve_chat_id()` 重复实现<br>3. **扩展任务类型**：新增 `LISTEN_DOWNLOAD`、`LISTEN_FORWARD`<br>4. **扩展消息范围模式**：新增 `recent` 最近N条模式<br>5. **私聊下载/转发仅通过 WebUI 创建**；监听任务在迁移后同时支持 WebUI 和 Bot 命令<br>6. **监听任务架构迁移**：从 Bot 命令 + 内存 Handler + StateManager 迁移至 TaskManager / TaskExecutor + SQLite 持久化 | 设计中 |
 | v7.1 | 2026-06-24 | 1. **移除 --web-only 模式**（功能残缺、无真实使用场景）<br>2. 集成 TaskExecutor 使 Web 任务可实际执行<br>3. 启用 RepositorySync 仓库自动同步<br>4. 修复 Dashboard 分页参数 bug<br>5. 清理所有 mock 数据降级分支和条件判断 | 已实现 |
 | v7.0 | 2026-06-24 | 1. WebSocket 方案改为 REST API 轮询<br>2. Monitor 页面合并至 Dashboard，日志查看功能移除<br>3. Bot 命令体系补充完整命令列表（20+ 命令）<br>4. 文件结构更新：移除 websocket/ 目录和 monitor.html<br>5. 新增 task_executor.py、chats.py、chat.py 等组件说明<br>6. Bot 命令模块化：bot/ 目录结构说明 | 已实现 |
 | v6.0 | 2026-06-21 | 初始设计文档：WebUI + Bot 增强方案 | 已审核 |
@@ -28,10 +29,12 @@
 | 痛点 | 描述 | 影响 |
 |------|------|------|
 | **命令格式繁琐** | 转发命令必须按 `/forward 原始频道 目标频道 起始ID 结束ID` 格式书写 | 用户记忆负担重，容易出错 |
+| **私聊对话无法操作** | 仅支持公开频道/群组的 `t.me` 链接，无法访问 Bot、用户、Saved Messages 等私聊对话中的文件 | 无法批量收集 Bot 资源、整理私聊文件、备份 Saved Messages |
 | **本地文件媒体组上传缺失** | 无法将多个本地文件上传到同一媒体组 | 无法保持文件的媒体组关联 |
 | **批量操作效率低** | 批量下载/转发需要预先整理好所有链接，一次性发送长命令 | 操作繁琐，容易遗漏或格式错误 |
 | **配置管理困难** | 配置文件通过命令行交互式修改，不够直观 | 配置错误风险高 |
 | **任务监控缺失** | 无法直观查看任务进度和状态 | 需要等待 Bot 通知，体验差 |
+| **监听任务状态易丢失** | 监听任务状态保存在内存中，进程重启后丢失 | 无法持久化恢复，且与新 TaskManager 架构不统一 |
 
 ### 1.2 设计目标
 
@@ -95,11 +98,11 @@
 │  │InteractionMgr│  │Monitor       │  │ TelegramClient   │  │
 │  │(交互状态)     │  │(任务监控)     │  │ (Telegram API)   │  │
 │  └──────────────┘  └──────────────┘  └──────────────────┘  │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ RepositoryManager (仓库编排)                          │  │
-│  │ ├─ RepositoryDB (数据访问)                            │  │
-│  │ └─ RepositorySync (增量同步)                          │  │
-│  └──────────────────────────────────────────────────────┘  │
+│  ┌──────────────────┐  ┌────────────────────────────────┐  │
+│  │ IdentifierService│  │ RepositoryManager (仓库编排)    │  │
+│  │(对话标识符解析)    │  │ ├─ RepositoryDB (数据访问)     │  │
+│  │                  │  │ └─ RepositorySync (增量同步)   │  │
+│  └──────────────────┘  └────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────┘
             │
 ┌───────────▼─────────────────────────────────────────────────┐
@@ -123,12 +126,13 @@
 |------|------|--------|
 | **TokenManager** | 生成/验证临时访问 Token，管理过期时间 | Bot + WebAPI 共享 |
 | **Bot Module** | 命令解析、消息处理、状态查询（已有 `filters.user(self.root)` 保护） | Bot 端 |
-| **Web API Module** | RESTful API、WebSocket 实时推送、Token 中间件 | WebUI 端 |
+| **Web API Module** | RESTful API、REST 轮询、Token 中间件 | WebUI 端 |
 | **Task Manager** | 任务创建、执行、重试、取消、状态管理 | 共享 |
 | **File Manager** | 文件浏览、选择、上传、媒体组处理 | 共享 |
 | **Config Manager** | 配置读取、修改、保存 | 共享 |
 | **Interaction Manager** | 交互状态管理、超时处理 | 共享 |
 | **Monitor** | 任务进度监控、日志收集 | 共享 |
+| **IdentifierService** | 统一对话标识符解析：username / chat_id / t.me 链接 → chat_id + 元信息 | 共享 |
 | **RepositoryManager** | 仓库频道编排：三级去重、分发降级、上传回调（不直接操作文件和 Telegram API） | 共享 |
 | **RepositoryDB** | 仓库数据访问：三张表 CRUD、去重查询、来源追踪 | RepositoryManager 内部 |
 | **RepositorySync** | 仓库频道增量同步：定时扫描、查漏补缺 | 可选（独立启动） |
@@ -176,7 +180,7 @@
 
 ### 3.1 命令体系
 
-Bot 端提供完整的下载、转发、上传、监听功能，同时支持 WebUI 引导：
+Bot 端提供轻量级命令入口，同时支持 WebUI 引导。私聊对话（Bot / 用户 / Saved Messages）的下载与转发操作仅通过 WebUI 创建；监听任务在架构迁移后同时支持 WebUI 和 Bot 命令：
 
 #### 3.1.1 基础命令
 
@@ -191,7 +195,7 @@ Bot 端提供完整的下载、转发、上传、监听功能，同时支持 Web
 | 命令 | 功能 | 示例 | 复杂度 |
 |------|------|------|--------|
 | `/download` | 分配新的下载任务（多种使用方式见说明） | `/download https://t.me/x 起始ID 结束ID` | 中 |
-| `/download_chat` | 下载指定频道（支持内联键盘自定义内容过滤） | `/download_chat 频道链接` | 中 |
+| ~~`/download_chat`~~ | ~~下载指定频道（支持内联键盘自定义内容过滤）~~ 已移除，迁移至 WebUI | - | - |
 | `/listen_download` | 实时监听该链接的最新消息（视频和图片）进行下载 | `/listen_download https://t.me/A https://t.me/B ...` | 中 |
 
 #### 3.1.3 转发命令
@@ -230,6 +234,21 @@ Bot 端提供完整的下载、转发、上传、监听功能，同时支持 Web
 | 命令 | 功能 | 复杂度 |
 |------|------|--------|
 | `/setup_repository` | 设置仓库频道（支持频道 ID、用户名、链接、邀请链接） | 中 |
+
+#### 3.1.8 Bot 命令能力矩阵
+
+| 功能 | 频道/群组 | 私聊对话（Bot/用户/Saved） | 支持入口 |
+|------|----------|---------------------------|---------|
+| **下载** | ✅ Bot 命令 / WebUI | ❌ 仅 WebUI | Bot + WebUI（频道）/ WebUI（私聊） |
+| **转发** | ✅ Bot 命令 / WebUI | ❌ 仅 WebUI | Bot + WebUI（频道）/ WebUI（私聊） |
+| **监听下载** | ✅ Bot 命令 / WebUI | ✅ Bot 命令 / WebUI | Bot + WebUI（迁移后统一支持） |
+| **监听转发** | ✅ Bot 命令 / WebUI | ✅ Bot 命令 / WebUI | Bot + WebUI（迁移后统一支持） |
+| **上传** | ✅ Bot 命令 / WebUI | — | Bot + WebUI |
+
+> **说明**：
+> - 私聊下载/转发因输入形式复杂（username / chat_id 解析、消息范围配置），统一引导至 WebUI 创建
+> - 监听任务迁移至 TaskManager / TaskExecutor 后，Bot 命令与 WebUI 共用同一套 Handler 生命周期管理
+> - Bot 的 `/listen_download`、`/listen_forward`、`/listen_info` 命令入口保持不变，底层改为调用 TaskManager
 
 ### 3.2 `/web` 命令
 
@@ -291,6 +310,26 @@ Bot: 📁 媒体组上传功能请使用 WebUI 操作
      获取访问地址: /web
 ```
 
+### 3.5 监听任务架构迁移说明
+
+**旧架构（迁移前）**：
+- Bot 命令入口直接调用 `downloader.py` 中的监听方法
+- `add_listen_chat()` / `cancel_listen()` 在 User Client 上注册/移除 Handler
+- 监听状态保存在 `StateManager` 的内存字典（`listen_download_chat` / `listen_forward_chat`）中
+- 进程重启后监听任务丢失，且与新 TaskManager 架构不统一
+
+**新架构（迁移后）**：
+- Bot 命令入口仅作为参数转换层，统一调用 `TaskManager.create_task()`
+- `TaskExecutor` 负责监听 Handler 的注册、移除、消息回调和异常恢复
+- 监听任务状态持久化到 SQLite，进程重启后可恢复 running 状态并重新注册 Handler
+- `LISTEN_DOWNLOAD` / `LISTEN_FORWARD` 与 DOWNLOAD / FORWARD 共用同一套 `_execute_download()` / `_execute_forward()` 执行逻辑
+
+**迁移范围**：
+- `downloader.py` 中的 `add_listen_chat()` / `cancel_listen()` / `listen_download()` / `listen_forward()` 移除
+- `StateManager` 中的 `listen_download_chat` / `listen_forward_chat` 内存状态清理
+- `CommandRouter.on_listen()` / `listen_info()` 改为查询 TaskManager
+- `REMOVE_LISTEN_*` 回调按钮改为触发任务取消
+
 ---
 
 ## 四、WebUI 端设计（完整功能）
@@ -315,22 +354,40 @@ Bot: 📁 媒体组上传功能请使用 WebUI 操作
 
 | 功能 | 描述 |
 |------|------|
-| **创建下载任务** | 输入频道链接 + 消息范围（日期范围/ID 范围/多个 ID 或链接/全部消息）+ 类型过滤，预览后确认提交 |
-| **创建转发任务** | 输入源/目标频道链接 + 消息范围（日期范围/ID 范围/多个 ID 或链接/全部消息）+ 类型过滤，支持选择「上传后删除本地文件」（默认勾选），预览后确认提交 |
+| **创建下载任务** | 输入源对话标识符（username / chat_id / t.me 链接），点击「解析」按钮解析为 chat_id，选择消息范围后预览并提交。支持频道/群组和私聊对话（Bot/用户/Saved Messages） |
+| **创建转发任务** | 输入源/目标对话标识符（username / chat_id / t.me 链接），均支持「解析」按钮，选择消息范围和类型过滤，支持选择「上传后删除本地文件」（默认勾选），预览后确认提交 |
+| **创建监听任务** | 选择 `listen_download` 或 `listen_forward`，输入源对话标识符（和目标标识符），配置媒体类型过滤，创建后 TaskExecutor 统一注册 Handler |
 | **创建上传任务** | 输入本地文件路径，支持多文件选择、媒体组配置 |
 | **任务队列** | 查看任务列表、开始/重试/取消任务 |
 | **任务详情** | 查看任务进度、日志、错误信息 |
 
 #### 4.2.1.1 消息范围选择
 
-所有批量下载/转发任务支持以下四种消息范围选择模式：
+所有批量下载/转发任务支持以下五种消息范围选择模式：
 
 | 模式 | 输入方式 | 适用场景 |
 |------|---------|---------|
+| **最近 N 条** | 输入消息数量 N（N > 0，上限 1000） | 快速获取最新若干条消息，如"最近 10 条视频" |
 | **日期范围** | 选择开始日期 + 结束日期 | 按时间维度筛选，如"最近一周的视频" |
 | **消息 ID 范围** | 输入最小 ID + 最大 ID（如 `100 - 500`） | 连续消息范围 |
 | **多个消息 ID / 链接** | 输入一组消息 ID 或消息链接（每行一个，如 `100`、`150`、`https://t.me/ch/200`） | 零散/不连续的消息 |
 | **全部消息** | 勾选「全部消息」复选框 | 处理目标频道/群组历史所有消息 |
+
+**交互示例（最近 N 条模式）：**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  消息范围选择模式：                                   │
+│  [●] 最近 N 条  [ ] 日期范围  [ ] 消息 ID 范围      │
+│  [ ] 多个 ID/链接  [ ] 全部消息                     │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│  获取最近消息数量: ┌──────────┐                     │
+│                    │ 10       │                     │
+│                    └──────────┘                     │
+│  💡 上限 1000 条，超出将自动截断                     │
+└─────────────────────────────────────────────────────┘
+```
 
 **交互示例（日期范围模式）：**
 
@@ -535,6 +592,25 @@ resource_limits:
 └─────────────────────────────────────────────────────┘
 ```
 
+#### 4.2.1.5 WebUI 任务创建能力矩阵
+
+| 能力 | 频道/群组 | 私聊对话（Bot/用户/Saved） | 说明 |
+|------|----------|---------------------------|------|
+| **下载任务** | ✅ | ✅ | 输入 username / chat_id / t.me 链接，点击「解析」按钮确认对话信息 |
+| **转发任务** | ✅ | ✅ | 源/目标均支持「解析」按钮，私聊和频道可混合配对 |
+| **监听下载** | ✅ | ✅ | 创建后 TaskExecutor 统一注册 NewMessage Handler |
+| **监听转发** | ✅ | ✅ | 创建后 TaskExecutor 统一注册 NewMessage Handler |
+| **上传任务** | ✅ | — | 仅支持频道/群组作为目标 |
+| **消息范围 - recent** | ✅ | ✅ | 最近 N 条，上限 1000 |
+| **消息范围 - 日期/ID/多 ID/全部** | ✅ | ✅ | 与现有频道任务保持一致 |
+| **媒体类型过滤** | ✅ | ✅ | video / photo / document / audio |
+| **文件大小过滤** | ✅ | ✅ | min_size / max_size（字节） |
+
+> **解析按钮交互**：
+> - 前端对「解析」按钮做至少 3 秒防抖，避免频繁调用 Telegram API 触发 FloodWait
+> - 解析成功后展示对话信息卡片（名称、类型、消息数、媒体数）
+> - 解析失败时根据错误码展示对应提示（`INVALID_IDENTIFIER` / `USER_NOT_FOUND` / `ACCESS_DENIED` / `RATE_LIMITED`）
+
 **磁盘空间不足告警：**
 
 ```
@@ -649,7 +725,7 @@ Token 无效或过期时，所有接口返回 `401 Unauthorized`。
 | 端点 | 方法 | 功能 | 认证 |
 |------|------|------|------|
 | `/api/tasks` | GET | 获取任务列表（支持 `?status=pending` 过滤） | Token |
-| `/api/tasks` | POST | 创建任务（需指定 `task_type`：`download`/`forward`/`upload`） | Token |
+| `/api/tasks` | POST | 创建任务（需指定 `task_type`：`download`/`forward`/`upload`/`listen_download`/`listen_forward`） | Token |
 | `/api/tasks/{id}` | GET | 获取任务详情 | Token |
 | `/api/tasks/{id}/start` | POST | 开始任务（手动触发排队中的任务） | Token |
 | `/api/tasks/{id}` | DELETE | 取消任务 | Token |
@@ -660,6 +736,7 @@ Token 无效或过期时，所有接口返回 `401 Unauthorized`。
 | 端点 | 方法 | 功能 | 认证 | 缓存 |
 |------|------|------|------|------|
 | `/api/chats` | GET | 获取用户加入的频道列表（优先读缓存） | Token | 1 小时 |
+| `/api/chats/resolve` | GET | 解析对话标识符（username / chat_id / t.me 链接）为 chat_id + 元信息 | Token | 无（避免 chat 信息不一致） |
 | `/api/chats/{chat_id}/messages/estimate` | POST | 估算消息范围统计（样本采样） | Token | 10 分钟 |
 | `/api/chats/{chat_id}/messages/analyze` | POST | 精确分析消息范围（遍历全部） | Token | 按参数缓存 |
 
@@ -720,6 +797,18 @@ Token 无效或过期时，所有接口返回 `401 Unauthorized`。
 | `cancelled` | 用户取消 | pending/running → cancelled |
 | `queued` | 排队等待（超出并发限制） | 创建 → queued → pending |
 
+**任务类型定义：**
+
+| 类型 | 说明 | 支持对话 | 终态 |
+|------|------|---------|------|
+| `download` | 批量下载任务 | 频道/群组 + 私聊 | `completed` / `failed` / `cancelled` |
+| `forward` | 批量转发任务 | 频道/群组 + 私聊 | `completed` / `failed` / `cancelled` |
+| `upload` | 本地文件上传任务 | 频道/群组 | `completed` / `failed` / `cancelled` |
+| `listen_download` | 实时监听并下载新消息 | 频道/群组 + 私聊 | `running` / `failed` / `cancelled`（不进入 `completed`） |
+| `listen_forward` | 实时监听并转发新消息 | 频道/群组 + 私聊 | `running` / `failed` / `cancelled`（不进入 `completed`） |
+
+> **监听任务说明**：`LISTEN_*` 为长期运行任务，创建后进入 `running` 状态并注册 NewMessage Handler；取消或失败时进入对应终态，不会自动 `completed`。
+
 **任务与队列关系：**
 - `self.tasks`：所有任务的存储字典，键为任务 ID
 - `self.task_queue`：FIFO 队列，存放状态为 `queued` 的任务
@@ -735,8 +824,17 @@ class TaskManager:
         self.running_count: int = 0               # 当前执行中任务数
         self.max_concurrent: int = config.get('max_concurrent_tasks', 1)
     
-    async def create_task(self, task_type: TaskType, params: dict) -> Task:
-        """创建任务：资源检查 → 创建 → 排队或执行"""
+    async def create_task(self, task_type: TaskType, params: dict, auto_start: bool = True) -> Task:
+        """创建任务：资源检查 → 创建 → 排队或执行
+
+        关键逻辑：
+        - 标识符解析：优先识别 params.source_identifier，走 IdentifierService.resolve() 解析为 chat_id；
+          不存在时回退到 params.chat_id；推导 source_type 写入 Task.extra。
+        - 排他校验：对 LISTEN_DOWNLOAD / LISTEN_FORWARD 任务，检查同一 chat_id + task_type
+          是否已存在 running / pending 任务，存在则抛出 TaskConflictError（API 转换为 409）。
+        - 仓库备份配置解析：params.enable_repository_backup 为 null 时，读取全局配置
+          repository.auto_backup_downloads 填充；仅对 DOWNLOAD / LISTEN_DOWNLOAD 生效。
+        """
     
     async def start_task(self, task_id: str) -> bool:
         """手动开始排队中的任务（或任务满时排队）"""
@@ -927,7 +1025,61 @@ class InteractionManager:
         """重置超时"""
 ```
 
-### 5.4 ConfigManager
+### 5.4 IdentifierService
+
+**定位**：统一对话标识符解析服务，替代现有三处重复的 `_resolve_chat_id()` 实现，被 TaskManager、Web API、Bot 命令模块共享调用。
+
+**与现有解析函数的关系**：
+- `parse_link()`（`module/utils/helpers.py`）：负责链接级解析，返回 `chat_id` + `comment_id` + `topic_id`，被旧架构 `downloader.py` 大量使用，保留不合并
+- `extract_info_from_link()`（`module/utils/helpers.py`）：负责链接格式提取，`IdentifierService` 内部复用此函数进行 t.me 链接检测
+- `_resolve_chat_id()`（`module/api/routes/tasks.py` / `chats.py`）：负责标识符 → chat_id 转换，将被 `IdentifierService` 替代
+
+**支持输入格式**：
+
+| 格式 | 示例 | 说明 |
+|------|------|------|
+| 纯数字 ID | `8288406549` | 直接作为 chat_id 返回 |
+| @username | `@seseYunBot` | 去掉 `@` 前缀后调用 `get_chat` |
+| 纯 username | `seseYunBot` | 直接调用 `get_chat` |
+| t.me 链接 | `https://t.me/seseYunBot` | 提取 username 后调用 `get_chat` |
+
+**输出结构**：
+
+```python
+@dataclass
+class ResolvedChat:
+    chat_id: int              # 数字 ID
+    chat_type: str            # "bot" | "private" | "channel" | "group" | "supergroup"
+    chat_name: str            # 显示名称
+    username: str | None      # 用户名（如果有）
+    message_count: int        # 消息总数估算
+    media_count: int          # 媒体消息数估算
+    has_access: bool          # 是否可访问
+    is_private: bool          # 是否为私聊类型
+```
+
+**错误处理规范**：
+
+| 错误场景 | HTTP 状态码 | 错误码 | 错误消息 |
+|---------|-----------|--------|---------|
+| 无效输入格式 | 400 | `INVALID_IDENTIFIER` | 标识符格式不正确 |
+| 不存在的用户名 | 404 | `USER_NOT_FOUND` | 无法找到该用户/频道 |
+| 无对话权限 | 403 | `ACCESS_DENIED` | 您尚未与此用户建立对话 |
+| 网络超时 | 504 | `RESOLVE_TIMEOUT` | 解析请求超时，请重试 |
+| API 限流 | 429 | `RATE_LIMITED` | 请求过于频繁，请稍后再试（响应体含 `retry_after`） |
+
+```python
+class IdentifierService:
+    """统一对话标识符解析服务"""
+
+    async def resolve(self, identifier: str) -> ResolvedChat:
+        """将 username / chat_id / t.me 链接解析为 ResolvedChat"""
+
+    def _detect_format(self, identifier: str) -> IdentifierFormat:
+        """自动检测输入格式"""
+```
+
+### 5.5 ConfigManager
 
 > **BREAKING 变更**：`config.yaml` 和 `global_config.yaml` 已合并为单一 `config.yaml`。新分组结构包含：credential、proxy、task、preference、log、repository。`GlobalConfig` 类已被完全移除，所有配置直接从 `UserConfig` 读取。
 
@@ -975,7 +1127,10 @@ log:
 
 repository:
   enabled: true
-  chat_id: ""
+  chat_id: null                          # 仓库频道 chat_id（与 repository_channel 二选一）
+  repository_channel: ""                 # 仓库频道 username（当 auto_backup_downloads=true 时必需）
+  auto_backup_downloads: true            # 全局自动备份开关（默认开启）
+  dedup_enabled: true                    # 去重功能开关（启用时执行三级去重检查）
   auto_sync_enabled: false
   auto_sync_interval_minutes: 60
 ```
@@ -1015,9 +1170,9 @@ class ConfigManager:
 
 ---
 
-## 5.5 仓库模式（Repository Mode）
+## 5.6 仓库模式（Repository Mode）
 
-### 5.5.1 概述
+### 5.6.1 概述
 
 仓库模式通过将下载的媒体文件集中存储到指定的 Telegram 频道（仓库频道），实现文件去重和高效分发。核心设计约束：
 
@@ -1027,7 +1182,7 @@ class ConfigManager:
 | **使用 User Client** | 所有仓库操作使用 User Client（file_id 作用域一致） |
 | **file_unique_id 作为去重键** | 跨 Client 稳定标识，file_id 仅用于发送（可能过期） |
 
-### 5.5.2 RepositoryDB - 数据访问层
+### 5.6.2 RepositoryDB - 数据访问层
 
 管理 `trmd.db` 中的三张表，提供文件去重、来源追踪、分发记录的 CRUD 和查询接口。
 
@@ -1102,7 +1257,7 @@ class RepositoryDB:
     def get_repository_message_id(self, file_unique_id: str) -> tuple[int, int] | None: ...
 ```
 
-### 5.5.3 RepositoryManager - 编排层
+### 5.6.3 RepositoryManager - 编排层
 
 仓库频道的核心编排器，协调去重检查、上传回调、分发降级等流程。
 
@@ -1142,7 +1297,7 @@ class RepositoryManager:
     ) -> int | None: ...
 ```
 
-### 5.5.4 三级去重机制
+### 5.6.4 三级去重机制
 
 | 级别 | 去重键 | 命中行为 | 适用场景 |
 |------|--------|---------|---------|
@@ -1155,7 +1310,7 @@ class RepositoryManager:
 - L1 在下载前检查（`forward()` / `create_download_task()`），L2/L3 在下载完成后检查（`_dedup_before_upload()`）
 - L3 命中时删除本地文件以释放磁盘空间
 
-### 5.5.5 分发降级链
+### 5.6.5 分发降级链
 
 从仓库频道分发文件到目标频道时，采用逐级降级策略：
 
@@ -1173,7 +1328,7 @@ class RepositoryManager:
 | **2** | 从仓库消息刷新 | `get_messages()` 获取最新 file_id 并更新数据库 |
 | **3** | 重新下载 | 仓库消息也被删除时，需从源频道重新下载 |
 
-### 5.5.6 RepositorySync - 增量同步
+### 5.6.6 RepositorySync - 增量同步
 
 可选的定时同步器，用于查漏补缺（程序崩溃或数据不一致时的恢复）。
 
@@ -1198,7 +1353,7 @@ class RepositorySync:
 | `repository.auto_sync_enabled` | false | 是否启用自动同步 |
 | `repository.auto_sync_interval_minutes` | 60 | 同步间隔（分钟） |
 
-### 5.5.7 降级策略
+### 5.6.7 降级策略
 
 覆盖 9 种异常场景的降级处理：
 
@@ -1214,7 +1369,7 @@ class RepositorySync:
 | 数据库文件损坏 | 降级为直接上传，提示用户运行同步恢复 |
 | 并发写入冲突 | SQLite WAL 模式 + busy_timeout=10000ms |
 
-### 5.5.8 集成点
+### 5.6.8 集成点
 
 | 模块 | 集成方式 |
 |------|---------|
@@ -1223,6 +1378,18 @@ class RepositorySync:
 | **FileManager** | `upload()` 新增 `source_chat_id`/`source_message_id` 参数；`UploadResult` 新增 `file_unique_id` 字段 |
 | **BotCommands** | `/setup_repository` 命令：验证频道输入 → 解析频道 ID → 检查管理员权限 → 保存配置 |
 | **ConfigManager** | 新增 `get_repository_config()`、`set_repository_chat_id()`、`validate_repository_config()` |
+
+#### 5.6.9 enable_repository_backup 各模块间流转说明
+
+`enable_repository_backup` 在各模块间的流转路径如下：
+
+| 流转环节 | 说明 |
+|---------|------|
+| **全局配置** | `repository.auto_backup_downloads`（config.yaml），默认 `true` |
+| **任务创建** | `TaskManager.create_task()` 中，若 `params.enable_repository_backup` 为 `null`，读取全局配置 `repository.auto_backup_downloads` 填充；仅对 `DOWNLOAD` / `LISTEN_DOWNLOAD` 生效 |
+| **任务执行** | `TaskExecutor` 检查 `params.enable_repository_backup` 决定是否触发仓库备份（调用 FileManager 上传至仓库频道） |
+| **WebUI 表单** | 下载/监听下载表单中"备份到仓库频道" checkbox 默认值 = 全局配置值 `repository.auto_backup_downloads`；用户可手动覆盖 |
+| **Bot 命令** | `/batch` 创建下载任务时 `enable_repository_backup` 默认继承全局配置，用户无需在 Bot 交互中显式指定 |
 
 ---
 
@@ -1239,6 +1406,7 @@ module/
 │   ├── config_manager.py    # 配置管理器
 │   ├── interaction.py       # 交互状态管理
 │   ├── monitor.py           # 任务监控（已集成至 Dashboard）
+│   ├── identifier_service.py # [新增] 统一对话标识符解析服务
 │   ├── repository_db.py     # [新增] 仓库数据库管理（三张表 CRUD）
 │   ├── repository_manager.py # [新增] 仓库频道编排器（去重/分发/回调）
 │   ├── repository_sync.py   # [新增] 仓库增量同步器（可选，未启用）
@@ -1288,27 +1456,26 @@ module/
 
 | 文件 | 修改内容 |
 |------|---------|
+| **identifier_service.py** | 1. 新增统一对话标识符解析服务<br>2. 支持 username / chat_id / t.me 链接 → `ResolvedChat`<br>3. 被 TaskManager、Web API、Bot 命令模块共享调用 |
+| **task_manager.py** | 1. 扩展 `TaskType`：新增 `listen_download`、`listen_forward`<br>2. 扩展 `create_task()`：支持 `source_identifier` / `target_identifier` 参数<br>3. 扩展 `RangeMode`：新增 `recent` 最近 N 条模式<br>4. 新增 `LISTEN_*` 任务的 chat_id + task_type 排他性校验（409 冲突）<br>5. 支持监听任务动态 Item 生成与持久化 |
+| **task_executor.py** | 1. 新增 `LISTEN_DOWNLOAD` / `LISTEN_FORWARD` 执行分支<br>2. 新增 `_start_listener()` / `_stop_listener()` Handler 生命周期管理<br>3. 复用 `_execute_download()` / `_execute_forward()` 处理私聊和频道任务<br>4. 支持进程重启后恢复 running 状态监听任务 |
 | **bot.py** | 1. 简化命令体系<br>2. 添加 `/web` 命令<br>3. 复杂操作引导到 WebUI<br>4. 保留原有命令兼容性<br>5. 注册 `/setup_repository` 命令 handler |
+| **command_router.py** | 1. `on_listen()` / `listen_info()` 改为调用 TaskManager，替代直接注册 Handler<br>2. `REMOVE_LISTEN_*` 回调按钮改为触发任务取消<br>3. 复用 IdentifierService 解析私聊标识符 |
 | **app.py** | 1. 集成 TaskManager<br>2. 集成 ConfigManager<br>3. 启动 Web API 服务<br>4. 初始化 RepositoryManager 和 RepositorySync |
 | **main.py** | 1. 支持同时启动 Bot 和 Web API<br>2. 添加启动参数控制 |
 | **enums.py** | 1. 新增 TaskType、TaskStatus 枚举<br>2. 新增 InteractionMode 枚举 |
-| **downloader.py** | 1. forward() 中仓库模式启用时执行 L1 去重检查，命中则从仓库分发<br>2. 下载完成后执行 L2/L3 去重检查（`_dedup_before_upload`）<br>3. 为上传任务附加 source_chat_id/source_message_id |
+| **downloader.py** | 1. forward() 中仓库模式启用时执行 L1 去重检查，命中则从仓库分发<br>2. 下载完成后执行 L2/L3 去重检查（`_dedup_before_upload`）<br>3. 为上传任务附加 source_chat_id/source_message_id<br>4. 移除旧监听实现：`add_listen_chat()` / `cancel_listen()` / `listen_download()` / `listen_forward()` |
 | **uploader.py** | 1. 上传成功后触发 `_repository_on_upload_success` 回调<br>2. 去重命中时调用 `_dedup_distribute` 从仓库分发<br>3. UploadTask 支持 source_chat_id/source_message_id 字段 |
+| **state_manager.py** | 1. 清理 `listen_download_chat` / `listen_forward_chat` 内存状态存储 |
 
 ### 6.3 启动方式
 
 ```bash
-# 仅启动 Bot（默认）
+# 启动 Web API + Telegram Client
 python main.py
 
-# 同时启动 Bot 和 WebUI
-python main.py --web
-
-# 仅启动 WebUI
-python main.py --web-only
-
-# 指定 WebUI 端口
-python main.py --web --port 8080
+# 指定 Web 服务端口
+python main.py --port 8080
 ```
 
 ---
@@ -1372,6 +1539,9 @@ python main.py --web --port 8080
 | v4.0 | 2026-06-12 | **Token 认证方案**：<br>1. 新增 TokenManager 模块，生成/验证临时 Token（1 小时有效期）<br>2. `/web` 命令返回带 Token 的访问链接，无需手动输入 User ID<br>3. 所有 API 接口（REST + WebSocket）强制 Token 校验<br>4. Token 以 URL 参数或 Authorization Header 形式传递<br>5. 更新架构图、认证流程、非功能性需求 | SOLO |
 | v5.0 | 2026-06-12 | **消息范围 + 资源限制**：<br>1. 新增消息范围选择四种模式（日期范围/ID 范围/多个 ID 或链接/全部消息）<br>2. 新增资源保护机制（5GB 告警、10GB 禁止）<br>3. 新增转发任务本地文件清理策略（默认上传后删除）<br>4. 新增多任务并发资源限制（任务并发/文件并发/磁盘保护/内存保护，所有参数可配置）<br>5. 提供带宽参考建议表，方便用户根据服务器配置调整 | SOLO |
 | v6.0 | 2026-06-21 | **仓库模式（Repository Mode）**：<br>1. 新增 RepositoryDB 模块，管理 trmd.db 三张表（repository_files/repository_sources/file_distributions）<br>2. 新增 RepositoryManager 编排层，实现三级去重（L1:source定位/L2:file_unique_id/L3:content_hash）<br>3. 新增 RepositorySync 增量同步器（可选，定时查漏补缺）<br>4. **BREAKING**: config.yaml 与 global_config.yaml 合并为单一 config.yaml，新增 repository 分组<br>5. GlobalConfig 从 UserConfig 的 preference/log 分组读取，回退 .CONFIG.yaml 向后兼容<br>6. 分发降级链：copy_message → file_id_send → 重新下载上传<br>7. file_id 三级刷新：存储值 → 从仓库消息刷新 → 重新下载<br>8. 9 种降级场景覆盖（未配置/权限不足/上传失败/DB写入失败/频道删除/Bot移出/file_id失效/DB损坏/并发冲突）<br>9. 新增 `/setup_repository` Bot 命令<br>10. FileManager.UploadResult 新增 file_unique_id，upload() 新增 source_chat_id/source_message_id<br>11. Downloader 集成 L1 去重（forward）和 L2/L3 去重（_dedup_before_upload）<br>12. Uploader 集成上传成功回调（_repository_on_upload_success）和去重分发（_dedup_distribute） | SOLO |
+| v7.0 | 2026-06-24 | **WebUI 架构精简**：<br>1. WebSocket 方案改为 REST API 轮询<br>2. Monitor 页面合并至 Dashboard，日志查看功能移除<br>3. Bot 命令体系补充完整命令列表（20+ 命令）<br>4. 文件结构更新：移除 websocket/ 目录和 monitor.html<br>5. 新增 task_executor.py、chats.py、chat.py 等组件说明<br>6. Bot 命令模块化：bot/ 目录结构说明 | SOLO |
+| v7.1 | 2026-06-24 | **集成与清理**：<br>1. 移除 `--web-only` 模式（功能残缺、无真实使用场景）<br>2. 集成 TaskExecutor 使 Web 任务可实际执行<br>3. 启用 RepositorySync 仓库自动同步<br>4. 修复 Dashboard 分页参数 bug<br>5. 清理所有 mock 数据降级分支和条件判断 | SOLO |
+| v7.2 | 2026-07-03 | **私聊对话文件操作 + 监听任务架构迁移**：<br>1. 新增私聊对话文件操作能力：支持 Bot / 用户 / Saved Messages 通过 username / chat_id 访问<br>2. 新增 IdentifierService 统一解析服务：替代多处 `_resolve_chat_id()` 重复实现<br>3. 扩展任务类型：新增 `LISTEN_DOWNLOAD`、`LISTEN_FORWARD`<br>4. 扩展消息范围模式：新增 `recent` 最近 N 条模式<br>5. 私聊下载/转发仅通过 WebUI 创建；监听任务在迁移后同时支持 WebUI 和 Bot 命令<br>6. 监听任务架构迁移：从 Bot 命令 + 内存 Handler + StateManager 迁移至 TaskManager / TaskExecutor + SQLite 持久化 | SOLO |
 
 ---
 

@@ -259,6 +259,15 @@ class ApiClient {
   }
 
   /**
+   * 解析对话标识符
+   * @param {string} identifier - 用户名、chat_id 或 t.me 链接
+   * @returns {Promise<Object>} { chat_id, chat_type, chat_name, username, message_count, has_access, is_private }
+   */
+  async resolveChat(identifier) {
+    return this.request('GET', `/api/chats/resolve?identifier=${encodeURIComponent(identifier)}`);
+  }
+
+  /**
    * 估算消息数量
    * @param {string} chatId - 频道 ID（URL/@username/数字ID）
    * @param {object} payload - 估算参数

@@ -27,6 +27,7 @@ from module.api.estimate import (
     _estimate_duration,
     _count_date_range_messages,
 )
+from module.api.models.chat import MessageRangeRequest, MessageEstimateRequest
 
 
 # ==================== Mock 辅助 ====================
@@ -547,3 +548,54 @@ class TestCountDateRangeMessages:
             {"start_date": "2026-01-01", "end_date": "2026-01-31"},
         )
         assert count == 30
+
+
+# ==================== 测试：消息范围模型 recent 模式 ====================
+
+
+class TestMessageRangeRequestRecent:
+    """MessageRangeRequest recent 模式校验测试。"""
+
+    def test_recent_mode_requires_count(self):
+        """range_mode="recent" 时缺少 recent_count 应失败。"""
+        with pytest.raises(ValueError) as exc_info:
+            MessageRangeRequest(range_mode="recent")
+        assert "recent_count" in str(exc_info.value)
+
+    def test_recent_mode_invalid_count(self):
+        """range_mode="recent" 时 recent_count <= 0 应失败。"""
+        with pytest.raises(ValueError) as exc_info:
+            MessageRangeRequest(range_mode="recent", recent_count=0)
+        assert "recent_count" in str(exc_info.value)
+
+    def test_recent_mode_valid(self):
+        """range_mode="recent" 且 recent_count > 0 应通过。"""
+        req = MessageRangeRequest(range_mode="recent", recent_count=10)
+        assert req.range_mode == "recent"
+        assert req.recent_count == 10
+
+    def test_non_recent_mode_with_count(self):
+        """range_mode != "recent" 时携带 recent_count 应失败。"""
+        with pytest.raises(ValueError) as exc_info:
+            MessageRangeRequest(range_mode="id_range", recent_count=10)
+        assert "recent_count" in str(exc_info.value)
+
+
+class TestMessageEstimateRequestRecent:
+    """MessageEstimateRequest recent 模式校验测试。"""
+
+    def test_recent_mode_supported(self):
+        """MessageEstimateRequest 应支持 recent 模式。"""
+        req = MessageEstimateRequest(
+            chat_id="@channel",
+            range_mode="recent",
+            recent_count=10,
+        )
+        assert req.range_mode == "recent"
+        assert req.recent_count == 10
+
+    def test_recent_mode_missing_count(self):
+        """recent 模式缺少 recent_count 应失败。"""
+        with pytest.raises(ValueError) as exc_info:
+            MessageEstimateRequest(chat_id="@channel", range_mode="recent")
+        assert "recent_count" in str(exc_info.value)

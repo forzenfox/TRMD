@@ -144,7 +144,12 @@ async def list_file_distributions(
         total = db.count_distributions(chat_id=chat_id)
 
         return json_response(
-            data={"items": distributions, "total": total, "offset": offset, "limit": limit}
+            data={
+                "items": distributions,
+                "total": total,
+                "offset": offset,
+                "limit": limit,
+            }
         )
     except Exception as e:
         logger.error("获取分发记录列表失败: %s", e)

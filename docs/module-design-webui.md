@@ -1,14 +1,22 @@
 # WebUI 模块级设计文档
 
 > **项目名称**: Telegram_Restricted_Media_Downloader  
-> **文档版本**: v1.1
+> **文档版本**: v1.3
 > **创建日期**: 2026-06-18
-> **更新日期**: 2026-06-21
+> **更新日期**: 2026-07-03
 > **作者**: SOLO
-> **状态**: 草案
-> **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)
+> **状态**: 已更新
+> **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)、[private-chat-download-by-username-prd.md](./private-chat-download-by-username-prd.md)
 
 ---
+
+## 变更记录
+
+| 版本 | 日期 | 变更内容 | 状态 |
+|------|------|----------|------|
+| v1.3 | 2026-07-03 | 同步 interaction-enhancement-design v7.0: Monitor 页面合并至 Dashboard，移除独立 Monitor 页面设计；移除 /monitor 路由；移除 monitor.js 页面脚本；清理相关 x-data、轮询配置、API 封装与测试项 | 已更新 |
+| v1.2 | 2026-07-03 | 同步 PRD v2.3: 支持 username/chat_id/t.me 解析;新增解析按钮与对话信息卡片;消息范围增加最近N条;新增媒体类型+文件大小过滤;新增监听任务创建表单;新增仓库备份开关;全面采用 REST 轮询替代 WebSocket;更新 x-data 字段与测试策略 | 已更新 |
+| v1.1 | 2026-06-21 | 初始 WebUI 模块设计 | 已归档 |
 
 ## 1. 设计目标与职责边界
 
@@ -20,7 +28,7 @@ WebUI 模块是 Telegram_Restricted_Media_Downloader 的**浏览器端管理界�
 |------|------|
 | **降低操作门槛** | 用表单、选择器、进度条替代 `/forward`、`/upload` 等命令参数 |
 | **统一任务管理** | 在一个页面内完成下载、转发、上传任务的创建、监控、重试、取消 |
-| **实时可视化** | 通过 WebSocket 推送任务进度、日志流、系统监控数据 |
+| **实时可视化** | 通过 REST 轮询拉取任务进度、日志流、系统监控数据并渲染 |
 | **资源可控** | 在任务创建前明确告知总量，超限时阻止创建，避免服务器资源耗尽 |
 | **向后兼容** | 不修改 Bot 命令语义，新增 WebUI 作为可选增强入口 |
 | **无构建部署** | 前端不依赖 npm/webpack，直接由 FastAPI 托管静态文件 |
@@ -49,7 +57,7 @@ WebUI 模块只负责：
 
 1. **页面渲染与交互**：HTML 模板、Alpine.js 状态、Tailwind CSS 样式。
 2. **数据呈现与提交**：调用后端 REST API 获取数据，提交用户输入。
-3. **实时推送展示**：维护 WebSocket 连接，将后端事件渲染到页面。
+3. **实时刷新展示**：通过定时 REST 轮询获取任务、日志、监控数据并更新页面。
 4. **Token 携带**：首次从 URL 读取 `?token=`，后续通过 Cookie / Header 维持认证。
 
 WebUI 模块**不**负责：
@@ -88,9 +96,6 @@ WebUI 模块**不**负责：
 │  ├────┤  │  └──────────────────────────────────────┘  │
 │  │ ⚙️ │  │                                              │
 │  │ Settings │  │                                              │
-│  ├────┤  │                                              │
-│  │ 📈 │  │                                              │
-│  │ Monitor  │  │                                              │
 │  └────┘  │                                              │
 │          │                                              │
 └──────────┴──────────────────────────────────────────────┘
@@ -105,7 +110,6 @@ WebUI 模块**不**负责：
 | **Files** | `/files` | 文件树浏览、多选、上传预览、媒体组配置 |
 | **Repository** | `/repository` | 仓库文件列表、来源映射视图、分发历史、手动同步触发、分发表单 |
 | **Settings** | `/settings` | 基础配置、下载/上传配置、代理配置、通知配置、资源限制、仓库配置 |
-| **Monitor** | `/monitor` | 实时速度曲线、任务执行状态、系统资源、实时日志流 |
 
 ### 2.3 导航交互
 
@@ -162,7 +166,7 @@ Alpine.store('app', {
         cpuPercent: 0,
     },
 
-    // 实时任务
+    // 实时任务与日志
     tasks: [],
     logs: [],
 
@@ -174,11 +178,12 @@ Alpine.store('app', {
         status: {},  // { enabled, chat_id, file_count, last_sync_time }
     },
 
-    // WebSocket 连接
-    ws: {
-        tasks: null,
-        monitor: null,
-        logs: null,
+    // REST 轮询控制
+    polling: {
+        tasks: null,    // 任务列表轮询 interval id
+        logs: null,     // 日志轮询 interval id
+        tasksInterval: 3000,
+        logsInterval: 2000,
     },
 
     // 通知队列
@@ -193,11 +198,10 @@ Alpine.store('app', {
 | 页面 | x-data 核心字段 |
 |------|----------------|
 | **Dashboard** | `quickTasks`、`recentTasks`、`stats`、`resourceStatus` |
-| **Tasks** | `taskList`、`filterStatus`、`selectedTask`、`createForm`、`messageRangeMode` |
+| **Tasks** | `taskList`、`filterStatus`、`selectedTask`、`createForm`、`messageRangeMode`、`sourceIdentifier`、`targetIdentifier`、`sourceResolveResult`、`targetResolveResult`、`resolveResult`、`recentCount`、`mediaTypes`、`minSize`、`maxSize`、`sizeUnit`、`enableRepositoryBackup`、`isResolving`、`resolveDebounceTimer` |
 | **Files** | `currentPath`、`fileTree`、`selectedFiles`、`uploadQueue`、`mediaGroupSize` |
 | **Repository** | `repoFiles`、`sources`、`distributions`、`syncStatus`、`distributionForm` |
 | **Settings** | `config`、`originalConfig`、`activeTab`、`saving` |
-| **Monitor** | `realtimeStats`、`logFilter`、`logLevel`、`chartData` |
 
 ### 3.4 数据流示意图
 
@@ -211,28 +215,28 @@ Alpine.store('app', {
 │         └────────────────┴────────────────────┘             │
 │                          │                                   │
 │                    ┌─────▼─────┐                             │
-│                    │ api.js    │  Fetch / WebSocket 封装      │
+│                    │ api.js    │  Fetch / REST 轮询封装       │
 │                    └─────┬─────┘                             │
 └──────────────────────────┼───────────────────────────────────┘
                            │
-              ┌────────────┼────────────┐
-              │            │            │
-        ┌─────▼─────┐ ┌────▼─────┐ ┌────▼─────┐
-        │ REST API  │ │ WebSocket│ │  Static  │
-        │  (/api/*) │ │ (/ws/*)  │ │ (/static)│
-        └───────────┘ └──────────┘ └──────────┘
+              ┌────────────┴────────────┐
+              │                         │
+        ┌─────▼─────┐           ┌──────▼──────┐
+        │ REST API  │           │   Static    │
+        │  (/api/*) │           │  (/static)  │
+        └───────────┘           └─────────────┘
 ```
 
 ### 3.5 状态更新原则
 
-1. **单向数据流**：后端是唯一的真实数据源，前端通过 API/WebSocket 获取后更新 Store。
+1. **单向数据流**：后端是唯一的真实数据源，前端通过 REST API 轮询获取后更新 Store。
 2. **乐观更新仅用于交互反馈**：例如点击“取消任务”后立即更新按钮状态，但若后端返回失败则回滚。
 3. **错误统一进入 Store**：所有 API 错误写入 `$store.app.notifications`，由全局通知组件渲染。
-4. **WebSocket 数据合并**：不覆盖整列表，而是按任务 ID 做局部更新，减少 DOM 抖动。
+4. **轮询数据合并**：不覆盖整列表，而是按任务 ID 做局部更新，减少 DOM 抖动。
 
 ---
 
-## 4. 与后端交互方式（API 调用、WebSocket 连接）
+## 4. 与后端交互方式（REST API 调用与轮询）
 
 ### 4.1 REST API 调用封装
 
@@ -275,53 +279,62 @@ const api = {
     getFiles(path) { return this.request('GET', `/api/files?path=${encodeURIComponent(path)}`); },
     getConfig() { return this.request('GET', '/api/config'); },
     updateConfig(config) { return this.request('PUT', '/api/config', config); },
+    resolveChat(identifier) { return this.request('GET', `/api/chats/resolve?identifier=${encodeURIComponent(identifier)}`); },
     estimateMessages(chatId, payload) { return this.request('POST', `/api/chats/${chatId}/messages/estimate`, payload); },
     analyzeMessages(chatId, payload) { return this.request('POST', `/api/chats/${chatId}/messages/analyze`, payload); },
     getResourceStatus() { return this.request('GET', '/api/resource/status'); },
+    getLogs(level, since) { return this.request('GET', `/api/logs?level=${level || ''}&since=${since || ''}`); },  // (⏳ 待实现，日志查看功能已移除)
 };
 ```
 
-### 4.2 WebSocket 连接封装
+### 4.2 REST 轮询封装
 
 ```javascript
-// ws.js 伪代码
-class WsConnection {
-    constructor(endpoint, onMessage) {
-        this.endpoint = endpoint;
-        this.onMessage = onMessage;
-        this.reconnectDelay = 1000;
-        this.maxReconnectDelay = 30000;
-        this.connect();
+// polling.js 伪代码
+class Poller {
+    constructor(fetchFn, interval, onData) {
+        this.fetchFn = fetchFn;
+        this.interval = interval;
+        this.onData = onData;
+        this.timer = null;
     }
 
-    connect() {
-        const token = api.token || new URLSearchParams(window.location.search).get('token');
-        this.ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${this.endpoint}?token=${token}`);
+    start() {
+        this.run();
+        this.timer = setInterval(() => this.run(), this.interval);
+    }
 
-        this.ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            this.onMessage(data);
-        };
+    async run() {
+        try {
+            const data = await this.fetchFn();
+            this.onData(data);
+        } catch (err) {
+            // 401 已在 api.js 统一处理；其他错误进入通知队列
+            console.error('Polling error', err);
+        }
+    }
 
-        this.ws.onclose = () => {
-            setTimeout(() => this.connect(), this.reconnectDelay);
-            this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
-        };
-
-        this.ws.onopen = () => {
-            this.reconnectDelay = 1000;
-        };
+    stop() {
+        if (this.timer) clearInterval(this.timer);
     }
 }
 ```
 
-### 4.3 WebSocket 频道与消息格式
+### 4.3 轮询接口与数据格式
 
-| 端点 | 推送内容 | 前端处理 |
-|------|---------|---------|
-| `/ws/tasks` | `{task_id, status, progress, speed, eta, message}` | 更新 `$store.app.tasks` 对应条目 |
-| `/ws/monitor` | `{cpu, memory, disk, network_speed}` | 更新 `$store.app.system` 与图表 |
-| `/ws/logs` | `{level, timestamp, source, message}` | 追加到 `$store.app.logs`，按级别过滤后渲染 |
+| 轮询源 | 接口 | 返回内容 | 前端处理 | 默认间隔 |
+|--------|------|---------|---------|---------|
+| **任务列表** | `GET /api/tasks` | `[{id, status, progress, speed, eta, ...}]` | 按任务 ID 合并到 `$store.app.tasks` | 3 秒 |
+| **系统监控** | `GET /api/monitor/stats` | `{cpu, memory, disk, network_speed}` | 更新 `$store.app.system` 与 Dashboard 图表（Monitor 页面已合并至 Dashboard） | 5 秒 |
+| **日志流** | `GET /api/logs?since=...` | `[{level, timestamp, source, message}]` | 追加到 `$store.app.logs`，按级别过滤后渲染 | 2 秒 |
+
+> **注意**：根据 interaction-enhancement-design v7.0 设计变更，日志查看功能已移除。`GET /api/logs` 端点尚未实现（⏳ 待实现），如需恢复该功能需在后续版本中重新设计。当前任务相关日志仅在 Tasks 页面的任务详情抽屉中查看。
+
+**轮询控制原则**：
+
+- 页面可见且在当前路由时启动轮询；切离页面或进入后台时暂停，减少资源消耗。
+- 日志接口使用 `since` 参数（上次拉取的最大时间戳），避免重复拉取全部日志。
+- 轮询失败不阻塞界面，错误进入全局通知队列；连续多次失败可在页面上方给出离线提示。
 
 ### 4.4 Token 传递方式
 
@@ -329,14 +342,12 @@ class WsConnection {
 |------|---------------|------|
 | 首次页面访问 | URL Query `?token=xxx` | Bot `/web` 命令生成的链接 |
 | 后续 REST 请求 | `Authorization: Bearer xxx` Header | 从 Cookie 或 Store 读取 |
-| WebSocket 连接 | URL Query `?token=xxx` | 长连接建立时携带 |
 | Cookie | HttpOnly Cookie `trmd_token` | 后端首次验证成功后下发，前端 JS 不可读 |
 
 ### 4.5 Token 续期机制
 
 - Token 有效期 **1 小时**，由后端 `TokenManager` 控制。
-- WebSocket 建立后，即使 Token 过期也**不主动断开**已建立的连接（避免长任务中途被切断）。
-- 断线重连时必须携带当前有效的 Token；若 Token 已过期，前端检测到 `401` 后跳转至错误页，提示用户重新在 Bot 中发送 `/web`。
+- 轮询请求若返回 `401`，前端跳转至 `/error?code=401`，提示用户重新在 Bot 中发送 `/web`。
 - **不实现无感续期**：因为单用户场景下，重新获取链接的成本低于维护刷新 Token 的复杂度。
 
 ---
@@ -354,9 +365,9 @@ class WsConnection {
 | 区域 | 内容 |
 |------|------|
 | **资源卡片** | 磁盘剩余、内存占用、CPU 占用、当前运行任务数 |
-| **快捷操作** | 新建下载任务、新建转发任务、新建上传任务、打开设置 |
+| **快捷操作** | 新建下载任务、新建转发任务、新建监听任务、新建上传任务、打开设置 |
 | **最近任务** | 最近 5 条任务的状态、进度、最后更新时间 |
-| **实时速度** | 下载/上传速度折线图（基于 `/ws/monitor` 数据） |
+| **实时速度** | 下载/上传速度折线图（基于 `/api/monitor/stats` 轮询数据） |
 
 **Alpine.js 状态示例**:
 
@@ -377,22 +388,23 @@ class WsConnection {
 
 **路由**: `/tasks`
 
-**功能定位**: 任务全生命周期管理。
+**功能定位**: 任务全生命周期管理，覆盖下载、转发、上传、监听下载、监听转发五种任务类型。
 
 **布局**:
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  任务管理                                        [+ 新建任务]  │
-├──────────────────────────────────────────────────────────────┤
-│  状态筛选: [全部] [排队中] [执行中] [已完成] [失败] [已取消]    │
-├──────────────────────────────────────────────────────────────┤
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │ #101  下载任务  ● 执行中  78%  12.5 MB/s  [详情] [取消]   │  │
-│  │ #102  转发任务  ○ 排队中  [详情] [取消]                  │  │
-│  │ #103  上传任务  ✓ 已完成  2.1 GB  [详情] [删除]          │  │
-│  └────────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  任务管理                                           [+ 新建任务] │
+├─────────────────────────────────────────────────────────────────┤
+│  状态筛选: [全部] [排队中] [执行中] [监听中] [已完成] [失败] [已取消] │
+├─────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │ #101  下载任务      ● 执行中  78%  12.5 MB/s  [详情] [取消] │  │
+│  │ #102  转发任务      ○ 排队中  [详情] [取消]                │  │
+│  │ #103  监听下载任务  ■ 监听中  [详情] [取消]                │  │
+│  │ #104  上传任务      ✓ 已完成  2.1 GB  [详情] [删除]        │  │
+│  └──────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **任务列表字段**:
@@ -400,22 +412,54 @@ class WsConnection {
 | 字段 | 说明 |
 |------|------|
 | ID | 任务唯一编号 |
-| 类型 | 下载 / 转发 / 上传 |
-| 状态 | pending / queued / running / completed / failed / cancelled |
-| 进度 | 百分比 + 进度条 |
+| 类型 | 下载 / 转发 / 上传 / 监听下载 / 监听转发 |
+| 状态 | pending / queued / running / completed / failed / cancelled；监听任务长期运行，终态为 running / cancelled / failed |
+| 进度 | 百分比 + 进度条；监听任务显示已处理消息数 |
 | 速度 | 当前下载/上传速度 |
-| 已处理/总数 | 例如 `45 / 120` 条消息 |
+| 已处理/总数 | 例如 `45 / 120` 条消息；监听任务总数动态增长 |
 | 创建时间 | 本地格式化时间 |
 | 操作 | 开始 / 重试 / 取消 / 删除 / 详情 |
+
+**创建任务弹窗/抽屉**:
+
+点击“新建任务”后弹出抽屉，按任务类型展示对应表单。核心增强点：
+
+1. **源输入增强**
+   - 输入框同时支持 `username` / `chat_id` / `t.me` 链接。
+   - 右侧增加 **[解析]** 按钮，调用 `GET /api/chats/resolve?identifier=xxx`。
+   - 解析按钮带 **3 秒防抖**：点击后 3 秒内再次点击无效，避免触发 Telegram FloodWait。
+   - 解析成功后展示对话信息卡片（名称、类型、消息数、媒体数、是否有权限）。
+
+2. **目标输入增强**
+   - 在转发任务与监听转发任务中显示目标输入框，与源输入采用同样的解析能力。
+
+3. **消息范围扩展**
+   - 在原有日期范围 / ID 范围 / 多个 ID / 全部消息基础上，新增 **最近 N 条** 选项（`1 ≤ N ≤ 1000`）。
+
+4. **媒体过滤增强**
+   - 保留媒体类型多选（video / photo / document / audio）。
+   - 新增文件大小范围：最小值、最大值，单位可选 **MB / GB**；提交时统一转换为字节。
+
+5. **监听任务表单**
+   - 选择监听下载或监听转发。
+   - 源对话必填，目标对话仅在监听转发时必填。
+   - 可选媒体类型过滤。
+   - 提交后创建长期运行的 `LISTEN_*` 任务。
+
+6. **仓库备份开关**
+   - 在下载任务与监听下载任务中显示"备份到仓库频道"复选框。
+   - 默认勾选状态 = `repository.auto_backup_downloads` 配置值；用户可手动覆盖。
+   - Settings 页面仓库标签页需展示该配置项（`repository.auto_backup_downloads`），修改后影响新建下载/监听下载任务的默认勾选状态。
 
 **任务详情抽屉**:
 
 点击任务行右侧“详情”按钮，从右侧滑出抽屉，展示：
 
-- 任务参数（源频道、目标频道、消息范围、类型过滤）。
+- 任务参数（源对话、目标对话、消息范围、媒体类型、大小过滤、仓库备份选项）。
 - 进度条与子任务统计（成功/失败/跳过）。
-- 实时日志流（该任务相关的日志）。
+- 实时日志流（该任务相关的日志，通过 `/api/logs` 轮询）。
 - 错误信息列表（可展开每条错误详情）。
+- 监听任务额外展示已注册 Handler 的 chat_id 与最近处理消息时间。
 
 ### 5.3 Files 页面
 
@@ -464,7 +508,7 @@ class WsConnection {
 | **上传** | 上传并发数、媒体组大小、默认发送方式、上传后删除本地文件（`preference.upload.delete`） |
 | **代理** | 启用代理开关、代理类型、地址、端口、认证 |
 | **通知** | 完成通知、错误通知开关 |
-| **仓库** | 启用仓库开关、仓库频道 Chat ID、自动同步开关、同步间隔 |
+| **仓库** | 启用仓库开关、仓库频道标识符（username/chat_id/t.me）、自动备份下载开关、自动同步开关、同步间隔 |
 | **资源限制** | `max_concurrent_tasks`、`task_size_warning_gb`、`task_size_max_gb` 等 |
 
 > **说明**：配置已合并为单一 `config.yaml`（原 `config.yaml` + `global_config.yaml` 已合并），所有配置项统一在一个文件中管理。
@@ -527,38 +571,9 @@ class WsConnection {
 - 点击"手动同步"调用后端同步接口，按钮显示 loading 状态，完成后刷新文件列表与状态。
 - 点击"新建分发"弹出分发表单：选择目标频道、分发方式（copy_message / file_id_send / upload）、文件范围。
 
-### 5.6 Monitor 页面
+### 5.6 Monitor 页面（已废弃）
 
-**路由**: `/monitor`
-
-**功能定位**: 实时监控与日志审计。
-
-**布局**:
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│  实时监控                                                    │
-├──────────────────────────────────────────────────────────────┤
-│  CPU: 34%   内存: 2.1/8 GB   磁盘剩余: 45.2 GB              │
-├──────────────────────────────────────────────────────────────┤
-│  [下载速度曲线]          [上传速度曲线]                       │
-├──────────────────────────────────────────────────────────────┤
-│  任务列表                                                    │
-│  #101 下载  ████████████░░ 80%  12.5 MB/s                   │
-├──────────────────────────────────────────────────────────────┤
-│  日志流                                       [过滤 ▼] [清空] │
-│  [2026-06-18 10:23:01] INFO  任务 #101 开始执行              │
-│  [2026-06-18 10:23:05] DEBUG 获取消息 100-150 元数据         │
-│  ...                                                         │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**交互要点**:
-
-- 监控数据来自 `/ws/monitor`，每 2 秒推送一次。
-- 日志来自 `/ws/logs`，按级别高亮（INFO 绿色、WARNING 黄色、ERROR 红色）。
-- 日志区域默认自动滚动到底部，用户向上滚动时暂停自动滚动，回到底部后恢复。
-- 支持按日志级别过滤与关键字搜索。
+> **设计变更说明**：Monitor 页面已合并至 Dashboard（见 [interaction-enhancement-design.md](./interaction-enhancement-design.md) v7.0 设计变更），不再保留独立页面。原 Monitor 页面的路由 `/monitor` 已废弃，监控统计数据通过 Dashboard 页面的 REST 轮询获取（`GET /api/monitor/stats`，默认每 5 秒拉取一次），在 Dashboard 的"实时速度"区域以折线图展示。日志查看功能已移除，任务相关日志在 Tasks 页面的任务详情抽屉中查看。
 
 ---
 
@@ -586,23 +601,28 @@ class WsConnection {
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | 任务名称 | text | 否 | 用户自定义，默认生成 |
-| 源频道 | text | 是 | 频道链接或 @username |
-| 消息范围 | 选择器 | 是 | 日期/ID/多ID链接/全部 |
-| 类型过滤 | checkbox | 否 | 视频/图片/文档/音频等 |
+| 源对话 | text + 按钮 | 是 | 支持 `username` / `chat_id` / `t.me` 链接；右侧 **[解析]** 按钮调用 `GET /api/chats/resolve` |
+| 消息范围 | 选择器 | 是 | 日期 / ID / 多 ID 链接 / 全部 / 最近 N 条 |
+| 媒体类型过滤 | checkbox | 否 | 视频 / 图片 / 文档 / 音频等 |
+| 文件大小范围 | 数字 + 单位选择 | 否 | 最小值、最大值，单位可选 **MB / GB**；提交时转换为字节 |
+| 仓库备份 | checkbox | 否 | 是否备份到仓库频道；默认继承 `repository.auto_backup_downloads` |
 | 保存路径 | text | 否 | 默认使用配置中的下载目录 |
+
+**源对话解析信息卡片**：解析成功后展示 `chat_name`、`chat_type`、`message_count`、`media_count`、`has_access`。
 
 ### 6.3 转发任务表单
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | 任务名称 | text | 否 | 用户自定义 |
-| 源频道 | text | 是 | 源频道链接或 @username |
-| 目标频道 | text | 是 | 目标频道链接或 @username |
+| 源对话 | text + 按钮 | 是 | 支持 `username` / `chat_id` / `t.me` 链接；带解析按钮与信息卡片 |
+| 目标对话 | text + 按钮 | 是 | 与源对话同样的解析能力 |
 | 消息范围 | 选择器 | 是 | 同上 |
-| 类型过滤 | checkbox | 否 | 同上 |
+| 媒体类型过滤 | checkbox | 否 | 同上 |
+| 文件大小范围 | 数字 + 单位选择 | 否 | 最小值、最大值，单位可选 **MB / GB** |
 | 分发方式 | select | 是 | `copy_message`（默认）/ `file_id_send` / `upload` |
 | 启用去重 | checkbox | 否 | 基于仓库文件索引跳过已分发文件 |
-| 去重状态 | 只读指示器 | 否 | 显示去重后实际传输数量（如"去重后 45 / 原始 120 条"） |
+| 去重状态 | 只读指示器 | 否 | 显示去重后实际传输数量（如“去重后 45 / 原始 120 条”） |
 | 上传后删除本地文件 | checkbox | 否 | 默认勾选 |
 
 ### 6.4 上传任务表单
@@ -615,21 +635,42 @@ class WsConnection {
 | 发送为媒体组 | checkbox | 否 | 默认勾选，按 10 个一组拆分 |
 | 上传后删除本地文件 | checkbox | 否 | 默认不勾选 |
 
-### 6.5 表单校验规则
+### 6.5 监听任务表单
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| 任务类型 | radio | 是 | `listen_download` / `listen_forward` |
+| 源对话 | text + 按钮 | 是 | 支持 `username` / `chat_id` / `t.me` 链接；带解析按钮与信息卡片 |
+| 目标对话 | text + 按钮 | 监听转发时必填 | 与源对话同样的解析能力 |
+| 媒体类型过滤 | checkbox | 否 | 视频 / 图片 / 文档 / 音频等 |
+| 仓库备份 | checkbox | 否 | 监听下载任务显示；默认继承全局配置 |
+
+**说明**：
+
+- 监听任务创建后进入 `running` 状态，长期运行；不会进入 `completed` 状态。
+- 同一 `chat_id` + 任务类型（`listen_download` 或 `listen_forward`）已存在运行中/待启动任务时，后端返回 `409 LISTEN_ALREADY_EXISTS`。
+- 新消息到达后动态生成 `TaskItem`，通过任务列表轮询即可观察处理进度。
+
+### 6.6 表单校验规则
 
 | 校验项 | 规则 |
 |--------|------|
-| 频道链接 | 支持 `https://t.me/xxx`、`t.me/xxx`、`@username`、数字 ID |
+| 源/目标标识符 | 支持 `https://t.me/xxx`、`t.me/xxx`、`@username`、纯 username、纯数字 chat_id |
+| 解析按钮防抖 | 点击后至少 3 秒内不可再次点击 |
 | 消息 ID 范围 | 最小 ID ≤ 最大 ID，且均为正整数 |
 | 日期范围 | 结束日期 ≥ 开始日期 |
 | 多 ID/链接 | 每行一条，去重后至少一条有效 |
+| 最近 N 条 | `N` 为整数，`1 ≤ N ≤ 1000` |
+| 文件大小范围 | 最小值 ≤ 最大值；单位 MB/GB，提交前转换为字节 |
 | 文件选择 | 至少选择一个文件，总大小不超过当前磁盘剩余 - `min_disk_space_gb` |
+| 监听任务冲突 | 前端不预检，依赖后端 `409` 响应提示 |
 
-### 6.6 创建后的行为
+### 6.7 创建后的行为
 
 - 创建成功后关闭弹窗，自动跳转到 Tasks 页面并滚动到新任务。
 - 如果后端返回资源不足（磁盘空间不够），弹窗提示用户清理磁盘。
 - 如果任务进入 `queued` 状态，列表中显示“排队中”与当前队列位置。
+- 监听任务创建成功后直接进入“监听中”，新消息到达时任务进度与日志自动更新。
 
 ---
 
@@ -637,7 +678,7 @@ class WsConnection {
 
 ### 7.1 选择模式
 
-所有批量下载/转发任务共享同一消息范围选择器组件，支持四种互斥模式：
+所有批量下载/转发任务共享同一消息范围选择器组件，支持五种互斥模式：
 
 | 模式 | UI 组件 | 输出数据结构 |
 |------|---------|-------------|
@@ -645,16 +686,18 @@ class WsConnection {
 | **消息 ID 范围** | 最小 ID + 最大 ID 输入框 | `{mode: 'id_range', min_id: 100, max_id: 500}` |
 | **多个 ID / 链接** | 多行文本域 | `{mode: 'id_list', items: ['100', '150', 'https://t.me/ch/200']}` |
 | **全部消息** | 单选 + 二次确认 | `{mode: 'all'}` |
+| **最近 N 条** | 单选 + 数字输入框 | `{mode: 'recent', recent_count: 10}` |
 
 ### 7.2 组件 UI 示例
 
 ```html
 <div x-data="messageRangeSelector()" class="space-y-4">
-    <div class="flex gap-4">
+    <div class="flex flex-wrap gap-4">
         <label><input type="radio" x-model="mode" value="date_range"> 日期范围</label>
         <label><input type="radio" x-model="mode" value="id_range"> 消息 ID 范围</label>
         <label><input type="radio" x-model="mode" value="id_list"> 多个 ID / 链接</label>
         <label><input type="radio" x-model="mode" value="all"> 全部消息</label>
+        <label><input type="radio" x-model="mode" value="recent"> 最近 N 条</label>
     </div>
 
     <div x-show="mode === 'date_range'" class="flex gap-4">
@@ -674,6 +717,13 @@ class WsConnection {
         <p x-text="`已解析 ${parsedCount} 条`"></p>
     </div>
 
+    <div x-show="mode === 'recent'" class="flex items-center gap-4">
+        <span>最近</span>
+        <input type="number" x-model="recentCount" min="1" max="1000" placeholder="N">
+        <span>条消息</span>
+        <p class="text-sm text-gray-500">取值范围 1 - 1000，超过 1000 后端会自动截断</p>
+    </div>
+
     <div x-show="mode === 'all'" class="p-4 bg-yellow-50 text-yellow-800 rounded">
         ⚠️ 将处理频道历史所有消息，可能耗时较长。统计时采用抽样估算。
     </div>
@@ -685,6 +735,7 @@ class WsConnection {
 - **模式切换时保留输入**：用户切换模式后，之前填写的内容保留，避免误清空。
 - **多 ID/链接解析**：前端实时解析文本域内容，高亮无效行，显示有效数量。
 - **全部消息二次确认**：选择“全部消息”后，点击“统计”按钮前先弹出确认对话框。
+- **最近 N 条校验**：前端校验 `1 ≤ recentCount ≤ 1000`；`N ≤ 0` 时给出错误提示，不可提交。
 - **联动统计**：选择模式并填写参数后，点击“统计”调用 `/api/chats/{chat_id}/messages/estimate` 获取消息数与总大小。
 
 ### 7.4 解析规则
@@ -700,6 +751,7 @@ class WsConnection {
 
 - 前端仅做格式校验，实际消息存在性、可访问性由后端在统计/执行阶段验证。
 - “全部消息”模式下，后端采用头尾各 10 条样本进行估算，避免遍历全部消息。
+- “最近 N 条”模式下，后端按时间倒序取最多 1000 条；若 `recent_count > 1000`，自动截断至 1000 并记录 warning 日志。
 
 ---
 
@@ -710,6 +762,8 @@ class WsConnection {
 任务创建前，后端返回统计结果，前端根据结果展示不同提示：
 
 > **去重感知计数**：当转发任务启用去重时，资源保护阈值判断基于**去重后的实际传输量**，而非原始消息总数。前端在统计结果中同时展示原始消息数与去重后传输数，让用户明确实际资源消耗。
+>
+> **过滤感知统计**：媒体类型过滤与文件大小范围会作为参数一并传入 `estimate` 接口，统计结果已反映过滤后的数据量。
 
 | 任务总量 | 前端行为 |
 |---------|---------|
@@ -761,7 +815,12 @@ class WsConnection {
 ```javascript
 // 创建任务前的资源判断
 async function handleCreate() {
-    const estimate = await api.estimateMessages(this.chatId, this.rangePayload);
+    const estimate = await api.estimateMessages(this.chatId, {
+        ...this.rangePayload,
+        media_types: this.mediaTypes,
+        min_size: this.minSizeBytes,
+        max_size: this.maxSizeBytes,
+    });
     this.estimate = estimate;
 
     if (estimate.total_size_gb > TASK_SIZE_MAX_GB) {
@@ -791,8 +850,8 @@ async function handleCreate() {
 | 失效场景 | 前端行为 |
 |---------|---------|
 | URL Token 无效 | 直接跳转 `/error?code=401` |
-| API 返回 401 | 跳转 `/error?code=401` |
-| WebSocket 连接因 Token 过期被拒绝 | 显示重连失败提示，3 次失败后跳转 `/error?code=401` |
+| API / 轮询请求返回 401 | 跳转 `/error?code=401` |
+| 连续多次轮询因认证失败 | 页面顶部显示离线/认证失败提示，引导重新获取链接 |
 | Token 被 Bot `/web_revoke` 撤销 | 后续 API 返回 403，跳转 `/error?code=403` |
 
 ### 9.3 错误页面设计
@@ -804,7 +863,7 @@ async function handleCreate() {
 | 401 | Token 已过期 | 当前访问链接已失效 | 请在 Bot 中重新发送 `/web` 获取新链接 |
 | 403 | Token 已撤销 | 管理员已撤销该 Token | 请重新发送 `/web` |
 | 404 | 页面不存在 | 访问的页面未找到 | 返回 Dashboard |
-| 500 | 服务器内部错误 | 后端发生异常 | 查看 Monitor 页面日志或重启服务 |
+| 500 | 服务器内部错误 | 后端发生异常 | 查看 Dashboard 页面日志或重启服务 |
 | 502 | 服务未启动 | 无法连接到后端 | 检查服务是否运行 |
 | 503 | 资源不足 | 磁盘/内存不满足要求 | 清理磁盘空间或降低并发配置 |
 
@@ -825,7 +884,7 @@ async function handleCreate() {
 | 层次 | 范围 | 工具建议 |
 |------|------|---------|
 | **单元测试** | Alpine.js 组件逻辑、表单校验、消息范围解析、资源判断逻辑 | [Vitest](https://vitest.dev/) + [happy-dom](https://github.com/capricorn86/happy-dom)（零配置，不依赖浏览器） |
-| **端到端测试** | 页面跳转、任务创建流程、WebSocket 实时更新、Token 失效跳转 | [Playwright](https://playwright.dev/) |
+| **端到端测试** | 页面跳转、任务创建流程、REST 轮询实时更新、Token 失效跳转 | [Playwright](https://playwright.dev/) |
 
 ### 10.2 单元测试重点
 
@@ -834,21 +893,34 @@ async function handleCreate() {
    - ID 范围：最小 ≤ 最大，均为正整数。
    - 多 ID/链接：正确提取消息 ID 与频道标识，过滤空行与非法输入。
    - 全部消息：返回 `{mode: 'all'}`。
+   - 最近 N 条：`1 ≤ N ≤ 1000`；`N ≤ 0` 或超过上限时给出明确错误。
 
-2. **资源保护判断函数**
+2. **标识符解析与校验**
+   - 支持 `https://t.me/xxx`、`t.me/xxx`、`@username`、纯 username、纯数字 chat_id。
+   - 解析按钮防抖：3 秒内重复点击仅触发一次。
+   - 解析结果卡片正确渲染 ResolvedChat 字段。
+
+3. **文件大小过滤**
+   - MB / GB 单位与字节转换正确。
+   - 最小值 ≤ 最大值。
+   - 边界值（0、空值、极大值）处理。
+
+4. **资源保护判断函数**
    - `< 5GB`：返回 `allow`。
    - `5GB - 10GB`：返回 `warning`。
    - `> 10GB`：返回 `forbidden`。
    - 磁盘剩余不足 `min_disk_space_gb`：返回 `disk_insufficient`。
 
-3. **API 错误处理**
+5. **API 错误处理**
    - 401 跳转错误页。
    - 5xx 触发全局通知。
    - 网络异常触发重试。
 
-4. **表单校验**
+6. **表单校验**
    - 必填项缺失。
-   - 频道链接格式。
+   - 源/目标标识符格式。
+   - 监听任务类型切换时目标输入框显隐。
+   - 仓库备份开关默认值继承逻辑。
    - 文件选择非空。
 
 ### 10.3 端到端测试重点
@@ -861,14 +933,25 @@ async function handleCreate() {
    - 页面加载 < 3s。
    - 资源卡片、最近任务正确显示。
 
-3. **创建下载任务**
-   - 填写表单 → 点击统计 → 确认创建 → 任务出现在列表中。
+3. **源/目标标识符解析**
+   - 输入 username / chat_id / t.me 链接 → 点击解析 → 展示对话信息卡片。
+   - 解析按钮 3 秒防抖生效。
 
-4. **WebSocket 实时更新**
-   - 创建任务后，任务进度条自动增长。
-   - Monitor 页面日志自动追加。
+4. **创建下载任务（含 recent 模式）**
+   - 选择“最近 N 条”，填写 N → 统计 → 创建 → 任务出现在列表中。
 
-5. **资源保护提示**
+5. **创建转发任务（含大小过滤）**
+   - 配置源/目标、媒体类型、大小范围 → 统计 → 创建。
+
+6. **创建监听任务**
+   - 选择监听下载 / 监听转发 → 解析源对话 → 创建 → 任务进入“监听中”。
+   - 同一 chat_id 重复创建监听任务时后端返回 409，前端展示冲突提示。
+
+7. **REST 轮询实时更新**
+   - 创建任务后，任务列表与进度条随轮询自动更新。
+   - Dashboard 页面监控统计数据随轮询自动更新。
+
+8. **资源保护提示**
    - 构造大任务触发 5GB 告警弹窗。
    - 构造超大任务触发 10GB 禁止弹窗。
 
@@ -878,7 +961,7 @@ async function handleCreate() {
 |------|-----------|
 | `static/js/utils.js`（解析器/校验器） | ≥ 90% |
 | `static/js/api.js` | ≥ 80% |
-| `static/js/ws.js` | ≥ 70% |
+| `static/js/polling.js` | ≥ 70% |
 | 页面级 `x-data` 逻辑 | ≥ 60%（E2E 覆盖） |
 
 ### 10.5 持续集成建议
@@ -899,16 +982,16 @@ async function handleCreate() {
 |------|---------|------|---------|
 | Alpine.js | v3.x | 响应式状态与交互 | CDN / 本地 |
 | Tailwind CSS | v3.x | 原子化样式 | CDN / 本地 |
-| Chart.js 或 ApexCharts | v3.x | Dashboard 与 Monitor 图表 | CDN / 本地 |
+| Chart.js 或 ApexCharts | v3.x | Dashboard 图表 | CDN / 本地 |
 | Font Awesome / Heroicons | - | 图标 | CDN / 本地 |
 
 ### 11.2 后端依赖
 
-WebUI 依赖后端 FastAPI 提供 API 与 WebSocket：
+WebUI 依赖后端 FastAPI 提供 REST API：
 
 | 依赖 | 用途 |
 |------|------|
-| FastAPI | REST API 与 WebSocket 服务 |
+| FastAPI | REST API 服务 |
 | uvicorn | ASGI 服务器 |
 | python-multipart | 文件上传解析 |
 | jinja2 | HTML 模板渲染（可选，若使用纯静态文件则不需要） |
@@ -918,10 +1001,11 @@ WebUI 依赖后端 FastAPI 提供 API 与 WebSocket：
 | 后端模块 | WebUI 使用方式 |
 |---------|---------------|
 | `TokenManager` | 认证中间件校验 Token |
+| `IdentifierService` | `GET /api/chats/resolve` 解析源/目标对话 |
 | `TaskManager` | `/api/tasks/*` 路由调用 |
 | `FileManager` | `/api/files/*` 路由调用 |
 | `ConfigManager` | `/api/config` 路由调用 |
-| `Monitor` | `/ws/monitor`、`/ws/logs`、`/api/monitor/stats` |
+| `Monitor` | `GET /api/monitor/stats` 轮询（监控数据已合并至 Dashboard 展示）、`GET /api/logs` 轮询 |
 
 ---
 
@@ -933,7 +1017,8 @@ WebUI 依赖后端 FastAPI 提供 API 与 WebSocket：
 |------|------|---------|
 | **Token 链接泄露** | 拿到链接的人可在 1 小时内访问 WebUI | Token 有效期短、支持 `/web_revoke` 撤销、使用 HttpOnly Cookie |
 | **大任务统计慢** | “全部消息”模式可能 still 耗时 | 后端采用抽样估算，前端提供取消按钮 |
-| **WebSocket 断线** | 长任务中网络波动导致状态不同步 | 自动重连 + 重发最后状态 |
+| **轮询延迟** | 任务状态/日志更新存在秒级延迟 | 合理设置轮询间隔（任务 3s / 日志 2s / 监控 5s） |
+| **标识符解析触发 FloodWait** | 频繁调用 `get_chat` 导致 Telegram 限流 | 解析按钮 3 秒防抖；错误提示引导用户稍后重试 |
 | **前端无构建导致测试工具有限** | 无法使用现代前端测试生态的全部特性 | 使用 Vitest + happy-dom 做单元测试，Playwright 做 E2E |
 | **单用户下无多页面隔离** | 同一用户多个浏览器标签可能操作冲突 | 状态由后端统一管理，前端只作为视图；并发限制由后端控制 |
 | **页面加载超时** | 单页应用首次加载需拉取多个静态资源 | 资源本地化、开启 gzip/ brotli、按需加载 Alpine 组件 |
@@ -944,8 +1029,8 @@ WebUI 依赖后端 FastAPI 提供 API 与 WebSocket：
 |------|------|
 | **单用户** | 无需登录页、无需多用户权限隔离 |
 | **Bot 与 WebUI 同时运行** | `/web` 命令生成链接时，FastAPI 服务已启动 |
-| **浏览器支持现代 Web 标准** | 支持 Fetch、WebSocket、CSS Grid/Flexbox、ES6+ |
-| **后端 API 按主设计文档实现** | 本模块设计基于 `/api/*` 与 `/ws/*` 接口契约 |
+| **浏览器支持现代 Web 标准** | 支持 Fetch、CSS Grid/Flexbox、ES6+ |
+| **后端 API 按主设计文档实现** | 本模块设计基于 `/api/*` 接口契约 |
 | **无 HTTPS 要求** | 本地/内网使用 HTTP，若需 HTTPS 由反向代理处理 |
 
 ---
@@ -960,10 +1045,11 @@ module/web/                      # WebUI 前端目录
 │   ├── js/
 │   │   ├── app.js               # Alpine 全局 store、路由初始化
 │   │   ├── api.js               # REST API 封装
-│   │   ├── ws.js                # WebSocket 封装
-│   │   ├── utils.js             # 消息范围解析、表单校验、资源判断
+│   │   ├── polling.js           # REST 轮询封装
+│   │   ├── utils.js             # 消息范围解析、标识符校验、表单校验、资源判断
 │   │   ├── components/
 │   │   │   ├── messageRangeSelector.js
+│   │   │   ├── chatResolver.js  # 源/目标对话解析与信息卡片
 │   │   │   ├── taskList.js
 │   │   │   ├── fileTree.js
 │   │   │   └── resourceAlert.js
@@ -973,7 +1059,7 @@ module/web/                      # WebUI 前端目录
 │   │       ├── files.js
 │   │       ├── repository.js
 │   │       ├── settings.js
-│   │       └── monitor.js
+│   │       └── (monitor.js 已废弃，监控功能合并至 dashboard.js)
 │   └── img/
 │       └── logo.png
 ├── templates/
@@ -995,6 +1081,8 @@ module/web/                      # WebUI 前端目录
 | `temp` | 临时目录与上传任务根目录 |
 | `repository.enabled` | 仓库启用开关，控制 Repository 页面可用性 |
 | `repository.chat_id` | 仓库频道 Chat ID |
+| `repository.auto_backup_downloads` | 下载/监听下载任务默认仓库备份行为；影响下载/监听下载表单的"备份到仓库频道" checkbox 默认勾选状态 |
+| `repository.repository_channel` | 仓库频道标识符（username/chat_id），用于任务级备份 |
 | `repository.auto_sync` | 自动同步开关 |
 | `repository.sync_interval` | 同步间隔（秒） |
 | `preference.upload.delete` | 上传后删除本地文件偏好 |
