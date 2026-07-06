@@ -135,12 +135,13 @@
         <div class="flex items-center space-x-3">
           <!-- Client 状态指示器 -->
           <div class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium"
-               :class="clientStatusClass">
+               :class="clientStatusClass"
+               data-testid="client-status-indicator">
             <span class="w-2 h-2 rounded-full" :class="{'animate-pulse': clientStatus.status === 'not_initialized', 'bg-green-400': clientStatus.status === 'connected', 'bg-red-400': clientStatus.status === 'disconnected', 'bg-yellow-400': clientStatus.status === 'not_initialized', 'bg-slate-400': clientStatus.status === 'error'}"></span>
             <span x-text="clientStatusText"></span>
           </div>
           <!-- 刷新按钮 -->
-          <button @click="refreshAll" class="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700" title="刷新">
+          <button @click="refreshAll" class="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700" title="刷新" data-testid="refresh-btn">
             <svg class="w-5 h-5" :class="{'animate-spin': loading}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
             </svg>
@@ -194,7 +195,7 @@
           <!-- 资源状态卡片 -->
           <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <!-- 磁盘空间 -->
-            <div class="card">
+            <div class="card" data-testid="disk-card">
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm text-slate-400">磁盘空间</p>
@@ -222,7 +223,7 @@
             </div>
 
             <!-- 内存使用 -->
-            <div class="card">
+            <div class="card" data-testid="memory-card">
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm text-slate-400">内存使用</p>
@@ -250,7 +251,7 @@
             </div>
 
             <!-- CPU 使用率 -->
-            <div class="card">
+            <div class="card" data-testid="cpu-card">
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm text-slate-400">CPU 使用率</p>
@@ -276,7 +277,7 @@
             </div>
 
             <!-- 运行任务数 -->
-            <div class="card">
+            <div class="card" data-testid="running-tasks-card">
               <div class="flex items-center justify-between">
                 <div>
                   <p class="text-sm text-slate-400">运行任务</p>
@@ -314,25 +315,25 @@
               <h2 class="card-title">快捷操作</h2>
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-              <a href="tasks.html?action=create&type=download" class="btn btn-primary">
+              <a href="tasks.html?action=create&type=download" class="btn btn-primary" data-testid="quick-download-btn">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
                 </svg>
                 <span>新建下载</span>
               </a>
-              <a href="tasks.html?action=create&type=forward" class="btn btn-success">
+              <a href="tasks.html?action=create&type=forward" class="btn btn-success" data-testid="quick-forward-btn">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
                 </svg>
                 <span>新建转发</span>
               </a>
-              <a href="tasks.html?action=create&type=upload" class="btn btn-warning">
+              <a href="tasks.html?action=create&type=upload" class="btn btn-warning" data-testid="quick-upload-btn">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path>
                 </svg>
                 <span>新建上传</span>
               </a>
-              <a href="config.html" class="btn btn-secondary">
+              <a href="config.html" class="btn btn-secondary" data-testid="quick-settings-btn">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
