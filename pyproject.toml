@@ -38,6 +38,10 @@ build = [
     "nuitka>=2.0.0",
     "zstandard>=0.20.0",
 ]
+e2e = [
+    "pytest-playwright>=0.4.0",
+    "playwright>=1.40.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
