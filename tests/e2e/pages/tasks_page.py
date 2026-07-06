@@ -104,7 +104,9 @@ class TasksPage(BasePage):
 
     # ========== 导航方法 ==========
 
-    def navigate(self, base_url: str, action: str = None, task_type: str = None) -> None:
+    def navigate(
+        self, base_url: str, action: str = None, task_type: str = None
+    ) -> None:
         """
         导航到任务管理页
 
@@ -175,7 +177,9 @@ class TasksPage(BasePage):
         testid = status_map.get(status, self.FILTER_STATUS_ALL)
         locator = self.get_by_testid(testid)
         # 检查是否有btn-primary类
-        return locator.locator(".btn-primary").count() > 0 or "btn-primary" in locator.get_attribute("class")
+        return locator.locator(
+            ".btn-primary"
+        ).count() > 0 or "btn-primary" in locator.get_attribute("class")
 
     # ========== 类型筛选 ==========
 

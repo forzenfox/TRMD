@@ -256,7 +256,10 @@ class TestCreateDownloadTask:
         tasks_page.fill_source_chat(test_source_chat)
 
         # 验证源频道输入值
-        assert tasks_page.get_value_by_testid(TasksPage.INPUT_SOURCE_CHAT) == test_source_chat
+        assert (
+            tasks_page.get_value_by_testid(TasksPage.INPUT_SOURCE_CHAT)
+            == test_source_chat
+        )
 
         # 选择ID范围模式
         tasks_page.select_range_mode("id_range")
@@ -295,7 +298,7 @@ class TestCreateDownloadTask:
             source_chat=test_source_chat,
             range_mode="id_range",
             min_id="100",
-            max_id="105"
+            max_id="105",
         )
 
         # 等待响应
