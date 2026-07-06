@@ -3,11 +3,11 @@
 
 覆盖登录成功、Token无效、自动登录、Token过期等场景。
 """
+
 import pytest
 from playwright.sync_api import Page
 
 from ..pages.login_page import LoginPage
-from ..fixtures.test_config import E2E_SERVER_URL
 
 
 @pytest.fixture
@@ -52,9 +52,7 @@ class TestLoginSuccess:
 class TestLoginFailure:
     """L002: Token无效场景"""
 
-    def test_invalid_token_shows_error(
-        self, login_page: LoginPage, live_server: str
-    ):
+    def test_invalid_token_shows_error(self, login_page: LoginPage, live_server: str):
         """
         L002: 使用无效Token显示错误提示
 
@@ -140,9 +138,7 @@ class TestTokenExpiry:
 class TestPasswordToggle:
     """L005: 显示密码场景"""
 
-    def test_toggle_password_visibility(
-        self, login_page: LoginPage, live_server: str
-    ):
+    def test_toggle_password_visibility(self, login_page: LoginPage, live_server: str):
         """
         L005: 点击切换按钮显示/隐藏Token
 

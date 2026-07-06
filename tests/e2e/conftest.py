@@ -3,18 +3,17 @@ E2E测试全局Fixture
 
 提供服务启动、认证、浏览器配置等全局测试基础设施。
 """
+
 import os
 import subprocess
 import time
 import pytest
 import requests
-from pathlib import Path
-from playwright.sync_api import Page, BrowserContext, Playwright
+from playwright.sync_api import Page, BrowserContext
 
 from .fixtures.test_config import (
     PROJECT_ROOT,
     E2E_SERVER_URL,
-    E2E_SERVER_PORT,
     SERVER_START_TIMEOUT,
     NAVIGATION_TIMEOUT,
     get_test_token,

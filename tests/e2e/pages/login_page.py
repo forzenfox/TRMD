@@ -3,6 +3,7 @@ LoginPage - 登录页Page Object
 
 封装登录页面的交互逻辑，提供稳定的data-testid选择器接口。
 """
+
 from playwright.sync_api import Page
 from .base_page import BasePage
 from ..fixtures.test_config import NAVIGATION_TIMEOUT
@@ -93,7 +94,9 @@ class LoginPage(BasePage):
 
     def is_token_visible(self) -> bool:
         """检查Token是否可见（非password类型）"""
-        input_type = self.page.locator(f'[data-testid="{self.TOKEN_INPUT}"]').get_attribute("type")
+        input_type = self.page.locator(
+            f'[data-testid="{self.TOKEN_INPUT}"]'
+        ).get_attribute("type")
         return input_type == "text"
 
     def wait_for_dashboard(self, timeout: int = NAVIGATION_TIMEOUT) -> None:

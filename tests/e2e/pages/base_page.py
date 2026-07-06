@@ -3,6 +3,7 @@ BasePage - Page Object基类
 
 提供统一的data-testid选择器接口和通用页面操作方法。
 """
+
 from typing import Optional
 from playwright.sync_api import Page, Locator, Response
 
@@ -17,10 +18,7 @@ class BasePage:
 
     def wait_for_selector(self, testid: str, timeout: int = 10000) -> Locator:
         """等待并返回指定testid的元素"""
-        return self.page.wait_for_selector(
-            f'[data-testid="{testid}"]',
-            timeout=timeout
-        )
+        return self.page.wait_for_selector(f'[data-testid="{testid}"]', timeout=timeout)
 
     def get_by_testid(self, testid: str) -> Locator:
         """获取指定testid的Locator（不等待）"""
@@ -92,7 +90,9 @@ class BasePage:
         """等待页面跳转到匹配URL"""
         self.page.wait_for_url(url_pattern, timeout=timeout)
 
-    def wait_for_load_state(self, state: str = "networkidle", timeout: int = 30000) -> None:
+    def wait_for_load_state(
+        self, state: str = "networkidle", timeout: int = 30000
+    ) -> None:
         """等待页面加载状态"""
         self.page.wait_for_load_state(state, timeout=timeout)
 

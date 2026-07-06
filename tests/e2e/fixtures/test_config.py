@@ -3,6 +3,7 @@ E2E测试配置
 
 定义测试凭证、测试频道、超时配置等。
 """
+
 import os
 from pathlib import Path
 
@@ -20,6 +21,7 @@ NAVIGATION_TIMEOUT = 15000
 API_RESPONSE_TIMEOUT = 15000
 SERVER_START_TIMEOUT = 30  # 秒
 
+
 # 测试凭证（从环境变量读取）
 def get_test_token() -> str:
     """获取测试Token"""
@@ -28,6 +30,7 @@ def get_test_token() -> str:
         raise ValueError("请设置环境变量 TRMD_TEST_TOKEN")
     return token
 
+
 def get_test_api_id() -> str:
     """获取Telegram API ID"""
     api_id = os.environ.get("TG_API_ID")
@@ -35,12 +38,14 @@ def get_test_api_id() -> str:
         raise ValueError("请设置环境变量 TG_API_ID")
     return api_id
 
+
 def get_test_api_hash() -> str:
     """获取Telegram API Hash"""
     api_hash = os.environ.get("TG_API_HASH")
     if not api_hash:
         raise ValueError("请设置环境变量 TG_API_HASH")
     return api_hash
+
 
 # 测试频道配置
 TEST_DOWNLOAD_SOURCE = os.environ.get("E2E_TEST_SOURCE_CHANNEL", "")
