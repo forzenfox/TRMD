@@ -128,7 +128,7 @@
           <h1 class="text-xl font-semibold text-white">文件管理</h1>
         </div>
         <div class="flex items-center space-x-3">
-          <button @click="refreshFiles()" class="btn btn-secondary">
+          <button @click="refreshFiles()" class="btn btn-secondary" data-testid="refresh-btn">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
             </svg>
@@ -138,6 +138,7 @@
             x-show="selectedFiles.length > 0"
             @click="openUploadModal()"
             class="btn btn-primary"
+            data-testid="upload-selected-btn"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path>
@@ -182,7 +183,7 @@
         </div>
 
         <!-- 面包屑导航 -->
-        <div class="breadcrumb">
+        <div class="breadcrumb" data-testid="breadcrumb-container">
           <template x-for="(crumb, index) in getBreadcrumbs()" :key="crumb.path">
             <span class="flex items-center">
               <span x-show="index > 0" class="breadcrumb-separator mx-1">/</span>
@@ -191,17 +192,19 @@
                 href="#"
                 :class="index === getBreadcrumbs().length - 1 ? 'breadcrumb-item active' : 'breadcrumb-item'"
                 x-text="crumb.name"
+                data-testid="breadcrumb-item"
               ></a>
             </span>
           </template>
         </div>
 
         <!-- 工具栏 -->
-        <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center justify-between mb-4" data-testid="toolbar">
           <div class="flex items-center gap-2">
             <button 
               @click="selectAllFiles()"
               class="btn btn-sm btn-secondary"
+              data-testid="select-all-btn"
             >
               全选
             </button>
@@ -209,6 +212,7 @@
               x-show="selectedFiles.length > 0"
               @click="clearSelection()"
               class="btn btn-sm btn-secondary"
+              data-testid="clear-selection-btn"
             >
               清空选择
             </button>
@@ -218,6 +222,7 @@
               @click="toggleSort('name')"
               class="btn btn-sm"
               :class="sortBy === 'name' ? 'btn-primary' : 'btn-secondary'"
+              data-testid="sort-name-btn"
             >
               名称
               <span x-show="sortBy === 'name'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
@@ -226,6 +231,7 @@
               @click="toggleSort('size')"
               class="btn btn-sm"
               :class="sortBy === 'size' ? 'btn-primary' : 'btn-secondary'"
+              data-testid="sort-size-btn"
             >
               大小
               <span x-show="sortBy === 'size'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
@@ -234,6 +240,7 @@
               @click="toggleSort('date')"
               class="btn btn-sm"
               :class="sortBy === 'date' ? 'btn-primary' : 'btn-secondary'"
+              data-testid="sort-date-btn"
             >
               日期
               <span x-show="sortBy === 'date'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
@@ -253,7 +260,7 @@
         </div>
 
         <!-- 文件列表 -->
-        <div x-show="!loading && !error" class="card">
+        <div x-show="!loading && !error" class="card" data-testid="files-container">
           <div x-show="files.length === 0" class="py-8 text-center">
             <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
@@ -262,7 +269,7 @@
           </div>
 
           <div x-show="files.length > 0" class="overflow-x-auto">
-            <table class="table">
+            <table class="table" data-testid="files-table">
               <thead>
                 <tr>
                   <th class="w-10"></th>
@@ -277,6 +284,7 @@
                   <tr 
                     :class="isSelected(file) ? 'bg-primary-500/10' : ''"
                     @dblclick="file.is_directory && enterDirectory(file.name)"
+                    data-testid="file-row"
                   >
                     <td>
                       <input 
@@ -285,6 +293,7 @@
                         @change="toggleFileSelection(file)"
                         :disabled="file.is_directory"
                         class="w-4 h-4 rounded border-slate-600 bg-slate-700 text-primary-600 focus:ring-primary-500"
+                        data-testid="file-checkbox"
                       >
                     </td>
                     <td>
@@ -296,12 +305,13 @@
                           href="#"
                           class="text-primary-400 hover:text-primary-300"
                           x-text="file.name"
+                          data-testid="file-name"
                         ></a>
-                        <span x-show="!file.is_directory" class="text-white" x-text="file.name"></span>
+                        <span x-show="!file.is_directory" class="text-white" x-text="file.name" data-testid="file-name"></span>
                       </div>
                     </td>
-                    <td class="text-sm text-slate-400" x-text="file.is_directory ? '-' : formatFileSize(file.size)"></td>
-                    <td class="text-sm text-slate-400" x-text="formatTime(file.modified_at)"></td>
+                    <td class="text-sm text-slate-400" x-text="file.is_directory ? '-' : formatFileSize(file.size)" data-testid="file-size"></td>
+                    <td class="text-sm text-slate-400" x-text="formatTime(file.modified_at)" data-testid="file-date"></td>
                     <td>
                       <button 
                         x-show="!file.is_directory && isMediaFile(file)"
@@ -332,14 +342,15 @@
           x-transition:leave-start="translate-y-0"
           x-transition:leave-end="translate-y-full"
           class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-slate-800 border border-slate-700 rounded-lg shadow-lg px-6 py-3 flex items-center gap-4 z-40"
+          data-testid="selection-info-bar"
         >
           <span class="text-sm text-white">
-            已选择 <span class="font-medium text-primary-400" x-text="selectedFiles.length"></span> 个文件
+            已选择 <span class="font-medium text-primary-400" x-text="selectedFiles.length" data-testid="selected-count"></span> 个文件
           </span>
           <span class="text-sm text-slate-400">
-            共 <span x-text="formatFileSize(getTotalSelectedSize())"></span>
+            共 <span x-text="formatFileSize(getTotalSelectedSize())" data-testid="selected-size"></span>
           </span>
-          <button @click="openUploadModal()" class="btn btn-sm btn-primary">
+          <button @click="openUploadModal()" class="btn btn-sm btn-primary" data-testid="upload-btn-bottom">
             上传
           </button>
           <button @click="clearSelection()" class="text-slate-400 hover:text-white">
@@ -362,6 +373,7 @@
       x-transition:leave-end="opacity-0"
       class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
       @click="closeUploadModal()"
+      data-testid="upload-modal"
     >
       <div 
         x-show="showUploadModal"
@@ -376,7 +388,7 @@
       >
         <div class="modal-header">
           <h3 class="modal-title text-white">上传配置</h3>
-          <button @click="closeUploadModal()" class="text-slate-400 hover:text-white">
+          <button @click="closeUploadModal()" class="text-slate-400 hover:text-white" data-testid="modal-close-btn">
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
             </svg>
@@ -393,13 +405,14 @@
                 class="form-input"
                 placeholder="@username 或 https://t.me/xxx"
                 required
+                data-testid="upload-target-input"
               >
             </div>
 
             <!-- 媒体组选项 -->
             <div class="form-group">
               <label class="flex items-center cursor-pointer">
-                <input type="checkbox" x-model="uploadForm.sendAsMediaGroup" class="mr-2">
+                <input type="checkbox" x-model="uploadForm.sendAsMediaGroup" class="mr-2" data-testid="upload-media-group-checkbox">
                 <span>发送为媒体组（最多 10 个一组）</span>
               </label>
             </div>
@@ -407,7 +420,7 @@
             <!-- 上传后删除 -->
             <div class="form-group">
               <label class="flex items-center cursor-pointer">
-                <input type="checkbox" x-model="uploadForm.deleteAfterUpload" class="mr-2">
+                <input type="checkbox" x-model="uploadForm.deleteAfterUpload" class="mr-2" data-testid="upload-delete-checkbox">
                 <span>上传后删除本地文件</span>
               </label>
             </div>
@@ -415,7 +428,7 @@
             <!-- 文件预览 -->
             <div>
               <p class="text-sm text-slate-400 mb-2">已选文件：</p>
-              <div class="bg-slate-700/50 rounded p-3 max-h-40 overflow-y-auto">
+              <div class="bg-slate-700/50 rounded p-3 max-h-40 overflow-y-auto" data-testid="upload-file-preview">
                 <template x-for="file in selectedFiles" :key="file.path">
                   <div class="flex items-center gap-2 py-1 text-sm">
                     <span x-text="getFileIcon(file)"></span>
@@ -428,12 +441,13 @@
           </form>
         </div>
         <div class="modal-footer">
-          <button @click="closeUploadModal()" class="btn btn-secondary">
+          <button @click="closeUploadModal()" class="btn btn-secondary" data-testid="upload-cancel-btn">
             取消
           </button>
           <button 
             @click="handleUpload()"
             class="btn btn-primary"
+            data-testid="upload-submit-btn"
           >
             开始上传
           </button>
