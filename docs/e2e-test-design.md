@@ -15,8 +15,9 @@ TRMD项目当前测试体系以单元测试和API集成测试为主，缺乏端�
 建立基于Playwright的E2E测试框架，实现：
 
 - **Web UI E2E测试**：覆盖登录、Dashboard、任务管理、文件管理、配置管理等核心页面
-- **Bot E2E测试**（可选）：覆盖Telegram Bot命令交互
 - **真实Telegram交互验证**：使用真实API凭证验证完整业务链路
+
+> **注**：Bot E2E测试经技术可行性评估后，决定暂不实施。Bot交互层已有充分的单元测试覆盖，核心业务（下载/上传/转发）依赖真实Telegram API，不适合浏览器自动化E2E测试。
 
 ### 1.3 覆盖范围评估
 
@@ -24,7 +25,7 @@ TRMD项目当前测试体系以单元测试和API集成测试为主，缺乏端�
 |--------|-------------|---------------|------|
 | Web UI | 0% | ~90% | 浏览器交互流程 |
 | Web API | ~80%（集成测试） | ~30%（通过UI间接触发） | 补充UI→API联调验证 |
-| Telegram Bot | ~70%（单元测试） | ~70%（E2E可选） | Bot命令真实交互 |
+| Telegram Bot | ~70%（单元测试） | 0%（不实施E2E） | Bot已有单元测试覆盖 |
 | 核心业务逻辑 | ~90%（单元测试） | 0% | 不重复覆盖 |
 
 **总体功能覆盖率预估**：E2E新增覆盖 ~40-50%，整体测试覆盖率提升至 ~90%
@@ -41,7 +42,6 @@ TRMD项目当前测试体系以单元测试和API集成测试为主，缺乏端�
 |------|------|------|
 | 测试框架 | pytest + pytest-playwright | 与现有pytest体系一致 |
 | 浏览器驱动 | Playwright (Python) | 原生async支持、自动等待、多浏览器 |
-| Bot测试 | Pyrogram Client (user session) | 模拟真实用户向Bot发消息 |
 | 页面抽象 | Page Object Model | 降低选择器耦合、提高可维护性 |
 
 ### 2.2 不选其他方案的理由
@@ -60,7 +60,7 @@ E2E作为补充而非替代现有测试：
 ```
         ▲ E2E Tests (~40%功能覆盖)
        ╱╲  Web UI交互验证
-      ╱  ╲  Bot命令验证(可选)
+      ╱  ╲  真实TG任务执行验证
      ╱────╲
     ╱ API集成╲  (~30%覆盖) - 现有test_web_api.py
    ╱    测试   ╲
@@ -69,7 +69,7 @@ E2E作为补充而非替代现有测试：
 ╱─────────────────╲
 ```
 
-**原则**：不重复已有测试覆盖范围，E2E专注于用户交互流程和跨模块集成验证。
+**原则**：不重复已有测试覆盖范围，E2E专注于Web UI交互流程和跨模块集成验证。
 
 ### 3.2 选择器稳定性优先
 
@@ -93,7 +93,6 @@ E2E作为补充而非替代现有测试：
 | 任务执行 | 真实TG交互 | 核心业务逻辑，需真实验证 |
 | 监听任务 | 真实TG交互 | 实时性验证需要真实连接 |
 | 进度轮询 | 真实API | 异步行为验证 |
-| Bot命令 | 真实TG Bot | Bot是核心接口之一 |
 
 **原则**：全栈测试，不Mock核心业务链路，仅Mock不可控外部依赖（如网络故障模拟）。
 
@@ -146,12 +145,6 @@ tests/
 │   │   ├── test_files.py         # 文件管理
 │   │   ├── test_config.py        # 配置管理
 │   │   └── test_tasks_real.py    # 真实TG任务执行验证
-│   ├── bot/                      # Bot E2E测试（可选）
-│   │   ├── __init__.py
-│   │   ├── conftest.py           # Bot测试专用fixture
-│   │   ├── helpers.py            # Bot测试辅助函数
-│   │   ├── test_bot_commands.py  # Bot命令测试
-│   │   └── test_bot_callbacks.py # 回调查询测试
 │   └── fixtures/                 # E2E测试数据
 │       ├── __init__.py
 │       └── test_channels.py      # 测试频道配置
@@ -489,30 +482,14 @@ class BasePage:
 - 文件浏览功能正常
 - 上传任务创建成功
 
-### Phase 5：Bot E2E（技术可行性验证后）
-
-**目标**：覆盖Bot命令交互
+### Phase 5：配置管理 + 边缘场景（可选）
 
 | 任务 | 具体内容 | 交付物 |
 |------|----------|--------|
-| 5.1 Bot测试fixture | Pyrogram User Client连接 | tests/e2e/bot/conftest.py |
-| 5.2 Bot测试Helper | 发送命令、等待回复、解析回调 | tests/e2e/bot/helpers.py |
-| 5.3 /web命令测试 | 发送/web，验证Token生成 | tests/e2e/bot/test_bot_commands.py |
-| 5.4 /batch命令测试 | 发送链接列表，验证任务创建 | tests/e2e/bot/test_bot_commands.py |
-| 5.5 内联键盘测试 | 按钮点击、回调处理 | tests/e2e/bot/test_bot_callbacks.py |
-
-**验收标准**：
-- Bot核心命令响应正确
-- 内联键盘交互正常
-
-### Phase 6：配置管理 + 边缘场景（可选）
-
-| 任务 | 具体内容 | 交付物 |
-|------|----------|--------|
-| 6.1 config.html testid | 添加testid | module/web/config.html |
-| 6.2 ConfigPage | 配置页Page Object | tests/e2e/pages/config_page.py |
-| 6.3 配置读写 | 配置项显示、修改、敏感字段脱敏 | tests/e2e/web/test_config.py |
-| 6.4 边缘场景 | 网络错误、Token过期、并发操作 | tests/e2e/web/test_edge_cases.py |
+| 5.1 config.html testid | 添加testid | module/web/config.html |
+| 5.2 ConfigPage | 配置页Page Object | tests/e2e/pages/config_page.py |
+| 5.3 配置读写 | 配置项显示、修改、敏感字段脱敏 | tests/e2e/web/test_config.py |
+| 5.4 边缘场景 | 网络错误、Token过期、并发操作 | tests/e2e/web/test_edge_cases.py |
 
 ---
 
@@ -598,7 +575,6 @@ pytest tests/e2e/ --html=reports/report.html --self-contained-html
 | 测试频道数据不足 | 无法验证完整流程 | 提前准备测试数据 |
 | 服务启动超时 | fixture失败 | 增加等待时间、优化启动检测 |
 | 异步轮询超时 | 状态验证失败 | 增加超时时间、添加重试机制 |
-| Bot E2E技术障碍 | Phase 5无法实施 | 先验证技术可行性，必要时调整范围 |
 
 ---
 
