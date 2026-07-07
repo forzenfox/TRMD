@@ -74,11 +74,38 @@ def live_server():
 @pytest.fixture(scope="session")
 def test_token(live_server):
     """
-    获取测试用的认证Token
+    自动获取测试Token
 
-    从环境变量TRMD_TEST_TOKEN读取。
+    优先从配置读取，若未配置则调用E2E专用API自动生成。
+
+    :param live_server: 已启动的服务URL
+    :return: 测试Token
     """
-    return get_test_token()
+    # 1. 首先尝试从配置获取
+    token = get_test_token()
+    if token:
+        print("[E2E] 使用配置文件中的Token")
+        return token
+
+    # 2. 自动生成Token（调用E2E专用API）
+    e2e_token_url = f"{live_server}/api/auth/e2e_token"
+    try:
+        resp = requests.post(e2e_token_url, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("success") and data.get("data"):
+                token = data["data"]["token"]
+                ttl_hours = data["data"].get("ttl_hours", 1)
+                print(f"[E2E] 自动生成Token成功，有效期 {ttl_hours} 小时")
+                return token
+            else:
+                pytest.fail(f"E2E Token生成失败: {data.get('message', '未知错误')}")
+        else:
+            pytest.fail(f"E2E Token生成API返回错误: {resp.status_code}")
+    except requests.exceptions.RequestException as e:
+        pytest.fail(f"E2E Token自动生成请求失败: {e}")
+
+    pytest.fail("无法获取测试Token")
 
 
 @pytest.fixture

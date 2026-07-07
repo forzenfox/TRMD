@@ -4,6 +4,8 @@
 提供 Token 状态检查接口。
 """
 
+import os
+
 from fastapi import APIRouter, Depends, Request
 
 from module.api.dependencies import require_token, get_token_manager
@@ -72,3 +74,37 @@ async def refresh_token(
             message=f"Token 刷新失败: {str(e)}",
             status_code=400,
         )
+
+
+@router.post("/e2e_token")
+async def generate_e2e_token(request: Request):
+    """E2E测试专用Token生成端点。
+
+    仅在 TRMD_E2E_TEST=1 环境变量时可用。
+    生产环境完全不可用。
+
+    :param request: FastAPI 请求对象
+    :return: 生成的Token信息
+    """
+    # 安全检查：仅E2E测试模式可用
+    if os.environ.get("TRMD_E2E_TEST") != "1":
+        return json_response(
+            data=None,
+            message="此端点仅E2E测试模式可用",
+            status_code=403,
+        )
+
+    token_manager: TokenManager = request.app.state.token_manager
+    token = token_manager.generate(user_id=0)
+
+    # 获取Token详情
+    record = token_manager.verify(token)
+
+    return json_response(
+        data={
+            "token": token,
+            "expires_at": record.expires_at.isoformat(),
+            "ttl_hours": token_manager._default_ttl / 3600,
+        },
+        message="E2E测试Token已生成",
+    )

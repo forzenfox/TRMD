@@ -100,6 +100,21 @@ def get_test_token() -> str:
     """
     获取测试Token
 
+    优先级：环境变量 TRMD_TEST_TOKEN > 配置文件 test_token > 空字符串
+
+    Returns:
+        测试Token（可能为空，E2E fixture会自动生成）
+
+    Note:
+        若返回空字符串，E2E fixture会调用 /api/auth/e2e_token 自动生成。
+    """
+    return _get_config_value("test_token", "TRMD_TEST_TOKEN", "")
+
+
+def get_test_token_or_raise() -> str:
+    """
+    获取测试Token（严格模式）
+
     优先级：环境变量 TRMD_TEST_TOKEN > 配置文件 test_token > 报错
 
     Returns:
@@ -108,12 +123,13 @@ def get_test_token() -> str:
     Raises:
         ValueError: 未配置Token
     """
-    token = _get_config_value("test_token", "TRMD_TEST_TOKEN")
+    token = get_test_token()
     if not token:
         raise ValueError(
             "请配置测试Token：\n"
             "  方式1：设置环境变量 TRMD_TEST_TOKEN\n"
             "  方式2：在 tests/e2e/fixtures/e2e_test_config.yaml 中填写 test_token\n"
+            "  方式3：E2E测试启动后会自动生成（无需手动配置）\n"
             "获取方式：向Telegram Bot发送 /web 命令"
         )
     return token
