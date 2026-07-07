@@ -35,12 +35,13 @@ def live_server():
     test_env["PYTHONUNBUFFERED"] = "1"
 
     # 启动服务进程（使用虚拟环境Python，传入E2E专用端口）
+    # 使用subprocess.DEVNULL丢弃输出，避免缓冲区阻塞
     process = subprocess.Popen(
         [PYTHON_EXECUTABLE, "main.py", "--port", str(E2E_SERVER_PORT)],
         cwd=PROJECT_ROOT,
         env=test_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
     # 等待服务就绪
@@ -48,19 +49,23 @@ def live_server():
     health_url = f"{base_url}/api/monitor/stats"
 
     started = False
+    start_time = time.time()
     for _ in range(SERVER_START_TIMEOUT):
         try:
             resp = requests.get(health_url, timeout=1)
             if resp.status_code == 200:
                 started = True
+                elapsed = time.time() - start_time
+                print(f"\n[E2E] 服务启动成功，耗时 {elapsed:.1f}秒")
                 break
         except requests.exceptions.RequestException:
             time.sleep(1)
 
     if not started:
+        elapsed = time.time() - start_time
         process.terminate()
         process.wait()
-        pytest.fail(f"服务启动超时（{SERVER_START_TIMEOUT}秒）")
+        pytest.fail(f"服务启动超时（{elapsed:.1f}秒）")
 
     yield base_url
 
