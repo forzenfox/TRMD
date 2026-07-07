@@ -46,7 +46,8 @@ def live_server():
 
     # 等待服务就绪
     base_url = E2E_SERVER_URL
-    health_url = f"{base_url}/api/monitor/stats"
+    # 使用静态文件端点检测服务就绪（无需认证）
+    health_url = f"{base_url}/web/login.html"
 
     started = False
     start_time = time.time()
