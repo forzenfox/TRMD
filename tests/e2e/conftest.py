@@ -1,7 +1,11 @@
 """
 E2E测试全局Fixture
 
-提供服务启动、认证、浏览器配置等全局测试基础设施。
+提供服务连接、认证、浏览器配置等全局测试基础设施。
+
+支持两种模式：
+1. 自动启动服务（auto_start_server=true）：自动启动TRMD服务进程
+2. 手动启动服务（auto_start_server=false）：连接已运行的服务（推荐）
 """
 
 import os
@@ -19,66 +23,93 @@ from .fixtures.test_config import (
     NAVIGATION_TIMEOUT,
     get_test_token,
     PYTHON_EXECUTABLE,
+    _get_config_value,
 )
+
+
+def _is_server_running(base_url: str) -> bool:
+    """检查服务是否已运行"""
+    health_url = f"{base_url}/web/login.html"
+    try:
+        resp = requests.get(health_url, timeout=2)
+        return resp.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
 
 
 @pytest.fixture(scope="session")
 def live_server():
     """
-    启动完整TRMD服务（FastAPI + Telegram Client）
+    连接TRMD服务（FastAPI + Telegram Client）
 
-    使用子进程启动main.py，等待服务就绪后返回base_url。
+    支持两种模式：
+    - auto_start_server=true：自动启动服务进程（可能有问题）
+    - auto_start_server=false：连接已手动启动的服务（推荐）
+
+    运行测试前，请手动启动服务：
+        .venv\\Scripts\\python.exe main.py --port 8000
     """
-    # 准备测试环境变量
-    test_env = os.environ.copy()
-    test_env["TRMD_E2E_TEST"] = "1"
-    test_env["PYTHONUNBUFFERED"] = "1"
-
-    # 启动服务进程（使用虚拟环境Python，传入E2E专用端口）
-    # 使用subprocess.DEVNULL丢弃输出，避免缓冲区阻塞
-    process = subprocess.Popen(
-        [PYTHON_EXECUTABLE, "main.py", "--port", str(E2E_SERVER_PORT)],
-        cwd=PROJECT_ROOT,
-        env=test_env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-
-    # 等待服务就绪
     base_url = E2E_SERVER_URL
-    # 使用静态文件端点检测服务就绪（无需认证）
-    health_url = f"{base_url}/web/login.html"
 
-    started = False
-    start_time = time.time()
-    for _ in range(SERVER_START_TIMEOUT):
-        try:
-            resp = requests.get(health_url, timeout=1)
-            if resp.status_code == 200:
+    # 检查是否需要自动启动服务
+    auto_start = _get_config_value(
+        "auto_start_server", "E2E_AUTO_START_SERVER", "false"
+    ).lower() in ("true", "1", "yes")
+
+    if auto_start:
+        # 模式1：自动启动服务（可能有问题，不推荐）
+        print("\n[E2E] 自动启动服务模式...")
+        test_env = os.environ.copy()
+        test_env["TRMD_E2E_TEST"] = "1"
+        test_env["PYTHONUNBUFFERED"] = "1"
+
+        process = subprocess.Popen(
+            [PYTHON_EXECUTABLE, "main.py", "--port", str(E2E_SERVER_PORT)],
+            cwd=PROJECT_ROOT,
+            env=test_env,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        # 等待服务就绪
+        started = False
+        start_time = time.time()
+        for _ in range(SERVER_START_TIMEOUT):
+            if _is_server_running(base_url):
                 started = True
                 elapsed = time.time() - start_time
-                print(f"\n[E2E] 服务启动成功，耗时 {elapsed:.1f}秒")
-                # 等待服务完全就绪（API端点可能需要额外时间）
+                print(f"[E2E] 服务启动成功，耗时 {elapsed:.1f}秒")
                 time.sleep(2)
                 break
-        except requests.exceptions.RequestException:
             time.sleep(1)
 
-    if not started:
-        elapsed = time.time() - start_time
+        if not started:
+            elapsed = time.time() - start_time
+            process.terminate()
+            process.wait()
+            pytest.fail(f"服务启动超时（{elapsed:.1f}秒）")
+
+        yield base_url
+
+        # 清理：终止进程
         process.terminate()
-        process.wait()
-        pytest.fail(f"服务启动超时（{elapsed:.1f}秒）")
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    else:
+        # 模式2：连接已运行的服务（推荐）
+        print("\n[E2E] 连接已运行服务模式...")
+        if not _is_server_running(base_url):
+            pytest.fail(
+                f"服务未运行！请手动启动服务后再运行E2E测试：\n"
+                f"  .venv\\Scripts\\python.exe main.py --port {E2E_SERVER_PORT}\n"
+                f"  或设置 auto_start_server: true 自动启动（不推荐）"
+            )
 
-    yield base_url
-
-    # 清理：终止进程
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
+        print(f"[E2E] 服务已就绪，连接到 {base_url}")
+        yield base_url
 
 
 @pytest.fixture(scope="session")
@@ -99,7 +130,6 @@ def test_token(live_server):
 
     # 2. 自动生成Token（调用E2E专用API）
     e2e_token_url = f"{live_server}/api/auth/e2e_token"
-    # 添加重试机制，服务可能需要时间完全就绪
     max_retries = 3
     for retry in range(max_retries):
         try:
@@ -115,7 +145,7 @@ def test_token(live_server):
                     pytest.fail(f"E2E Token生成失败: {data.get('message', '未知错误')}")
             elif resp.status_code == 403:
                 pytest.fail(
-                    "E2E Token生成被拒绝，请确保设置了 TRMD_E2E_TEST=1 环境变量"
+                    "E2E Token生成被拒绝，请确保服务启动时设置了 TRMD_E2E_TEST=1"
                 )
             else:
                 if retry < max_retries - 1:
@@ -184,7 +214,7 @@ def browser_type_launch_args():
     配置headless模式、慢动作等。
     """
     args = {
-        "headless": True,  # 默认无头模式
+        "headless": True,
         "args": ["--disable-gpu"],
     }
 
