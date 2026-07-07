@@ -58,6 +58,8 @@ def live_server():
                 started = True
                 elapsed = time.time() - start_time
                 print(f"\n[E2E] 服务启动成功，耗时 {elapsed:.1f}秒")
+                # 等待服务完全就绪（API端点可能需要额外时间）
+                time.sleep(2)
                 break
         except requests.exceptions.RequestException:
             time.sleep(1)
@@ -97,21 +99,38 @@ def test_token(live_server):
 
     # 2. 自动生成Token（调用E2E专用API）
     e2e_token_url = f"{live_server}/api/auth/e2e_token"
-    try:
-        resp = requests.post(e2e_token_url, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            if data.get("success") and data.get("data"):
-                token = data["data"]["token"]
-                ttl_hours = data["data"].get("ttl_hours", 1)
-                print(f"[E2E] 自动生成Token成功，有效期 {ttl_hours} 小时")
-                return token
+    # 添加重试机制，服务可能需要时间完全就绪
+    max_retries = 3
+    for retry in range(max_retries):
+        try:
+            resp = requests.post(e2e_token_url, timeout=10)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("success") and data.get("data"):
+                    token = data["data"]["token"]
+                    ttl_hours = data["data"].get("ttl_hours", 1)
+                    print(f"[E2E] 自动生成Token成功，有效期 {ttl_hours} 小时")
+                    return token
+                else:
+                    pytest.fail(f"E2E Token生成失败: {data.get('message', '未知错误')}")
+            elif resp.status_code == 403:
+                pytest.fail(
+                    "E2E Token生成被拒绝，请确保设置了 TRMD_E2E_TEST=1 环境变量"
+                )
             else:
-                pytest.fail(f"E2E Token生成失败: {data.get('message', '未知错误')}")
-        else:
-            pytest.fail(f"E2E Token生成API返回错误: {resp.status_code}")
-    except requests.exceptions.RequestException as e:
-        pytest.fail(f"E2E Token自动生成请求失败: {e}")
+                if retry < max_retries - 1:
+                    print(
+                        f"[E2E] Token生成失败（状态码 {resp.status_code}），重试中..."
+                    )
+                    time.sleep(1)
+                    continue
+                pytest.fail(f"E2E Token生成API返回错误: {resp.status_code}")
+        except requests.exceptions.RequestException as e:
+            if retry < max_retries - 1:
+                print("[E2E] Token生成请求失败，重试中...")
+                time.sleep(1)
+                continue
+            pytest.fail(f"E2E Token自动生成请求失败: {e}")
 
     pytest.fail("无法获取测试Token")
 
