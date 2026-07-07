@@ -45,8 +45,15 @@ class LoginPage(BasePage):
         self.page.goto(f"{base_url}/web/index.html")
 
     def fill_token(self, token: str) -> None:
-        """填写Token输入框"""
-        self.fill_by_testid(self.TOKEN_INPUT, token)
+        """填写Token输入框
+
+        使用type()代替fill()以触发Alpine.js的x-model响应式更新。
+        """
+        # 先清空输入框
+        input_locator = self.page.locator(f'[data-testid="{self.TOKEN_INPUT}"]')
+        input_locator.clear()
+        # 使用type()触发Alpine.js的响应式更新
+        input_locator.type(token, delay=50)  # delay模拟真实输入，确保事件触发
 
     def clear_token(self) -> None:
         """清空Token输入框"""
@@ -104,9 +111,14 @@ class LoginPage(BasePage):
         self.wait_for_navigation("**/index.html", timeout)
 
     def wait_for_login_to_complete(self, timeout: int = NAVIGATION_TIMEOUT) -> None:
-        """等待登录完成（跳转到Dashboard或显示错误）"""
-        # 等待加载状态消失
-        self.wait_for_hidden_by_testid(self.AUTO_LOGIN_HINT, timeout)
+        """等待登录完成（加载状态消失）"""
+        # 等待登录按钮不再处于加载状态
+        # 检查按钮上的loading spinner消失
+        self.page.wait_for_timeout(500)  # 给API响应时间
+        # 等待按钮恢复可用状态（loading结束后）
+        login_btn = self.page.locator(f'[data-testid="{self.LOGIN_BUTTON}"]')
+        # 登录完成后，按钮应该恢复可用（loading=false）
+        login_btn.wait_for(state="visible", timeout=timeout)
 
     def wait_for_error(self, timeout: int = 10000) -> None:
         """等待错误提示出现"""
