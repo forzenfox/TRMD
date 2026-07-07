@@ -136,7 +136,8 @@ def test_token(live_server):
             resp = requests.post(e2e_token_url, timeout=10)
             if resp.status_code == 200:
                 data = resp.json()
-                if data.get("success") and data.get("data"):
+                # API响应格式：{"code": 0, "message": "...", "data": {...}}
+                if data.get("code") == 0 and data.get("data"):
                     token = data["data"]["token"]
                     ttl_hours = data["data"].get("ttl_hours", 1)
                     print(f"[E2E] 自动生成Token成功，有效期 {ttl_hours} 小时")
@@ -183,7 +184,7 @@ def authenticated_page(page: Page, test_token: str, live_server: str):
 
 
 @pytest.fixture(autouse=True)
-def setup_trace(browser_context: BrowserContext, request):
+def setup_trace(context: BrowserContext, request):
     """
     自动启动Playwright trace
 
@@ -195,15 +196,15 @@ def setup_trace(browser_context: BrowserContext, request):
     # 确保目录存在
     trace_path.parent.mkdir(parents=True, exist_ok=True)
 
-    browser_context.tracing.start(screenshots=True, snapshots=True)
+    context.tracing.start(screenshots=True, snapshots=True)
 
     yield
 
     # 仅在测试失败时保存trace
     if request.node.session.testsfailed > 0:
-        browser_context.tracing.stop(path=str(trace_path))
+        context.tracing.stop(path=str(trace_path))
     else:
-        browser_context.tracing.stop()
+        context.tracing.stop()
 
 
 @pytest.fixture(scope="session")
