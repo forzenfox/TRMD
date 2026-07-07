@@ -18,6 +18,7 @@ from .fixtures.test_config import (
     SERVER_START_TIMEOUT,
     NAVIGATION_TIMEOUT,
     get_test_token,
+    PYTHON_EXECUTABLE,
 )
 
 
@@ -33,9 +34,9 @@ def live_server():
     test_env["TRMD_E2E_TEST"] = "1"
     test_env["PYTHONUNBUFFERED"] = "1"
 
-    # 启动服务进程（传入E2E专用端口）
+    # 启动服务进程（使用虚拟环境Python，传入E2E专用端口）
     process = subprocess.Popen(
-        ["python", "main.py", "--port", str(E2E_SERVER_PORT)],
+        [PYTHON_EXECUTABLE, "main.py", "--port", str(E2E_SERVER_PORT)],
         cwd=PROJECT_ROOT,
         env=test_env,
         stdout=subprocess.PIPE,

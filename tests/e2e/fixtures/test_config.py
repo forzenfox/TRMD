@@ -12,6 +12,13 @@ from typing import Optional
 # 项目根目录
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 
+# 虚拟环境Python可执行文件路径
+VENV_PYTHON = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+# 如果虚拟环境不存在，使用系统Python
+SYSTEM_PYTHON = "python"
+# 优先使用虚拟环境Python
+PYTHON_EXECUTABLE = str(VENV_PYTHON) if VENV_PYTHON.exists() else SYSTEM_PYTHON
+
 # 配置文件路径
 CONFIG_FILE_PATH = Path(__file__).parent / "e2e_test_config.yaml"
 
