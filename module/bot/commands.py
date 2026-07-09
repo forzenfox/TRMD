@@ -386,10 +386,13 @@ class BotCommands:
         # 更新消息
         task_label = "下载" if value == "download" else "转发"
         prompt = im.get_step_prompt(user_id)
-        await callback_query.message.edit_text(
-            f"✅ 已选择：{task_label}\n\n{prompt}\n\n💡 输入 /cancel 可随时取消操作",
-            reply_markup=None,
-        )
+        try:
+            await callback_query.message.edit_text(
+                f"✅ 已选择：{task_label}\n\n{prompt}\n\n💡 输入 /cancel 可随时取消操作",
+                reply_markup=None,
+            )
+        except MessageNotModified:
+            pass
         await callback_query.answer()
         return {"status": "task_type_selected", "value": value}
 
@@ -409,10 +412,13 @@ class BotCommands:
             collected = im.get_collected_data(user_id)
             prompt = BatchStep.get_prompt(BatchStep.FILTER_TYPES, collected)
             keyboard = KeyboardManager.build_filter_types_keyboard()
-            await callback_query.message.edit_text(
-                f"✅ 已选择：全部消息\n\n{prompt}",
-                reply_markup=keyboard,
-            )
+            try:
+                await callback_query.message.edit_text(
+                    f"✅ 已选择：全部消息\n\n{prompt}",
+                    reply_markup=keyboard,
+                )
+            except MessageNotModified:
+                pass
         else:
             # 推进步骤到 RANGE_INPUT
             im.advance_step(user_id)
@@ -424,10 +430,13 @@ class BotCommands:
                 "date_range": "日期范围",
                 "multiple_ids": "消息列表",
             }
-            await callback_query.message.edit_text(
-                f"✅ 已选择：{mode_labels.get(value, value)}\n\n{prompt}",
-                reply_markup=None,
-            )
+            try:
+                await callback_query.message.edit_text(
+                    f"✅ 已选择：{mode_labels.get(value, value)}\n\n{prompt}",
+                    reply_markup=None,
+                )
+            except MessageNotModified:
+                pass
 
         await callback_query.answer()
         return {"status": "range_mode_selected", "value": value}

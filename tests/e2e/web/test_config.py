@@ -850,6 +850,49 @@ class TestNotificationToggle:
         assert config_page.has_changes()
 
 
+class TestNotificationSave:
+    """T036: 只修改通知配置后保存，验证不触发其他标签页的验证错误"""
+
+    def test_save_notification_only_no_validation_error(
+        self, config_page: ConfigPage, test_token: str, live_server: str
+    ):
+        """
+        T036-1: 只修改通知配置后保存，不应报下载/上传并发数验证错误
+
+        背景：_flattenConfig() 若缺少 max_download_task/max_upload_task 的映射，
+        会导致 validateConfig() 中 parseInt(undefined) 返回 NaN，
+        触发"下载并发数必须为正整数"等验证错误。
+
+        验证点：
+        1. 切换到通知配置标签页
+        2. 切换通知checkbox（产生变更）
+        3. 点击保存
+        4. 验证不出现"下载并发数必须为正整数"或"上传并发数必须为正整数"错误
+        """
+        config_page.navigate(live_server)
+        config_page.wait_for_page_loaded()
+        config_page.switch_tab(ConfigPage.TAB_NOTIFICATION)
+
+        # 切换通知checkbox产生变更
+        config_page.toggle_notification_enabled()
+        config_page.wait_for_timeout(500)
+        assert config_page.has_changes()
+
+        # 点击保存
+        config_page.click_save()
+        config_page.wait_for_timeout(3000)
+
+        # 关键断言：不应出现下载/上传并发数的验证错误
+        if config_page.is_error_visible(timeout=2000):
+            error_text = config_page.get_error_text()
+            assert "下载并发数必须为正整数" not in error_text, (
+                f"不应出现下载并发数验证错误，实际错误: {error_text}"
+            )
+            assert "上传并发数必须为正整数" not in error_text, (
+                f"不应出现上传并发数验证错误，实际错误: {error_text}"
+            )
+
+
 # ========== P1重要功能补充场景 ==========
 
 

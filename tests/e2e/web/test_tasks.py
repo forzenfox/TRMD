@@ -187,6 +187,63 @@ class TestCreateDownloadTask:
         download_radio = tasks_page.get_by_testid(TasksPage.INPUT_TASK_TYPE_DOWNLOAD)
         assert download_radio.is_checked()
 
+    def test_create_download_task_sends_source_identifier(
+        self, tasks_page: TasksPage, test_token: str, live_server: str
+    ):
+        """
+        T004-6: 创建下载任务时 source_identifier 参数正确传递
+
+        验证点：
+        1. 通过 UI 创建下载任务
+        2. 拦截 API 请求，验证 params 中包含 source_identifier 而非 chat_id
+        3. 任务创建成功
+        """
+        tasks_page.navigate(live_server)
+        tasks_page.wait_for_page_loaded()
+
+        # 拦截 POST /api/tasks 请求
+        api_requests = []
+
+        def handle_request(route, request):
+            if request.url.endswith("/api/tasks") and request.method == "POST":
+                api_requests.append(
+                    {
+                        "url": request.url,
+                        "method": request.method,
+                        "post_data": request.post_data,
+                    }
+                )
+            route.continue_()
+
+        tasks_page.page.route("**/api/tasks", handle_request)
+
+        # 创建下载任务
+        test_source_chat = "@test_channel_payload"
+        tasks_page.create_download_task(
+            source_chat=test_source_chat,
+            range_mode="id_range",
+            min_id="1",
+            max_id="10",
+        )
+
+        # 等待请求完成
+        tasks_page.wait_for_timeout(2000)
+
+        # 验证 API 请求参数
+        assert len(api_requests) > 0, "未捕获到创建任务的 API 请求"
+
+        import json
+
+        post_data = json.loads(api_requests[0]["post_data"])
+        assert post_data["task_type"] == "download"
+        assert "params" in post_data
+        assert "source_identifier" in post_data["params"], "params 中缺少 source_identifier 字段"
+        assert "chat_id" not in post_data["params"], "params 中不应包含 chat_id 字段"
+        assert post_data["params"]["source_identifier"] == test_source_chat
+
+        # 取消路由拦截
+        tasks_page.page.unroute("**/api/tasks")
+
 
 class TestTaskDetailDrawer:
     """T005: 任务详情抽屉场景"""

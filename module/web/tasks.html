@@ -192,45 +192,45 @@
         <!-- 状态筛选 -->
         <div class="mb-6">
           <div class="flex flex-wrap gap-2">
-            <button 
+            <button
               data-testid="filter-status-all"
               @click="setFilter('all')"
-              :class="taskManager.filter === 'all' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentFilter === 'all' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               全部
             </button>
-            <button 
+            <button
               data-testid="filter-status-running"
               @click="setFilter('running')"
-              :class="taskManager.filter === 'running' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentFilter === 'running' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               执行中
             </button>
-            <button 
+            <button
               data-testid="filter-status-pending"
               @click="setFilter('pending')"
-              :class="taskManager.filter === 'pending' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentFilter === 'pending' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               排队中
             </button>
-            <button 
+            <button
               data-testid="filter-status-completed"
-              @click="taskManager.setFilter('completed')"
-              :class="taskManager.filter === 'completed' ? 'btn btn-primary' : 'btn btn-secondary'"
+              @click="setFilter('completed')"
+              :class="currentFilter === 'completed' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               已完成
             </button>
-            <button 
+            <button
               data-testid="filter-status-failed"
-              @click="taskManager.setFilter('failed')"
-              :class="taskManager.filter === 'failed' ? 'btn btn-primary' : 'btn btn-secondary'"
+              @click="setFilter('failed')"
+              :class="currentFilter === 'failed' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               失败
             </button>
-            <button 
+            <button
               data-testid="filter-status-cancelled"
               @click="setFilter('cancelled')"
-              :class="taskManager.filter === 'cancelled' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentFilter === 'cancelled' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               已取消
             </button>
@@ -243,42 +243,42 @@
             <button
               data-testid="filter-type-all"
               @click="setTypeFilter('all')"
-              :class="taskManager.typeFilter === 'all' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentTypeFilter === 'all' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               全部类型
             </button>
             <button
               data-testid="filter-type-download"
               @click="setTypeFilter('download')"
-              :class="taskManager.typeFilter === 'download' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentTypeFilter === 'download' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               下载
             </button>
             <button
               data-testid="filter-type-forward"
               @click="setTypeFilter('forward')"
-              :class="taskManager.typeFilter === 'forward' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentTypeFilter === 'forward' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               转发
             </button>
             <button
               data-testid="filter-type-upload"
               @click="setTypeFilter('upload')"
-              :class="taskManager.typeFilter === 'upload' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentTypeFilter === 'upload' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               上传
             </button>
             <button
               data-testid="filter-type-listen-download"
               @click="setTypeFilter('listen_download')"
-              :class="taskManager.typeFilter === 'listen_download' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentTypeFilter === 'listen_download' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               🕵️ 监听下载
             </button>
             <button
               data-testid="filter-type-listen-forward"
               @click="setTypeFilter('listen_forward')"
-              :class="taskManager.typeFilter === 'listen_forward' ? 'btn btn-primary' : 'btn btn-secondary'"
+              :class="currentTypeFilter === 'listen_forward' ? 'btn btn-primary' : 'btn btn-secondary'"
             >
               📲 监听转发
             </button>
@@ -403,7 +403,7 @@
             <div class="flex gap-2">
               <button
                 data-testid="btn-pagination-prev"
-                @click="taskManager.setPage(taskManager.page - 1); _syncPagination()"
+                @click="prevPage()"
                 :disabled="currentPage <= 1"
                 class="btn btn-sm btn-secondary"
               >
@@ -411,7 +411,7 @@
               </button>
               <button
                 data-testid="btn-pagination-next"
-                @click="taskManager.setPage(taskManager.page + 1); _syncPagination()"
+                @click="nextPage()"
                 :disabled="currentPage >= totalPages"
                 class="btn btn-sm btn-secondary"
               >
@@ -1003,10 +1003,10 @@
   </div>
 
   <!-- JavaScript 文件 -->
-  <script src="js/api.js"></script>
-  <script src="js/auth.js"></script>
-  <script src="js/tasks.js"></script>
-  <script src="js/config.js"></script>
+  <script src="js/api.js?v=2026071004"></script>
+  <script src="js/auth.js?v=2026071004"></script>
+  <script src="js/tasks.js?v=2026071004"></script>
+  <script src="js/config.js?v=2026071004"></script>
   <script>
     /**
      * 任务页面逻辑
@@ -1063,6 +1063,14 @@
         totalTasks: 0,
         currentPage: 1,
 
+        // 筛选响应式镜像（taskManager.filter/typeFilter 是非响应式全局对象，
+        // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 :class 更新）
+        currentFilter: 'all',
+        currentTypeFilter: 'all',
+
+        // 翻页/筛选导航标志：阻止智能轮询的 loadTasks() 覆盖导航请求的结果
+        _navigating: false,
+
         async init() {
           const authenticated = await authManager.ensureAuthenticated();
           if (!authenticated) return;
@@ -1071,6 +1079,9 @@
 
           // 初始加载任务到 Alpine 本地数据
           await this.refreshTasks();
+
+          // 初始同步筛选状态到 Alpine 响应式属性
+          this._syncFilters();
 
           // 解析 URL 参数，自动打开创建弹窗
           this._handleUrlParams();
@@ -1112,6 +1123,12 @@
           this.currentPage = taskManager.page;
         },
 
+        // 同步筛选状态到 Alpine 响应式属性
+        _syncFilters() {
+          this.currentFilter = taskManager.filter;
+          this.currentTypeFilter = taskManager.typeFilter;
+        },
+
         // 刷新任务并同步到 Alpine 响应式数据
         async refreshTasks() {
           this.loading = true;
@@ -1124,6 +1141,10 @@
             if (taskManager.filter && taskManager.filter !== 'all') {
               params.status = taskManager.filter;
             }
+            // 传递类型筛选参数
+            if (taskManager.typeFilter && taskManager.typeFilter !== 'all') {
+              params.task_type = taskManager.typeFilter;
+            }
             const result = await api.getTasks(params);
             this.tasks = result.items || [];
             // 同步分页信息到 taskManager（供模板读取）
@@ -1133,6 +1154,9 @@
 
             // 同步分页状态到 Alpine 响应式属性
             this._syncPagination();
+
+            // 同步筛选状态到 Alpine 响应式属性
+            this._syncFilters();
 
             // 更新最后同步时间
             this.lastSyncTime = this._formatSyncTime();
@@ -1234,12 +1258,32 @@
 
         setFilter(filter) {
           taskManager.setFilter(filter);
+          this._syncFilters();
           this.refreshTasks();
         },
 
         setTypeFilter(filter) {
           taskManager.setTypeFilter(filter);
+          this._syncFilters();
           this.refreshTasks();
+        },
+
+        async prevPage() {
+          if (this.currentPage <= 1) return;
+          // 设置导航标志，阻止智能轮询的 loadTasks() 覆盖翻页请求的结果
+          this._navigating = true;
+          taskManager.page = this.currentPage - 1;
+          await this.refreshTasks();
+          this._navigating = false;
+        },
+
+        async nextPage() {
+          if (this.currentPage >= this.totalPages) return;
+          // 设置导航标志，阻止智能轮询的 loadTasks() 覆盖翻页请求的结果
+          this._navigating = true;
+          taskManager.page = this.currentPage + 1;
+          await this.refreshTasks();
+          this._navigating = false;
         },
 
         async deleteTask(taskId) {

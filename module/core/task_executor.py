@@ -7,6 +7,7 @@
 import os
 import asyncio
 import logging
+import concurrent.futures
 from typing import Optional, Any, Callable
 
 import pyrogram
@@ -60,6 +61,14 @@ class TaskExecutor:
         self._repository_manager = repository_manager
         self._running_tasks: dict[str, asyncio.Task] = {}
 
+        # TaskExecutor 通常在 Telegram Client 的事件循环中创建，
+        # 而 Web API 运行在另一个线程的事件循环。保存创建时的 loop，
+        # 以便通过 run_coroutine_threadsafe 将任务提交到正确的 loop。
+        try:
+            self._event_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._event_loop = None
+
         # 并发控制：从 ConfigManager 读取，默认值与 DEFAULT_RESOURCE_LIMITS 一致
         if config_manager:
             rl = config_manager.resource_limits
@@ -96,6 +105,28 @@ class TaskExecutor:
                     task_id, item_id, item.status
                 )
                 break
+
+    def submit_task(self, task: Task) -> concurrent.futures.Future:
+        """将任务提交到 TaskExecutor 创建时所在的事件循环中执行。
+
+        Web API 与 Telegram Client 运行在不同线程的事件循环中，直接 await
+        execute_task() 会导致跨 loop 的 RuntimeError。此方法使用
+        asyncio.run_coroutine_threadsafe 把 coroutine 投递到正确的 loop。
+
+        Args:
+            task: 要执行的任务
+
+        Returns:
+            concurrent.futures.Future: 可用于等待结果或检查异常
+
+        Raises:
+            RuntimeError: TaskExecutor 未绑定事件循环时抛出
+        """
+        if self._event_loop is None:
+            raise RuntimeError("TaskExecutor 未绑定事件循环，无法提交任务")
+        return asyncio.run_coroutine_threadsafe(
+            self.execute_task(task), self._event_loop
+        )
 
     async def execute_task(self, task: Task) -> None:
         """执行一个任务，根据任务类型分派到不同的执行器。
@@ -748,6 +779,17 @@ class TaskExecutor:
 
         # 如果已有下载器，调用其下载方法
         if self._downloader:
+            # 预先创建子任务项并持久化到数据库，确保 progress_callback
+            # 能正确更新子任务状态（download_range 内部会调用 _on_item_progress）
+            if not task.items:
+                new_items = []
+                for msg_id in message_ids:
+                    item_id = f"{task.task_id}_msg_{msg_id}"
+                    new_items.append(
+                        self._create_item(task, item_id, message_id=msg_id)
+                    )
+                await self._task_manager.add_items(task.task_id, new_items)
+
             downloaded_files = await self._downloader.download_range(
                 chat_id=chat_id,
                 start_id=message_ids[0],
@@ -1149,7 +1191,7 @@ class TaskExecutor:
         # Pyrogram 2.x 中，message.media 可能是枚举类型（如 MessageMediaType.PHOTO）
         if hasattr(media, "name"):
             # 枚举类型，通过 name 判断（如 'PHOTO', 'VIDEO', 'DOCUMENT'）
-            media_name = media.name if hasattr(media, 'name') else str(media)
+            media_name = media.name if hasattr(media, "name") else str(media)
             # 枚举名称映射到标准类型
             name_mapping = {
                 "PHOTO": "photo",

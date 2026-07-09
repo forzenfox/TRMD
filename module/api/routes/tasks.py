@@ -4,7 +4,6 @@
 提供任务 CRUD、开始/取消/重试等操作。
 """
 
-import asyncio
 import logging
 from typing import Optional, cast
 
@@ -267,9 +266,11 @@ async def start_task(
         if task is None:
             raise TaskNotFoundError(task_id)
 
-        # 触发 TaskExecutor 异步执行任务（不阻塞 API 响应）
+        # 触发 TaskExecutor 异步执行任务（不阻塞 API 响应）。
+        # 注意：TaskExecutor 运行在 Telegram Client 的事件循环，必须通过
+        # submit_task() 提交到正确 loop，否则会出现跨 loop 的 RuntimeError。
         if executor is not None:
-            asyncio.create_task(executor.execute_task(task))
+            executor.submit_task(task)
 
         return json_response(
             data=_task_to_out(task).model_dump(),

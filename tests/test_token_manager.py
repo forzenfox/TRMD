@@ -449,6 +449,29 @@ class TestCustomTTL:
         assert abs(actual_diff - expected_diff) < timedelta(seconds=1)
 
 
+# ==================== 应用上下文 TTL 测试 ====================
+
+
+class TestAppContextTokenTTL:
+    """验证 AppContext 初始化 TokenManager 时使用的 TTL。"""
+
+    def test_app_context_token_manager_ttl_is_12_hours(self, tmp_path):
+        """AppContext 创建的 TokenManager 默认 TTL 应为 12 小时（43200 秒）。"""
+        from module.integration import AppContext
+
+        # 重置单例，避免影响其他测试
+        AppContext._instance = None
+        try:
+            ctx = AppContext.__new__(AppContext)
+            ctx.data_dir = str(tmp_path)
+            tm = ctx._init_token_manager()
+            assert tm._default_ttl == 12 * 3600, (
+                f"AppContext TokenManager TTL 应为 12 小时，实际为 {tm._default_ttl} 秒"
+            )
+        finally:
+            AppContext._instance = None
+
+
 # ==================== 异常层次测试 ====================
 
 

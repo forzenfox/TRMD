@@ -83,10 +83,13 @@ class AppContext:
         log.info(f"应用上下文已初始化，数据目录: {self.data_dir}")
 
     def _init_token_manager(self) -> TokenManager:
-        """初始化 TokenManager。"""
+        """初始化 TokenManager。
+
+        Token 默认有效期 12 小时（43200 秒），减少前端频繁刷新/重新获取。
+        """
         db_path = os.path.join(self.data_dir, "tokens.db")
-        tm = TokenManager(db_path=db_path)
-        log.info("TokenManager 已初始化")
+        tm = TokenManager(db_path=db_path, default_ttl=12 * 3600)
+        log.info("TokenManager 已初始化，默认有效期 12 小时")
         return tm
 
     def _init_task_manager(self) -> TaskManager:

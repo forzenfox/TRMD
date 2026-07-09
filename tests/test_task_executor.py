@@ -11,9 +11,10 @@
 """
 
 import asyncio
+import inspect
 import os
 import tempfile
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -158,6 +159,91 @@ class TestUpdateFilePaths:
 
         with pytest.raises(TaskNotFoundError):
             await task_manager.update_file_paths("nonexistent", ["/file.mp4"])
+
+
+# ============================================================
+# 测试：TaskExecutor 跨 loop 提交
+# ============================================================
+
+
+class TestSubmitTask:
+    """测试 submit_task 将任务提交到创建时的事件循环。"""
+
+    def test_executor_captures_creation_event_loop(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """TaskExecutor 应保存创建时所在的事件循环。"""
+        target_loop = asyncio.new_event_loop()
+        executor = None
+
+        async def _create():
+            nonlocal executor
+            executor = TaskExecutor(
+                task_manager=task_manager,
+                file_manager=mock_file_manager,
+                client=mock_client,
+            )
+
+        try:
+            target_loop.run_until_complete(_create())
+            assert executor._event_loop is target_loop
+        finally:
+            target_loop.close()
+
+    def test_submit_task_uses_run_coroutine_threadsafe(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """submit_task 应通过 run_coroutine_threadsafe 提交到目标 loop。"""
+        target_loop = asyncio.new_event_loop()
+        executor = None
+
+        async def _create():
+            nonlocal executor
+            executor = TaskExecutor(
+                task_manager=task_manager,
+                file_manager=mock_file_manager,
+                client=mock_client,
+            )
+
+        try:
+            target_loop.run_until_complete(_create())
+
+            task = MagicMock()
+            task.task_id = "task_1"
+
+            with patch(
+                "module.core.task_executor.asyncio.run_coroutine_threadsafe"
+            ) as mock_run:
+                expected_future = MagicMock()
+                mock_run.return_value = expected_future
+
+                result = executor.submit_task(task)
+
+                mock_run.assert_called_once()
+                coro, loop = mock_run.call_args[0]
+                assert inspect.iscoroutine(coro)
+                assert loop is target_loop
+                assert result is expected_future
+        finally:
+            target_loop.close()
+
+    def test_submit_task_raises_when_no_event_loop(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """未绑定事件循环时 submit_task 应抛出 RuntimeError。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+        # 显式清除 event_loop 模拟非 loop 环境创建
+        executor._event_loop = None
+
+        task = MagicMock()
+        task.task_id = "task_1"
+
+        with pytest.raises(RuntimeError, match="未绑定事件循环"):
+            executor.submit_task(task)
 
 
 # ============================================================
@@ -1767,9 +1853,7 @@ class TestPhase3HandleListenDownload:
         mock_message.id = 999
         mock_message.media = None  # 无媒体
 
-        await executor._handle_listen_download(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_download(task.task_id, mock_client, mock_message)
 
         # 验证没有创建 TaskItem
         updated = await task_manager.get_task(task.task_id)
@@ -1798,9 +1882,7 @@ class TestPhase3HandleListenDownload:
         mock_message.media.video.file_unique_id = "uniq123"
         mock_message.media.video.file_id = "file123"
 
-        await executor._handle_listen_download(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_download(task.task_id, mock_client, mock_message)
 
         # 验证创建了 TaskItem
         updated = await task_manager.get_task(task.task_id)
@@ -1831,13 +1913,9 @@ class TestPhase3HandleListenDownload:
         mock_message.media.video.file_id = "file123"
 
         # 第一次调用
-        await executor._handle_listen_download(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_download(task.task_id, mock_client, mock_message)
         # 第二次调用（同一消息）
-        await executor._handle_listen_download(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_download(task.task_id, mock_client, mock_message)
 
         # 验证只创建了一个 TaskItem
         updated = await task_manager.get_task(task.task_id)
@@ -1870,9 +1948,7 @@ class TestPhase3HandleListenDownload:
         mock_message.media.photo.file_unique_id = "photo123"
         mock_message.media.video = None
 
-        await executor._handle_listen_download(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_download(task.task_id, mock_client, mock_message)
 
         # 验证没有创建 TaskItem（photo 不在 media_types 中）
         updated = await task_manager.get_task(task.task_id)
@@ -1905,9 +1981,7 @@ class TestPhase3HandleListenDownload:
         mock_message.media.video.file_unique_id = "uniq123"
         mock_message.media.video.file_id = "file123"
 
-        await executor._handle_listen_download(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_download(task.task_id, mock_client, mock_message)
 
         # 验证 downloader.download_range 被调用
         mock_downloader.download_range.assert_called_once()
@@ -1953,9 +2027,7 @@ class TestPhase3HandleListenForward:
         mock_message.id = 999
         mock_message.media = None  # 无媒体
 
-        await executor._handle_listen_forward(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_forward(task.task_id, mock_client, mock_message)
 
         updated = await task_manager.get_task(task.task_id)
         assert len(updated.items) == 0
@@ -1988,9 +2060,7 @@ class TestPhase3HandleListenForward:
         mock_message.media.video = MagicMock()
         mock_message.media.video.file_unique_id = "uniq123"
 
-        await executor._handle_listen_forward(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_forward(task.task_id, mock_client, mock_message)
 
         # 验证创建了 TaskItem
         updated = await task_manager.get_task(task.task_id)
@@ -2033,13 +2103,9 @@ class TestPhase3HandleListenForward:
         mock_message.media.video.file_unique_id = "uniq123"
 
         # 第一次调用
-        await executor._handle_listen_forward(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_forward(task.task_id, mock_client, mock_message)
         # 第二次调用（同一消息）
-        await executor._handle_listen_forward(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_forward(task.task_id, mock_client, mock_message)
 
         # 验证只转发了一次
         assert mock_client.copy_message.call_count == 1
@@ -2076,9 +2142,7 @@ class TestPhase3HandleListenForward:
         mock_message.media.photo = MagicMock()
         mock_message.media.video = None
 
-        await executor._handle_listen_forward(
-            task.task_id, mock_client, mock_message
-        )
+        await executor._handle_listen_forward(task.task_id, mock_client, mock_message)
 
         # 验证没有创建 TaskItem 也没有转发
         updated = await task_manager.get_task(task.task_id)

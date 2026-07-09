@@ -1,6 +1,8 @@
 # coding=UTF-8
 """Downloader 内容保护限制降级策略测试。"""
 
+import os
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -281,3 +283,186 @@ class TestContentProtectionFallback:
         assert len(target_calls) == 0
         # 验证没有走下载后上传
         downloader.get_download_link_from_bot.assert_not_called()
+
+
+class TestDownloadRangeDtype:
+    """测试 download_range 对媒体类型的识别与临时文件名生成。"""
+
+    @pytest.fixture
+    def downloader(self):
+        """构造带真实 get_temp_file_path 的 Downloader 实例。"""
+        with patch("module.downloader.Bot.__init__", return_value=None):
+            with patch("module.downloader.Application"):
+                with patch("asyncio.get_event_loop"):
+                    from module.app import Application
+                    from module.downloader import TelegramRestrictedMediaDownloader
+
+                    dl = TelegramRestrictedMediaDownloader()
+                    real_app = Application.__new__(Application)
+                    real_app.temp_directory = os.path.join(
+                        os.getcwd(), "tests", "tmp", "trmd"
+                    )
+                    dl.app = real_app
+                    dl.resume_download = AsyncMock(return_value="/mock/final_path")
+                    return dl
+
+    def _make_message(self, dtype: str, msg_id: int = 96396):
+        """构造一个指定媒体类型的 Pyrogram Message Mock。"""
+        media_obj = MagicMock(
+            file_id="valid_file_id_for_test",
+            mime_type=f"{dtype}/mp4" if dtype == "video" else f"{dtype}/jpg",
+            file_size=1024,
+        )
+        msg = MagicMock(
+            id=msg_id,
+            chat=MagicMock(id=-100123, full_name="test_chat"),
+            media=MagicMock(name=dtype.upper()),
+        )
+        # 清空所有媒体属性，仅保留目标类型
+        for attr in (
+            "video",
+            "photo",
+            "document",
+            "audio",
+            "voice",
+            "animation",
+            "video_note",
+        ):
+            setattr(msg, attr, None)
+        setattr(msg, dtype, media_obj)
+        return msg
+
+    @pytest.mark.asyncio
+    async def test_video_message_uses_lowercase_dtype(self, downloader):
+        """视频消息应被识别为小写 video，临时文件名不应为 .unknown。"""
+        msg = self._make_message("video")
+        downloader.app.client = AsyncMock()
+        downloader.app.client.get_messages = AsyncMock(return_value=msg)
+        downloader.env_save_directory = MagicMock(
+            return_value=os.path.join(os.getcwd(), "tests", "tmp", "downloads")
+        )
+
+        with patch("module.app.get_extension", return_value="mp4"):
+            with patch("module.downloader.is_file_duplicate", return_value=False):
+                await downloader.download_range(
+                    chat_id=-100123,
+                    start_id=96396,
+                    end_id=96396,
+                    task_id="task_1",
+                )
+
+        call = downloader.resume_download.call_args
+        file_name = call.kwargs["file_name"]
+        assert not file_name.endswith(".unknown"), (
+            f"视频消息生成的文件名不应以 .unknown 结尾: {file_name}"
+        )
+        assert file_name.endswith(".mp4"), (
+            f"视频消息生成的文件名应使用 .mp4: {file_name}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_photo_message_uses_lowercase_dtype(self, downloader):
+        """图片消息应被识别为小写 photo，临时文件名不应为 .unknown。"""
+        msg = self._make_message("photo")
+        downloader.app.client = AsyncMock()
+        downloader.app.client.get_messages = AsyncMock(return_value=msg)
+        downloader.env_save_directory = MagicMock(
+            return_value=os.path.join(os.getcwd(), "tests", "tmp", "downloads")
+        )
+
+        with patch("module.app.get_extension", return_value="jpg"):
+            with patch("module.downloader.is_file_duplicate", return_value=False):
+                await downloader.download_range(
+                    chat_id=-100123,
+                    start_id=96396,
+                    end_id=96396,
+                    task_id="task_1",
+                )
+
+        call = downloader.resume_download.call_args
+        file_name = call.kwargs["file_name"]
+        assert not file_name.endswith(".unknown"), (
+            f"图片消息生成的文件名不应以 .unknown 结尾: {file_name}"
+        )
+        assert file_name.endswith(".jpg"), (
+            f"图片消息生成的文件名应使用 .jpg: {file_name}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unrenamed_temp_file_reported_as_failed(self, downloader):
+        """当 resume_download 未重命名 .temp 文件时，子任务应报告失败。"""
+        msg = self._make_message("video")
+        downloader.app.client = AsyncMock()
+        downloader.app.client.get_messages = AsyncMock(return_value=msg)
+        downloader.env_save_directory = MagicMock(
+            return_value=os.path.join(os.getcwd(), "tests", "tmp", "downloads")
+        )
+        progress_callback = AsyncMock()
+
+        # 模拟 resume_download 返回目标路径，但目标文件不存在而 .temp 存在
+        target_path = os.path.join(
+            os.getcwd(), "tests", "tmp", "downloads", "96396 - None.mp4"
+        )
+        downloader.resume_download = AsyncMock(return_value=target_path)
+
+        def _fake_exists(path):
+            return str(path).endswith(".temp")
+
+        with patch("module.app.get_extension", return_value="mp4"):
+            with patch("module.downloader.is_file_duplicate", return_value=False):
+                with patch("os.path.exists", side_effect=_fake_exists):
+                    await downloader.download_range(
+                        chat_id=-100123,
+                        start_id=96396,
+                        end_id=96396,
+                        task_id="task_1",
+                        progress_callback=progress_callback,
+                    )
+
+        # 验证进度回调报告了 FAILED 而不是 SUCCESS
+        failed_calls = [
+            call
+            for call in progress_callback.call_args_list
+            if call.args[2].value == "failed"
+        ]
+        assert len(failed_calls) == 1, "未重命名的临时文件应报告失败"
+        assert "临时文件未重命名" in failed_calls[0].args[3]
+
+
+class TestResumeDownloadProgress:
+    """测试 resume_download 在无 progress 回调时的行为。"""
+
+    @pytest.fixture
+    def downloader(self):
+        """构造最小化的 Downloader 实例。"""
+        with patch("module.downloader.Bot.__init__", return_value=None):
+            with patch("module.downloader.Application"):
+                with patch("asyncio.get_event_loop"):
+                    from module.downloader import TelegramRestrictedMediaDownloader
+
+                    dl = TelegramRestrictedMediaDownloader()
+                    dl.app = MagicMock()
+                    return dl
+
+    @pytest.mark.asyncio
+    async def test_resume_download_without_progress_callback(
+        self, downloader, tmp_path
+    ):
+        """不传入 progress 回调时，resume_download 应正常完成重命名。"""
+        target_file = str(tmp_path / "test.jpg")
+        target_size = 4
+
+        async def _stream(*args, **kwargs):
+            yield b"1234"
+
+        downloader.app.client.stream_media = _stream
+
+        with patch("module.downloader.safe_replace") as mock_safe_replace:
+            mock_safe_replace.return_value = {"e_code": None}
+            result = await downloader.resume_download(
+                message=MagicMock(),
+                file_name=target_file,
+                compare_size=target_size,
+            )
+            assert result == target_file
+            mock_safe_replace.assert_called_once()

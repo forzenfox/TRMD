@@ -194,8 +194,8 @@ class ConfigManager {
       max_retry_count: parseInt(this.config.retry_count),
       resource_limits: {
         max_concurrent_tasks: parseInt(this.config.max_concurrent_tasks) || 1,
-        max_download_concurrency: 3,
-        max_upload_concurrency: 1,
+        max_download_concurrency: parseInt(this.config.max_download_task) || 3,
+        max_upload_concurrency: parseInt(this.config.max_upload_task) || 1,
         max_forward_concurrency: 1,
         min_disk_space_gb: parseFloat(this.config.min_disk_space_gb) || 2,
         memory_limit_mb: 512,
@@ -256,6 +256,8 @@ class ConfigManager {
     // 资源限制：后端返回嵌套 resource_limits 对象
     if (config.resource_limits) {
       flattened.max_concurrent_tasks = config.resource_limits.max_concurrent_tasks || 1;
+      flattened.max_download_task = config.resource_limits.max_download_concurrency || 3;
+      flattened.max_upload_task = config.resource_limits.max_upload_concurrency || 1;
       flattened.task_size_warning_gb = config.resource_limits.task_size_warning_gb || 5;
       flattened.task_size_max_gb = config.resource_limits.task_size_max_gb || 10;
       flattened.min_disk_space_gb = config.resource_limits.min_disk_space_gb || 2;

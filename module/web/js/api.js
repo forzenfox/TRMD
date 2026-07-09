@@ -176,12 +176,14 @@ class ApiClient {
    * @param {number} params.offset - 偏移量
    * @param {number} params.limit - 每页数量（默认20）
    * @param {string} params.status - 状态过滤
+   * @param {string} params.task_type - 任务类型过滤
    */
   async getTasks(params = {}) {
     const queryParams = new URLSearchParams();
     if (params.offset !== undefined) queryParams.set('offset', params.offset);
     if (params.limit) queryParams.set('limit', params.limit);
     if (params.status) queryParams.set('status', params.status);
+    if (params.task_type) queryParams.set('task_type', params.task_type);
 
     const query = queryParams.toString();
     return this.request('GET', `/api/tasks${query ? '?' + query : ''}`);

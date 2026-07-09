@@ -1546,7 +1546,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                     ):
                         f.write(chunk)
                         downloaded += len(chunk)
-                        progress(downloaded, *progress_args)
+                        if progress:
+                            progress(downloaded, *progress_args)
                     break
                 except FileReferenceExpired as e:
                     log.warning(
@@ -2115,14 +2116,14 @@ class TelegramRestrictedMediaDownloader(Bot):
                     continue
 
                 # 检查是否有支持的媒体类型
-                # 注意：supported_types 是大写（如 'PHOTO'），需要转换为小写（如 'photo'）
+                # supported_types 是大写属性名（如 'PHOTO'），需要转换为小写属性名（如 'photo'）
+                # get_temp_file_path() 等后续逻辑使用小写类型字符串（如 DownloadType.VIDEO == "video"）
                 valid_dtype = None
                 for t in supported_types:
-                    # Pyrogram 的消息对象使用小写的属性名
                     attr_name = t.lower()
                     attr_value = getattr(message, attr_name, None)
                     if attr_value:
-                        valid_dtype = t  # 保持大写格式，后续代码使用
+                        valid_dtype = attr_name
                         break
 
                 if not valid_dtype or not message.media:
@@ -2144,12 +2145,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                 final_path = os.path.join(save_directory, file_name)
 
                 # 检查文件是否已存在（去重）
-                # 注意：valid_dtype 是大写（如 'PHOTO'），需要转换为小写（如 'photo'）
-                media_obj = getattr(message, valid_dtype.lower())
+                media_obj = getattr(message, valid_dtype)
                 sever_file_size = getattr(media_obj, "file_size", 0) or 0
 
                 if is_file_duplicate(
-                    save_directory=save_directory, sever_file_size=sever_file_size
+                    save_directory=final_path, sever_file_size=sever_file_size
                 ):
                     log.info(f"文件已存在，跳过: {file_name}")
                     downloaded_files.append(final_path)
@@ -2163,6 +2163,14 @@ class TelegramRestrictedMediaDownloader(Bot):
                     file_name=final_path,
                     compare_size=sever_file_size,
                 )
+
+                # 校验：resume_download 在大小不匹配时不会重命名 .temp 文件，
+                # 此时返回的目标路径不存在，需要抛出异常避免任务被错误标记为成功。
+                if final_path and not os.path.exists(final_path):
+                    temp_path = f"{final_path}.temp"
+                    if os.path.exists(temp_path):
+                        raise Exception(f"下载未完成，临时文件未重命名: {temp_path}")
+
                 downloaded_files.append(final_path)
 
                 if progress_callback:
