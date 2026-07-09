@@ -298,6 +298,79 @@ def get_test_download_count() -> int:
     return int(_get_config_value("test_download_count", "E2E_TEST_DOWNLOAD_COUNT", "5"))
 
 
+def get_test_message_id_range() -> dict:
+    """
+    获取下载测试消息ID范围
+
+    Returns:
+        dict: {min_id: int, max_id: int} 或空字典
+    """
+    yaml_config = _load_yaml_config()
+    id_range = yaml_config.get("test_message_id_range", {})
+
+    # 环境变量覆盖（格式：min_id,max_id）
+    env_range = os.environ.get("E2E_TEST_MESSAGE_ID_RANGE", "")
+    if env_range and "," in env_range:
+        try:
+            min_id, max_id = env_range.split(",")
+            return {"min_id": int(min_id.strip()), "max_id": int(max_id.strip())}
+        except (ValueError, AttributeError):
+            pass
+
+    # 从配置文件读取
+    if isinstance(id_range, dict) and "min_id" in id_range and "max_id" in id_range:
+        return {
+            "min_id": int(id_range["min_id"]),
+            "max_id": int(id_range["max_id"]),
+        }
+
+    return {}
+
+
+def get_single_file_timeout() -> int:
+    """
+    获取单个文件下载超时时间（秒）
+
+    Returns:
+        int: 单个文件超时秒数
+    """
+    return int(_get_config_value("test_single_file_timeout", "E2E_SINGLE_FILE_TIMEOUT", "60"))
+
+
+def get_base_timeout() -> int:
+    """
+    获取基础超时时间（秒）
+
+    Returns:
+        int: 基础超时秒数
+    """
+    return int(_get_config_value("test_base_timeout", "E2E_BASE_TIMEOUT", "30"))
+
+
+def calculate_download_timeout() -> int:
+    """
+    根据消息ID范围动态计算下载超时时间
+
+    Returns:
+        int: 总超时秒数
+    """
+    base_timeout = get_base_timeout()
+    single_file_timeout = get_single_file_timeout()
+
+    # 根据消息ID范围计算文件数量
+    id_range = get_test_message_id_range()
+    if id_range and "min_id" in id_range and "max_id" in id_range:
+        file_count = id_range["max_id"] - id_range["min_id"] + 1
+    else:
+        # 使用 recent 模式，使用配置的下载条数
+        file_count = get_test_download_count()
+
+    # 总超时 = 基础超时 + (单个文件超时 × 文件数量)
+    total_timeout = base_timeout + (single_file_timeout * file_count)
+
+    return total_timeout
+
+
 def get_test_media_types() -> list:
     """
     获取下载媒体类型过滤列表

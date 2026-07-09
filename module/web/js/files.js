@@ -18,7 +18,12 @@ class FileManager {
   async loadFiles(path) {
     try {
       const response = await api.getFiles(path);
-      return response.items || [];
+      // 将 API 的 type 字段转换为前端的 is_directory 字段
+      const items = response.items || [];
+      return items.map(item => ({
+        ...item,
+        is_directory: item.type === 'directory'
+      }));
     } catch (error) {
       console.error('加载文件列表失败:', error);
       throw error;

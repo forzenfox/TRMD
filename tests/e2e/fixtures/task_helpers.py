@@ -17,6 +17,7 @@ from .test_config import (
     get_test_media_types,
     get_test_download_timeout,
     is_cleanup_test_data,
+    get_test_message_id_range,
     PROJECT_ROOT,
 )
 
@@ -26,6 +27,7 @@ def create_download_task(
     source_channel: Optional[str] = None,
     recent_count: Optional[int] = None,
     media_types: Optional[list] = None,
+    message_id_range: Optional[dict] = None,
 ) -> str:
     """
     创建下载任务。
@@ -33,8 +35,9 @@ def create_download_task(
     Args:
         test_token: 认证 Token
         source_channel: 源频道标识符，默认从配置读取
-        recent_count: 下载最近 N 条消息，默认从配置读取
+        recent_count: 下载最近 N 条消息（仅当 message_id_range 为空时使用）
         media_types: 媒体类型过滤列表，默认从配置读取
+        message_id_range: 消息ID范围 {min_id: int, max_id: int}，默认从配置读取
 
     Returns:
         任务 ID
@@ -43,8 +46,11 @@ def create_download_task(
         AssertionError: 创建失败时抛出
     """
     source_channel = source_channel or get_test_source_channel()
-    recent_count = recent_count or get_test_download_count()
     media_types = media_types or get_test_media_types()
+
+    # 优先使用消息ID范围（避免 FloodWait）
+    if message_id_range is None:
+        message_id_range = get_test_message_id_range()
 
     if not source_channel:
         raise ValueError("未配置 test_source_channel，无法创建下载任务")
@@ -54,15 +60,33 @@ def create_download_task(
         "Content-Type": "application/json",
     }
 
-    payload = {
-        "task_type": "download",
-        "params": {
-            "source_identifier": source_channel,
-            "range_mode": "recent",
-            "recent_count": recent_count,
-            "media_types": media_types,
-        },
-    }
+    # 构建任务参数：优先使用 id_range 模式
+    if message_id_range and "min_id" in message_id_range and "max_id" in message_id_range:
+        # id_range 模式（避免 FloodWait）
+        payload = {
+            "task_type": "download",
+            "params": {
+                "source_identifier": source_channel,
+                "range_mode": "id_range",
+                "min_id": message_id_range["min_id"],
+                "max_id": message_id_range["max_id"],
+                "media_types": media_types,
+            },
+        }
+        print(f"[E2E] 使用 id_range 模式，范围: {message_id_range['min_id']}-{message_id_range['max_id']}")
+    else:
+        # recent 模式（可能触发 FloodWait）
+        recent_count = recent_count or get_test_download_count()
+        payload = {
+            "task_type": "download",
+            "params": {
+                "source_identifier": source_channel,
+                "range_mode": "recent",
+                "recent_count": recent_count,
+                "media_types": media_types,
+            },
+        }
+        print(f"[E2E] 使用 recent 模式，数量: {recent_count}")
 
     resp = requests.post(
         f"{E2E_SERVER_URL}/api/tasks",
@@ -145,7 +169,7 @@ def wait_for_task_completion(
     Args:
         test_token: 认证 Token
         task_id: 任务 ID
-        timeout: 超时时间（秒），默认从配置读取
+        timeout: 超时时间（秒），默认动态计算
         poll_interval: 轮询间隔（秒）
 
     Returns:
@@ -154,7 +178,11 @@ def wait_for_task_completion(
     Raises:
         TimeoutError: 超时时抛出
     """
-    timeout = timeout or get_test_download_timeout()
+    # 动态计算超时时间
+    if timeout is None:
+        from .test_config import calculate_download_timeout
+        timeout = calculate_download_timeout()
+
     start_time = time.time()
 
     while True:

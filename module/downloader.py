@@ -2115,9 +2115,15 @@ class TelegramRestrictedMediaDownloader(Bot):
                     continue
 
                 # 检查是否有支持的媒体类型
-                valid_dtype = next(
-                    (t for t in supported_types if getattr(message, t, None)), None
-                )
+                # 注意：supported_types 是大写（如 'PHOTO'），需要转换为小写（如 'photo'）
+                valid_dtype = None
+                for t in supported_types:
+                    # Pyrogram 的消息对象使用小写的属性名
+                    attr_name = t.lower()
+                    attr_value = getattr(message, attr_name, None)
+                    if attr_value:
+                        valid_dtype = t  # 保持大写格式，后续代码使用
+                        break
 
                 if not valid_dtype or not message.media:
                     if progress_callback:
@@ -2138,7 +2144,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                 final_path = os.path.join(save_directory, file_name)
 
                 # 检查文件是否已存在（去重）
-                media_obj = getattr(message, valid_dtype)
+                # 注意：valid_dtype 是大写（如 'PHOTO'），需要转换为小写（如 'photo'）
+                media_obj = getattr(message, valid_dtype.lower())
                 sever_file_size = getattr(media_obj, "file_size", 0) or 0
 
                 if is_file_duplicate(

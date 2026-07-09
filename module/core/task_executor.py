@@ -724,10 +724,14 @@ class TaskExecutor:
             return message_ids
 
         chat_id = task.chat_id
-        messages = await asyncio.gather(
-            *[self._client.get_messages(chat_id, msg_id) for msg_id in message_ids]
-        )
-        return self._filter_media_messages_by_criteria(task, messages)
+        try:
+            messages = await asyncio.gather(
+                *[self._client.get_messages(chat_id, msg_id) for msg_id in message_ids]
+            )
+            return self._filter_media_messages_by_criteria(task, messages)
+        except Exception as e:
+            log.error(f"获取消息失败: {e}")
+            raise
 
     async def _execute_download(self, task: Task) -> None:
         """执行下载任务。"""
@@ -1140,6 +1144,31 @@ class TaskExecutor:
         if not message or not message.media:
             return None
         media = message.media
+
+        # 检查是否是 Pyrogram 的 MessageMediaType 枚举
+        # Pyrogram 2.x 中，message.media 可能是枚举类型（如 MessageMediaType.PHOTO）
+        if hasattr(media, "name"):
+            # 枚举类型，通过 name 判断（如 'PHOTO', 'VIDEO', 'DOCUMENT'）
+            media_name = media.name if hasattr(media, 'name') else str(media)
+            # 枚举名称映射到标准类型
+            name_mapping = {
+                "PHOTO": "photo",
+                "VIDEO": "video",
+                "DOCUMENT": "document",
+                "AUDIO": "audio",
+                "ANIMATION": "animation",
+                "VOICE": "voice",
+                "VIDEO_NOTE": "video_note",
+                "STICKER": "sticker",
+                "CONTACT": "contact",
+                "LOCATION": "location",
+                "VENUE": "venue",
+                "WEB_PAGE": "web_page",
+                "GAME": "game",
+            }
+            return name_mapping.get(media_name.upper(), None)
+
+        # 旧版 Pyrogram：message.media 是 MessageMedia 对象
         if hasattr(media, "video") and media.video:
             return "video"
         if hasattr(media, "photo") and media.photo:
