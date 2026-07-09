@@ -178,6 +178,25 @@ def setup_exception_handlers(app: FastAPI) -> None:
             content={"code": 400, "message": str(exc), "data": None},
         )
 
+    # 处理 IdentifierServiceError（标识符解析服务异常）
+    from module.core.identifier_service import IdentifierServiceError
+
+    @app.exception_handler(IdentifierServiceError)
+    async def identifier_service_error_handler(
+        request: Request, exc: IdentifierServiceError
+    ) -> JSONResponse:
+        """处理标识符解析服务异常。"""
+        logger.warning("标识符解析异常 [%s]: %s", exc.code, exc.message)
+        data = {"retry_after": exc.retry_after} if exc.retry_after is not None else None
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "code": exc.status_code,
+                "message": exc.message,
+                "data": data,
+            },
+        )
+
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(
         request: Request, exc: RequestValidationError

@@ -57,6 +57,13 @@ class FilesPage(BasePage):
     UPLOAD_CANCEL_BTN = "upload-cancel-btn"
     UPLOAD_SUBMIT_BTN = "upload-submit-btn"
 
+    # 文件预览按钮
+    BTN_FILE_PREVIEW = "btn-file-preview"
+
+    # 加载/错误状态
+    FILES_LOADING = "files-loading"
+    FILES_ERROR = "files-error"
+
     def __init__(self, page: Page):
         super().__init__(page)
 
@@ -69,8 +76,42 @@ class FilesPage(BasePage):
 
     def wait_for_page_loaded(self, timeout: int = NAVIGATION_TIMEOUT) -> None:
         """等待页面加载完成"""
-        # 等待文件列表容器出现
-        self.wait_for_selector(self.FILES_CONTAINER, timeout)
+        # 等待 loading 状态结束
+        self.page.wait_for_function(
+            "() => { const el = document.querySelector('[x-data]'); return window.Alpine && el && window.Alpine.$data(el) && !window.Alpine.$data(el).loading; }",
+            timeout=timeout,
+        )
+        # 等待文件列表容器或错误提示可见
+        self.page.wait_for_selector(
+            f'[data-testid="{self.FILES_CONTAINER}"]:visible, [data-testid="{self.FILES_ERROR}"]:visible',
+            timeout=timeout,
+        )
+
+    # ========== 加载/错误状态 ==========
+
+    def is_loading_visible(self) -> bool:
+        """检查加载状态是否可见"""
+        return self.is_visible_by_testid(self.FILES_LOADING)
+
+    def is_error_state_visible(self) -> bool:
+        """检查错误提示是否可见"""
+        return self.is_visible_by_testid(self.FILES_ERROR)
+
+    def get_error_text(self) -> str:
+        """获取错误提示文本"""
+        return self.get_text_by_testid(self.FILES_ERROR)
+
+    def go_to_parent_directory(self) -> None:
+        """返回上级目录（点击面包屑倒数第二项）
+
+        当位于子目录时，面包屑最后一项为当前目录，
+        倒数第二项为上级目录，点击即可返回上级。
+        """
+        items = self.get_breadcrumb_items()
+        if len(items) < 2:
+            raise IndexError("当前已在根目录，无法返回上级目录")
+        # 点击倒数第二项（上级目录）
+        items[len(items) - 2].click()
 
     # ========== 页面头部操作 ==========
 
@@ -184,7 +225,7 @@ class FilesPage(BasePage):
     def get_file_name(self, index: int) -> str:
         """获取指定索引文件的名称"""
         row = self.get_file_row(index)
-        name_element = row.locator(f'[data-testid="{self.FILE_NAME}"]')
+        name_element = row.locator(f'[data-testid="{self.FILE_NAME}"]').first
         return name_element.text_content() or ""
 
     def get_file_size(self, index: int) -> str:
@@ -205,6 +246,93 @@ class FilesPage(BasePage):
         name_link = row.locator(f'a[data-testid="{self.FILE_NAME}"]')
         if name_link.count() > 0:
             name_link.click()
+
+    def is_directory_row(self, index: int) -> bool:
+        """判断指定索引的文件行是否为目录
+
+        目录行的文件名为<a>标签，非目录为<span>标签。
+        """
+        row = self.get_file_row(index)
+        name_link = row.locator(f'a[data-testid="{self.FILE_NAME}"]')
+        return name_link.count() > 0
+
+    def find_first_directory_index(self) -> int:
+        """查找第一个目录行的索引
+
+        Returns:
+            第一个目录行的索引，若无目录则返回-1
+        """
+        rows = self.get_file_rows()
+        for i, row in enumerate(rows):
+            name_link = row.locator(f'a[data-testid="{self.FILE_NAME}"]')
+            if name_link.count() > 0:
+                return i
+        return -1
+
+    def find_first_file_index(self) -> int:
+        """查找第一个非目录文件行的索引
+
+        Returns:
+            第一个非目录文件行的索引，若无文件则返回-1
+        """
+        file_count = self.get_file_count()
+        for i in range(file_count):
+            if not self.is_directory_row(i):
+                return i
+        return -1
+
+    def double_click_file_row(self, index: int) -> None:
+        """双击指定索引的文件行"""
+        row = self.get_file_row(index)
+        row.dblclick()
+
+    def is_preview_btn_visible_in_row(self, index: int) -> bool:
+        """判断指定索引文件行中预览按钮是否可见
+
+        预览按钮仅在非目录的媒体文件行上显示。
+        """
+        row = self.get_file_row(index)
+        preview_btn = row.locator(f'[data-testid="{self.BTN_FILE_PREVIEW}"]')
+        return preview_btn.is_visible()
+
+    def has_preview_btn_in_row(self, index: int) -> bool:
+        """判断指定索引文件行中是否存在预览按钮元素
+
+        与is_preview_btn_visible_in_row不同，此方法仅检查元素是否存在于DOM中，
+        不关心可见性（x-show可能隐藏它）。
+        """
+        row = self.get_file_row(index)
+        preview_btn = row.locator(f'[data-testid="{self.BTN_FILE_PREVIEW}"]')
+        return preview_btn.count() > 0
+
+    def get_breadcrumb_texts(self) -> list[str]:
+        """获取面包屑导航项的文本列表"""
+        items = self.get_breadcrumb_items()
+        return [item.text_content().strip() for item in items if item.text_content()]
+
+    def get_breadcrumb_count(self) -> int:
+        """获取面包屑导航项数量"""
+        return len(self.get_breadcrumb_items())
+
+    def has_directory(self) -> bool:
+        """检查文件列表中是否存在目录
+
+        Returns:
+            True如果至少有一个目录，否则False
+        """
+        return self.find_first_directory_index() >= 0
+
+    def has_media_file(self) -> bool:
+        """检查文件列表中是否存在媒体文件（有预览按钮的文件）
+
+        Returns:
+            True如果至少有一个媒体文件，否则False
+        """
+        file_count = self.get_file_count()
+        for i in range(file_count):
+            if self.has_preview_btn_in_row(i):
+                return True
+        return False
 
     # ========== 底部选择信息栏 ==========
 
@@ -233,6 +361,10 @@ class FilesPage(BasePage):
     def wait_for_upload_modal(self, timeout: int = 10000) -> None:
         """等待上传弹窗出现"""
         self.wait_for_selector(self.UPLOAD_MODAL, timeout)
+
+    def wait_for_upload_modal_hidden(self, timeout: int = 10000) -> None:
+        """等待上传弹窗关闭"""
+        self.wait_for_hidden_by_testid(self.UPLOAD_MODAL, timeout)
 
     def close_upload_modal(self) -> None:
         """关闭上传弹窗"""

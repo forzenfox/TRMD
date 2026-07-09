@@ -249,13 +249,13 @@
         </div>
 
         <!-- 加载状态 -->
-        <div x-show="loading" class="flex items-center justify-center py-12">
+        <div x-show="loading" data-testid="files-loading" class="flex items-center justify-center py-12">
           <div class="spinner spinner-lg"></div>
           <span class="ml-3 text-slate-400">加载文件列表...</span>
         </div>
 
         <!-- 错误提示 -->
-        <div x-show="error" class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-4">
+        <div x-show="error" data-testid="files-error" class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-4">
           <span x-text="error"></span>
         </div>
 
@@ -318,6 +318,7 @@
                         @click="previewFile(file)"
                         class="text-slate-400 hover:text-white"
                         title="预览"
+                        data-testid="btn-file-preview"
                       >
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>

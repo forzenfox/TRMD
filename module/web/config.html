@@ -129,23 +129,25 @@
         </div>
         <div class="flex items-center space-x-3">
           <button 
-            x-show="configManager.hasChanges"
-            @click="configManager.resetConfig()"
+            x-show="(_ut, configManager.hasChanges)"
+            @click="configManager.resetConfig(); _tu()"
             class="btn btn-secondary"
+            data-testid="reset-btn"
           >
             重置
           </button>
           <button 
-            x-show="configManager.hasChanges"
+            x-show="(_ut, configManager.hasChanges)"
             @click="handleSaveConfig()"
-            :disabled="configManager.saving"
+            :disabled="(_ut, configManager.saving)"
             class="btn btn-primary"
+            data-testid="save-btn"
           >
-            <svg x-show="configManager.saving" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+            <svg x-show="(_ut, configManager.saving)" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            <span x-text="configManager.saving ? '保存中...' : '保存配置'"></span>
+            <span x-text="(_ut, configManager.saving) ? '保存中...' : '保存配置'"></span>
           </button>
         </div>
       </header>
@@ -185,18 +187,18 @@
         </div>
 
         <!-- 加载状态 -->
-        <div x-show="configManager.loading" class="flex items-center justify-center py-12">
+        <div x-show="(_ut, configManager.loading)" class="flex items-center justify-center py-12" data-testid="loading-indicator">
           <div class="spinner spinner-lg"></div>
           <span class="ml-3 text-slate-400">加载配置...</span>
         </div>
 
         <!-- 错误提示 -->
-        <div x-show="configManager.error && !configManager.loading" class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-6">
-          <p class="text-sm" x-text="configManager.error"></p>
+        <div x-show="(_ut, configManager.error && !configManager.loading)" class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-6" data-testid="config-error">
+          <p class="text-sm" x-text="(_ut, configManager.error) || ''"></p>
         </div>
 
         <!-- 成功提示 -->
-        <div x-show="configManager.success" class="bg-green-900/30 border border-green-700 text-green-300 px-4 py-3 rounded-lg mb-6">
+        <div x-show="(_ut, configManager.success)" class="bg-green-900/30 border border-green-700 text-green-300 px-4 py-3 rounded-lg mb-6" data-testid="config-success">
           <p class="text-sm">配置保存成功！</p>
         </div>
 
@@ -208,36 +210,42 @@
               <button 
                 @click="setActiveTab('basic')"
                 :class="isTabActive('basic') ? 'tab active' : 'tab'"
+                data-testid="tab-basic"
               >
                 基础配置
               </button>
               <button 
                 @click="setActiveTab('download')"
                 :class="isTabActive('download') ? 'tab active' : 'tab'"
+                data-testid="tab-download"
               >
                 下载配置
               </button>
               <button 
                 @click="setActiveTab('upload')"
                 :class="isTabActive('upload') ? 'tab active' : 'tab'"
+                data-testid="tab-upload"
               >
                 上传配置
               </button>
               <button 
                 @click="setActiveTab('proxy')"
                 :class="isTabActive('proxy') ? 'tab active' : 'tab'"
+                data-testid="tab-proxy"
               >
                 代理配置
               </button>
               <button 
                 @click="setActiveTab('notification')"
                 :class="isTabActive('notification') ? 'tab active' : 'tab'"
+                data-testid="tab-notification"
               >
                 通知配置
               </button>
               <button 
                 @click="setActiveTab('resource')"
                 :class="isTabActive('resource') ? 'tab active' : 'tab'"
+                data-testid="tab-resource"
               >
                 资源限制
               </button>
@@ -245,177 +253,188 @@
           </div>
 
           <!-- 基础配置 -->
-          <div x-show="isTabActive('basic')" class="card">
+          <div x-show="isTabActive('basic')" class="card" data-testid="panel-basic">
             <div class="card-header">
               <h2 class="card-title">基础配置</h2>
             </div>
             <div class="space-y-4">
               <div class="form-group">
                 <label class="form-label">API ID *</label>
-                <input 
-                  type="text" 
-                  x-model="configManager.config.api_id"
-                  @input="configManager.updateConfigValue('api_id', $event.target.value)"
+                <input
+                  type="text"
+                  :value="(_ut, configManager.config.api_id)"
+                  @input="configManager.updateConfigValue('api_id', $event.target.value); _tu()"
                   class="form-input"
                   placeholder="从 my.telegram.org 获取"
                   required
+                  data-testid="input-api-id"
                 >
               </div>
               <div class="form-group">
                 <label class="form-label">API Hash *</label>
-                <input 
-                  type="password" 
-                  x-model="configManager.config.api_hash"
-                  @input="configManager.updateConfigValue('api_hash', $event.target.value)"
+                <input
+                  type="password"
+                  :value="(_ut, configManager.config.api_hash)"
+                  @input="configManager.updateConfigValue('api_hash', $event.target.value); _tu()"
                   class="form-input"
                   placeholder="从 my.telegram.org 获取"
                   required
+                  data-testid="input-api-hash"
                 >
               </div>
               <div class="form-group">
                 <label class="form-label">Bot Token</label>
-                <input 
-                  type="password" 
-                  x-model="configManager.config.bot_token"
-                  @input="configManager.updateConfigValue('bot_token', $event.target.value)"
+                <input
+                  type="password"
+                  :value="(_ut, configManager.config.bot_token)"
+                  @input="configManager.updateConfigValue('bot_token', $event.target.value); _tu()"
                   class="form-input"
                   placeholder="从 @BotFather 获取"
+                  data-testid="input-bot-token"
                 >
               </div>
               <div class="form-group">
                 <label class="form-label">工作目录</label>
-                <input 
-                  type="text" 
-                  x-model="configManager.config.work_dir"
-                  @input="configManager.updateConfigValue('work_dir', $event.target.value)"
+                <input
+                  type="text"
+                  :value="(_ut, configManager.config.work_dir)"
+                  @input="configManager.updateConfigValue('work_dir', $event.target.value); _tu()"
                   class="form-input"
                   placeholder="默认：./downloads"
+                  data-testid="input-work-dir"
                 >
               </div>
             </div>
           </div>
 
           <!-- 下载配置 -->
-          <div x-show="isTabActive('download')" class="card">
+          <div x-show="isTabActive('download')" class="card" data-testid="tab-content-download">
             <div class="card-header">
               <h2 class="card-title">下载配置</h2>
             </div>
             <div class="space-y-4">
               <div class="form-group">
-                <label class="form-label">下载类型</label>
-                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-                  <template x-for="option in configManager.getDownloadTypeOptions()" :key="option.value">
-                    <label class="flex items-center cursor-pointer p-3 bg-slate-700/50 rounded-lg hover:bg-slate-700 transition-colors">
-                      <input 
-                        type="checkbox" 
-                        :checked="configManager.isDownloadTypeSelected(option.value)"
-                        @change="configManager.toggleDownloadType(option.value)"
-                        class="mr-2"
-                      >
+	                <label class="form-label">下载类型</label>
+	                <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+	                  <template x-for="option in configManager.getDownloadTypeOptions()" :key="option.value">
+	                    <label class="flex items-center cursor-pointer p-3 bg-slate-700/50 rounded-lg hover:bg-slate-700 transition-colors">
+	                      <input
+	                        type="checkbox"
+	                        :checked="(_ut, configManager.isDownloadTypeSelected(option.value))"
+	                        @change="configManager.toggleDownloadType(option.value); _tu()"
+	                        class="mr-2"
+	                      >
                       <span x-text="option.icon + ' ' + option.label"></span>
                     </label>
                   </template>
                 </div>
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div class="form-group">
-                  <label class="form-label">下载并发数</label>
-                  <input 
-                    type="number" 
-                    x-model="configManager.config.max_download_task"
-                    @input="configManager.updateConfigValue('max_download_task', $event.target.value)"
-                    class="form-input"
-                    min="1"
-                    max="10"
-                  >
-                  <p class="text-xs text-slate-500 mt-1">范围：1-10</p>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">重试次数</label>
-                  <input 
-                    type="number" 
-                    x-model="configManager.config.retry_count"
-                    @input="configManager.updateConfigValue('retry_count', $event.target.value)"
-                    class="form-input"
-                    min="0"
-                  >
-                  <p class="text-xs text-slate-500 mt-1">失败后自动重试次数</p>
-                </div>
-              </div>
+	                <div class="form-group">
+	                  <label class="form-label">下载并发数</label>
+	                  <input
+		                    type="number"
+		                    :value="(_ut, configManager.config.max_download_task)"
+		                    @input="configManager.updateConfigValue('max_download_task', $event.target.value); _tu()"
+		                    class="form-input"
+		                    min="1"
+		                    max="10"
+		                    data-testid="input-max-download-task"
+		                  >
+	                  <p class="text-xs text-slate-500 mt-1">范围：1-10</p>
+	                </div>
+	                <div class="form-group">
+	                  <label class="form-label">重试次数</label>
+	                  <input
+		                    type="number"
+		                    :value="(_ut, configManager.config.retry_count)"
+		                    @input="configManager.updateConfigValue('retry_count', $event.target.value); _tu()"
+		                    class="form-input"
+		                    min="0"
+		                    data-testid="input-retry-count"
+		                  >
+	                  <p class="text-xs text-slate-500 mt-1">失败后自动重试次数</p>
+	                </div>
+	              </div>
             </div>
           </div>
 
           <!-- 上传配置 -->
-          <div x-show="isTabActive('upload')" class="card">
+          <div x-show="isTabActive('upload')" class="card" data-testid="tab-content-upload">
             <div class="card-header">
               <h2 class="card-title">上传配置</h2>
             </div>
             <div class="space-y-4">
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div class="form-group">
-                  <label class="form-label">上传并发数</label>
-                  <input 
-                    type="number" 
-                    x-model="configManager.config.max_upload_task"
-                    @input="configManager.updateConfigValue('max_upload_task', $event.target.value)"
-                    class="form-input"
-                    min="1"
-                    max="10"
-                  >
-                  <p class="text-xs text-slate-500 mt-1">范围：1-10</p>
-                </div>
-                <div class="form-group">
-                  <label class="form-label">媒体组大小</label>
-                  <input 
-                    type="number" 
-                    x-model="configManager.config.media_group_size"
-                    @input="configManager.updateConfigValue('media_group_size', $event.target.value)"
-                    class="form-input"
-                    min="1"
-                    max="10"
-                  >
-                  <p class="text-xs text-slate-500 mt-1">Telegram 媒体组上限为 10</p>
-                </div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">默认发送方式</label>
-                <select 
-                  x-model="configManager.config.default_send_method"
-                  @change="configManager.updateConfigValue('default_send_method', $event.target.value)"
-                  class="form-input form-select"
-                >
-                  <option value="media">媒体文件</option>
-                  <option value="document">文档</option>
-                </select>
-              </div>
-            </div>
+	              <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+	                <div class="form-group">
+	                  <label class="form-label">上传并发数</label>
+	                  <input
+		                    type="number"
+		                    :value="(_ut, configManager.config.max_upload_task)"
+		                    @input="configManager.updateConfigValue('max_upload_task', $event.target.value); _tu()"
+		                    class="form-input"
+		                    min="1"
+		                    max="10"
+		                    data-testid="input-max-upload-task"
+		                  >
+	                  <p class="text-xs text-slate-500 mt-1">范围：1-10</p>
+	                </div>
+	                <div class="form-group">
+	                  <label class="form-label">媒体组大小</label>
+	                  <input
+		                    type="number"
+		                    :value="(_ut, configManager.config.media_group_size)"
+		                    @input="configManager.updateConfigValue('media_group_size', $event.target.value); _tu()"
+		                    class="form-input"
+		                    min="1"
+		                    max="10"
+		                    data-testid="input-media-group-size"
+		                  >
+	                  <p class="text-xs text-slate-500 mt-1">Telegram 媒体组上限为 10</p>
+	                </div>
+	              </div>
+	              <div class="form-group">
+	                <label class="form-label">默认发送方式</label>
+	                <select
+		                  :value="(_ut, configManager.config.default_send_method)"
+		                  @change="configManager.updateConfigValue('default_send_method', $event.target.value); _tu()"
+		                  class="form-input form-select"
+		                  data-testid="select-send-method"
+		                >
+	                  <option value="media">媒体文件</option>
+	                  <option value="document">文档</option>
+	                </select>
+	              </div>
+	            </div>
           </div>
 
           <!-- 代理配置 -->
-          <div x-show="isTabActive('proxy')" class="card">
+          <div x-show="isTabActive('proxy')" class="card" data-testid="tab-content-proxy">
             <div class="card-header">
               <h2 class="card-title">代理配置</h2>
             </div>
             <div class="space-y-4">
               <div class="form-group">
                 <label class="flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    :checked="configManager.config.proxy_enabled === true || configManager.config.proxy_enabled === 'true'"
-                    @change="configManager.updateConfigValue('proxy_enabled', $event.target.checked)"
-                    class="mr-2"
-                  >
+                  <input
+		                    type="checkbox"
+		                    :checked="(_ut, configManager.config.proxy_enabled === true || configManager.config.proxy_enabled === 'true')"
+		                    @change="configManager.updateConfigValue('proxy_enabled', $event.target.checked); _tu()"
+		                    class="mr-2"
+		                    data-testid="checkbox-proxy-enabled"
+		                  >
                   <span>启用代理</span>
                 </label>
               </div>
-              <div x-show="configManager.config.proxy_enabled === true || configManager.config.proxy_enabled === 'true'" class="space-y-4 pl-6 border-l-2 border-slate-700">
+              <div x-show="(_ut, configManager.config.proxy_enabled === true || configManager.config.proxy_enabled === 'true')" class="space-y-4 pl-6 border-l-2 border-slate-700">
                 <div class="form-group">
                   <label class="form-label">代理类型</label>
-                  <select 
-                    x-model="configManager.config.proxy_type"
-                    @change="configManager.updateConfigValue('proxy_type', $event.target.value)"
-                    class="form-input form-select"
-                  >
+                  <select
+		                    :value="(_ut, configManager.config.proxy_type)"
+		                    @change="configManager.updateConfigValue('proxy_type', $event.target.value); _tu()"
+		                    class="form-input form-select"
+		                    data-testid="select-proxy-type"
+		                  >
                     <option value="socks5">SOCKS5</option>
                     <option value="http">HTTP</option>
                   </select>
@@ -423,47 +442,51 @@
                 <div class="grid grid-cols-2 gap-4">
                   <div class="form-group">
                     <label class="form-label">代理地址</label>
-                    <input 
-                      type="text" 
-                      x-model="configManager.config.proxy_host"
-                      @input="configManager.updateConfigValue('proxy_host', $event.target.value)"
-                      class="form-input"
-                      placeholder="127.0.0.1"
-                    >
+                    <input
+		                      type="text"
+		                      :value="(_ut, configManager.config.proxy_host)"
+		                      @input="configManager.updateConfigValue('proxy_host', $event.target.value); _tu()"
+		                      class="form-input"
+		                      placeholder="127.0.0.1"
+		                      data-testid="input-proxy-host"
+		                    >
                   </div>
                   <div class="form-group">
                     <label class="form-label">代理端口</label>
-                    <input 
-                      type="number" 
-                      x-model="configManager.config.proxy_port"
-                      @input="configManager.updateConfigValue('proxy_port', $event.target.value)"
-                      class="form-input"
-                      min="1"
-                      max="65535"
-                      placeholder="1080"
-                    >
+                    <input
+		                      type="number"
+		                      :value="(_ut, configManager.config.proxy_port)"
+		                      @input="configManager.updateConfigValue('proxy_port', $event.target.value); _tu()"
+		                      class="form-input"
+		                      min="1"
+		                      max="65535"
+		                      placeholder="1080"
+		                      data-testid="input-proxy-port"
+		                    >
                   </div>
                 </div>
                 <div class="grid grid-cols-2 gap-4">
                   <div class="form-group">
                     <label class="form-label">用户名（可选）</label>
-                    <input 
-                      type="text" 
-                      x-model="configManager.config.proxy_username"
-                      @input="configManager.updateConfigValue('proxy_username', $event.target.value)"
-                      class="form-input"
-                      placeholder="留空表示无认证"
-                    >
+                    <input
+	                      type="text"
+	                      :value="(_ut, configManager.config.proxy_username)"
+	                      @input="configManager.updateConfigValue('proxy_username', $event.target.value); _tu()"
+	                      class="form-input"
+	                      placeholder="留空表示无认证"
+	                      data-testid="input-proxy-username"
+	                    >
                   </div>
                   <div class="form-group">
                     <label class="form-label">密码（可选）</label>
-                    <input 
-                      type="password" 
-                      x-model="configManager.config.proxy_password"
-                      @input="configManager.updateConfigValue('proxy_password', $event.target.value)"
-                      class="form-input"
-                      placeholder="留空表示无认证"
-                    >
+                    <input
+	                      type="password"
+	                      :value="(_ut, configManager.config.proxy_password)"
+	                      @input="configManager.updateConfigValue('proxy_password', $event.target.value); _tu()"
+	                      class="form-input"
+	                      placeholder="留空表示无认证"
+	                      data-testid="input-proxy-password"
+	                    >
                   </div>
                 </div>
               </div>
@@ -471,31 +494,33 @@
           </div>
 
           <!-- 通知配置 -->
-          <div x-show="isTabActive('notification')" class="card">
+          <div x-show="isTabActive('notification')" class="card" data-testid="tab-content-notification">
             <div class="card-header">
               <h2 class="card-title">通知配置</h2>
             </div>
             <div class="space-y-4">
               <div class="form-group">
                 <label class="flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    :checked="configManager.config.notification_enabled === true || configManager.config.notification_enabled === 'true'"
-                    @change="configManager.updateConfigValue('notification_enabled', $event.target.checked)"
-                    class="mr-2"
-                  >
+                  <input
+	                    type="checkbox"
+	                    :checked="(_ut, configManager.config.notification_enabled === true || configManager.config.notification_enabled === 'true')"
+	                    @change="configManager.updateConfigValue('notification_enabled', $event.target.checked); _tu()"
+	                    class="mr-2"
+	                    data-testid="checkbox-notification-enabled"
+	                  >
                   <span>启用完成通知</span>
                 </label>
                 <p class="text-xs text-slate-500 mt-1">任务完成后发送通知到 Bot</p>
               </div>
               <div class="form-group">
                 <label class="flex items-center cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    :checked="configManager.config.error_notification_enabled === true || configManager.config.error_notification_enabled === 'true'"
-                    @change="configManager.updateConfigValue('error_notification_enabled', $event.target.checked)"
-                    class="mr-2"
-                  >
+                  <input
+	                    type="checkbox"
+	                    :checked="(_ut, configManager.config.error_notification_enabled === true || configManager.config.error_notification_enabled === 'true')"
+	                    @change="configManager.updateConfigValue('error_notification_enabled', $event.target.checked); _tu()"
+	                    class="mr-2"
+	                    data-testid="checkbox-error-notification"
+	                  >
                   <span>启用错误通知</span>
                 </label>
                 <p class="text-xs text-slate-500 mt-1">任务失败时发送通知到 Bot</p>
@@ -504,58 +529,62 @@
           </div>
 
           <!-- 资源限制 -->
-          <div x-show="isTabActive('resource')" class="card">
+          <div x-show="isTabActive('resource')" class="card" data-testid="tab-content-resource">
             <div class="card-header">
               <h2 class="card-title">资源限制</h2>
             </div>
             <div class="space-y-4">
               <div class="form-group">
                 <label class="form-label">最大并发任务数</label>
-                <input 
-                  type="number" 
-                  x-model="configManager.config.max_concurrent_tasks"
-                  @input="configManager.updateConfigValue('max_concurrent_tasks', $event.target.value)"
-                  class="form-input"
-                  min="1"
-                >
+                <input
+	                  type="number"
+	                  :value="(_ut, configManager.config.max_concurrent_tasks)"
+	                  @input="configManager.updateConfigValue('max_concurrent_tasks', $event.target.value); _tu()"
+	                  class="form-input"
+	                  min="1"
+	                  data-testid="input-max-concurrent-tasks"
+	                >
                 <p class="text-xs text-slate-500 mt-1">同时运行的最大任务数</p>
               </div>
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div class="form-group">
                   <label class="form-label">任务大小告警阈值 (GB)</label>
-                  <input 
-                    type="number" 
-                    x-model="configManager.config.task_size_warning_gb"
-                    @input="configManager.updateConfigValue('task_size_warning_gb', $event.target.value)"
-                    class="form-input"
-                    min="1"
-                    step="0.5"
-                  >
+                  <input
+	                    type="number"
+	                    :value="(_ut, configManager.config.task_size_warning_gb)"
+	                    @input="configManager.updateConfigValue('task_size_warning_gb', $event.target.value); _tu()"
+	                    class="form-input"
+	                    min="1"
+	                    step="0.5"
+	                    data-testid="input-task-size-warning"
+	                  >
                   <p class="text-xs text-slate-500 mt-1">超过此大小将弹出告警</p>
                 </div>
                 <div class="form-group">
                   <label class="form-label">任务大小最大阈值 (GB)</label>
-                  <input 
-                    type="number" 
-                    x-model="configManager.config.task_size_max_gb"
-                    @input="configManager.updateConfigValue('task_size_max_gb', $event.target.value)"
-                    class="form-input"
-                    min="1"
-                    step="0.5"
-                  >
+                  <input
+	                    type="number"
+	                    :value="(_ut, configManager.config.task_size_max_gb)"
+	                    @input="configManager.updateConfigValue('task_size_max_gb', $event.target.value); _tu()"
+	                    class="form-input"
+	                    min="1"
+	                    step="0.5"
+	                    data-testid="input-task-size-max"
+	                  >
                   <p class="text-xs text-slate-500 mt-1">超过此大小将禁止创建任务</p>
                 </div>
               </div>
               <div class="form-group">
                 <label class="form-label">最小磁盘空间 (GB)</label>
-                <input 
-                  type="number" 
-                  x-model="configManager.config.min_disk_space_gb"
-                  @input="configManager.updateConfigValue('min_disk_space_gb', $event.target.value)"
-                  class="form-input"
-                  min="1"
-                  step="0.5"
-                >
+                <input
+	                  type="number"
+	                  :value="(_ut, configManager.config.min_disk_space_gb)"
+	                  @input="configManager.updateConfigValue('min_disk_space_gb', $event.target.value); _tu()"
+	                  class="form-input"
+	                  min="1"
+	                  step="0.5"
+	                  data-testid="input-min-disk-space"
+	                >
                 <p class="text-xs text-slate-500 mt-1">磁盘空间低于此值时将禁止创建任务</p>
               </div>
             </div>
@@ -579,6 +608,7 @@
         userName: '用户',
         notifications: [],
         activeTab: 'basic', // Alpine 响应式状态，用于标签页切换
+        _ut: 0, // 更新触发器：递增时强制 Alpine 重新评估 configManager 相关表达式
 
         async init() {
           const authenticated = await authManager.ensureAuthenticated();
@@ -586,7 +616,15 @@
 
           this.userName = authManager.getDisplayName();
           await configManager.loadConfig();
+          this._tu();
         },
+
+        /**
+         * 递增更新触发器，强制 Alpine 重新评估依赖 configManager 状态的表达式。
+         * 因为 configManager 是全局非响应式对象，Alpine 无法自动检测其变更。
+         * 在每次修改 configManager 状态后调用此方法。
+         */
+        _tu() { this._ut++; },
 
         setActiveTab(tab) {
           this.activeTab = tab;
@@ -604,6 +642,7 @@
           } catch (error) {
             this.addNotification('error', `保存失败: ${error.message}`);
           }
+          this._tu();
         },
 
         logout() {
@@ -620,8 +659,8 @@
     // 全局通知函数
     window.showNotification = function(type, message) {
       const app = document.querySelector('[x-data]');
-      if (app && app.__x) {
-        app.__x.getUnobservedData().addNotification(type, message);
+      if (app && window.Alpine) {
+        window.Alpine.$data(app).addNotification(type, message);
       }
     };
 

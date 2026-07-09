@@ -396,21 +396,23 @@
           </div>
 
           <!-- 分页 -->
-          <div x-show="taskManager.totalPages > 1" class="mt-4 flex items-center justify-between">
+          <div data-testid="pagination-info" x-show="totalPages > 1" class="mt-4 flex items-center justify-between">
             <p class="text-sm text-slate-400">
-              共 <span x-text="taskManager.totalTasks"></span> 个任务，第 <span x-text="taskManager.page"></span> / <span x-text="taskManager.totalPages"></span> 页
+              共 <span x-text="totalTasks"></span> 个任务，第 <span x-text="currentPage"></span> / <span x-text="totalPages"></span> 页
             </p>
             <div class="flex gap-2">
-              <button 
-                @click="taskManager.setPage(taskManager.page - 1)"
-                :disabled="taskManager.page <= 1"
+              <button
+                data-testid="btn-pagination-prev"
+                @click="taskManager.setPage(taskManager.page - 1); _syncPagination()"
+                :disabled="currentPage <= 1"
                 class="btn btn-sm btn-secondary"
               >
                 上一页
               </button>
-              <button 
-                @click="taskManager.setPage(taskManager.page + 1)"
-                :disabled="taskManager.page >= taskManager.totalPages"
+              <button
+                data-testid="btn-pagination-next"
+                @click="taskManager.setPage(taskManager.page + 1); _syncPagination()"
+                :disabled="currentPage >= totalPages"
                 class="btn btn-sm btn-secondary"
               >
                 下一页
@@ -473,12 +475,13 @@
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <p class="text-sm text-slate-400">任务类型</p>
-                  <p class="text-white mt-1" x-text="taskManager.getTypeText(selectedTask.task_type)"></p>
+                  <p class="text-white mt-1" data-testid="detail-task-type" x-text="taskManager.getTypeText(selectedTask.task_type)"></p>
                 </div>
                 <div>
                   <p class="text-sm text-slate-400">状态</p>
                   <span
                     class="badge mt-1"
+                    data-testid="detail-task-status"
                     :class="taskManager.getStatusBadgeClass(selectedTask.status)"
                     x-text="taskManager.getStatusText(selectedTask.status)"
                   ></span>
@@ -489,7 +492,7 @@
               <div class="grid grid-cols-2 gap-4">
                 <div>
                   <p class="text-sm text-slate-400">范围模式</p>
-                  <p class="text-white mt-1" x-text="taskManager.getRangeModeText(selectedTask.params?.range_mode)"></p>
+                  <p class="text-white mt-1" data-testid="detail-range-mode" x-text="taskManager.getRangeModeText(selectedTask.params?.range_mode)"></p>
                 </div>
                 <div>
                   <p class="text-sm text-slate-400">类型过滤</p>
@@ -550,9 +553,9 @@
               </div>
 
               <!-- 错误信息（条件显示） -->
-              <div x-show="selectedTask.message" class="bg-red-900/20 border border-red-800/50 rounded-lg p-4">
+              <div x-show="selectedTask.message" data-testid="detail-error-message-container" class="bg-red-900/20 border border-red-800/50 rounded-lg p-4">
                 <p class="text-xs text-red-400 uppercase tracking-wider font-medium mb-1">错误信息</p>
-                <p class="text-sm text-red-300 break-words" x-text="selectedTask.message"></p>
+                <p class="text-sm text-red-300 break-words" data-testid="detail-error-message" x-text="selectedTask.message"></p>
               </div>
             </div>
           </div>
@@ -712,23 +715,23 @@
               <label class="form-label">消息范围</label>
               <div class="flex flex-wrap gap-3 mb-3">
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="createForm.messageRangeMode" value="id_range" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="id_range" class="mr-2" data-testid="input-range-mode-id">
                   <span>ID 范围</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="createForm.messageRangeMode" value="date_range" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="date_range" class="mr-2" data-testid="input-range-mode-date">
                   <span>日期范围</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="createForm.messageRangeMode" value="multiple_ids" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="multiple_ids" class="mr-2" data-testid="input-range-mode-id-list">
                   <span>ID 列表</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="createForm.messageRangeMode" value="all" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="all" class="mr-2" data-testid="input-range-mode-all">
                   <span>全部</span>
                 </label>
                 <label class="flex items-center cursor-pointer">
-                  <input type="radio" x-model="createForm.messageRangeMode" value="recent" class="mr-2">
+                  <input type="radio" x-model="createForm.messageRangeMode" value="recent" class="mr-2" data-testid="input-range-mode-recent">
                   <span>最近 N 条</span>
                 </label>
               </div>
@@ -741,6 +744,7 @@
                   class="form-input flex-1"
                   placeholder="最小 ID"
                   min="1"
+                  data-testid="input-min-id"
                 >
                 <input
                   type="number"
@@ -748,13 +752,14 @@
                   class="form-input flex-1"
                   placeholder="最大 ID"
                   min="1"
+                  data-testid="input-max-id"
                 >
               </div>
 
               <!-- 日期范围 -->
               <div x-show="createForm.messageRangeMode === 'date_range'" class="flex gap-3">
-                <input type="date" x-model="createForm.startDate" class="form-input flex-1">
-                <input type="date" x-model="createForm.endDate" class="form-input flex-1">
+                <input type="date" x-model="createForm.startDate" class="form-input flex-1" data-testid="input-start-date">
+                <input type="date" x-model="createForm.endDate" class="form-input flex-1" data-testid="input-end-date">
               </div>
 
               <!-- ID 列表 -->
@@ -764,9 +769,10 @@
                   class="form-input form-textarea"
                   placeholder="每行一个消息 ID 或链接"
                   rows="4"
+                  data-testid="input-raw-items"
                 ></textarea>
                 <p class="text-xs text-slate-500 mt-1">
-                  已解析 <span x-text="taskManager.getParsedItemCount()"></span> 条
+                  已解析 <span x-text="getParsedItemCount()"></span> 条
                 </p>
               </div>
 
@@ -774,7 +780,7 @@
               <div x-show="createForm.messageRangeMode === 'recent'" class="flex items-center gap-2">
                 <span class="text-sm text-slate-400">最近</span>
                 <input type="number" x-model="createForm.recentCount" class="form-input w-24"
-                       placeholder="N" min="1" max="1000">
+                       placeholder="N" min="1" max="1000" data-testid="input-recent-count">
                 <span class="text-sm text-slate-400">条消息</span>
               </div>
 
@@ -792,6 +798,7 @@
                   <label class="flex items-center cursor-pointer">
                     <input
                       type="checkbox"
+                      :data-testid="'checkbox-filter-type-' + option.value"
                       :value="option.value"
                       @change="taskManager.toggleTypeFilter(option.value)"
                       :checked="taskManager.isTypeFilterSelected(option.value)"
@@ -830,19 +837,20 @@
           </form>
         </div>
         <div class="modal-footer">
-          <button @click="closeCreateModal()" class="btn btn-secondary">
+          <button data-testid="btn-cancel-create" @click="closeCreateModal()" class="btn btn-secondary">
             取消
           </button>
-          <button @click="handleCreateTask()" class="btn btn-primary">
+          <button data-testid="btn-submit-create" @click="handleCreateTask()" class="btn btn-primary">
             创建任务
           </button>
         </div>
       </div>
     </div>
 
-    <!-- P0-2: 资源保护告警弹窗 -->
+    <!-- P0-2: 资源保护告警弹窗（使用 Alpine 响应式镜像属性驱动 x-show） -->
     <div
-      x-show="taskManager.showResourceAlert"
+      data-testid="modal-resource-alert"
+      x-show="showResourceAlert"
       x-transition:enter="transition ease-out duration-300"
       x-transition:enter-start="opacity-0"
       x-transition:enter-end="opacity-100"
@@ -859,45 +867,45 @@
         <!-- 标题 -->
         <div class="flex items-center mb-4">
           <span class="text-2xl mr-3"
-                x-text="taskManager.resourceAlertType === 'blocked' ? '❌' : '⚠️'"></span>
+                x-text="resourceAlertType === 'blocked' ? '❌' : '⚠️'"></span>
           <h3 class="text-lg font-semibold text-white"
-              x-text="taskManager.resourceAlertType === 'blocked' ? '任务超出限制' : '资源告警'"></h3>
+              x-text="resourceAlertType === 'blocked' ? '任务超出限制' : '资源告警'"></h3>
         </div>
 
         <!-- 告警内容 -->
         <div class="space-y-3 mb-6 text-sm text-slate-300">
           <p class="font-medium text-white"
-             x-text="taskManager.resourceAlertMessage"></p>
+             x-text="resourceAlertMessage"></p>
 
           <!-- 估算详情 -->
-          <div x-show="taskManager.resourceEstimate"
+          <div x-show="resourceEstimate"
                class="bg-slate-900/50 border border-slate-600 rounded-lg p-3 space-y-1">
             <p><span class="font-medium text-slate-400">消息总数:</span>
-               <span x-text="taskManager.resourceEstimate?.message_count || '未知'"></span> 条</p>
+               <span x-text="resourceEstimate?.message_count || '未知'"></span> 条</p>
             <p><span class="font-medium text-slate-400">预估大小:</span>
-               <span x-text="taskManager.resourceEstimate?.total_size_human || '未知'"></span></p>
+               <span x-text="resourceEstimate?.total_size_human || '未知'"></span></p>
             <p><span class="font-medium text-slate-400">预估耗时:</span>
-               约 <span x-text="Math.round((taskManager.resourceEstimate?.estimated_duration_seconds || 0) / 60)"></span> 分钟</p>
+               约 <span x-text="Math.round((resourceEstimate?.estimated_duration_seconds || 0) / 60)"></span> 分钟</p>
           </div>
 
           <!-- 建议 -->
-          <p x-show="taskManager.resourceSuggestion"
+          <p x-show="resourceSuggestion"
              class="text-red-400 font-medium text-xs"
-             x-text="taskManager.resourceSuggestion"></p>
+             x-text="resourceSuggestion"></p>
         </div>
 
         <!-- 操作按钮 -->
         <div class="flex justify-end space-x-3">
           <!-- 告警模式：返回修改 + 确认创建 -->
-          <template x-if="taskManager.resourceAlertType === 'warning'">
+          <template x-if="resourceAlertType === 'warning'">
             <div class="flex space-x-3">
-              <button @click="taskManager.closeResourceAlert()"
+              <button @click="closeResourceAlert()"
                       class="px-4 py-2 border border-slate-600 rounded-md text-sm font-medium
                              text-slate-300 bg-slate-700 hover:bg-slate-600 focus:outline-none
                              focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500">
                 返回修改
               </button>
-              <button @click="taskManager.closeResourceAlert(); taskManager.createTask()"
+              <button @click="closeResourceAlert(); taskManager.createTask()"
                       class="px-4 py-2 border border-transparent rounded-md text-sm font-medium
                              text-white bg-blue-600 hover:bg-blue-700 focus:outline-none
                              focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500">
@@ -907,8 +915,8 @@
           </template>
 
           <!-- 禁止模式：仅关闭按钮 -->
-          <template x-if="taskManager.resourceAlertType === 'blocked'">
-            <button @click="taskManager.closeResourceAlert()"
+          <template x-if="resourceAlertType === 'blocked'">
+            <button @click="closeResourceAlert()"
                     class="px-4 py-2 border border-transparent rounded-md text-sm font-medium
                            text-white bg-blue-600 hover:bg-blue-700 focus:outline-none
                            focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500 w-full">
@@ -923,6 +931,7 @@
   <!-- 通用确认对话框组件 (P2-3: 替代原生 confirm) -->
   <div x-data="{ dialog: window.confirmDialog }"
        x-show="dialog.visible"
+       data-testid="confirm-dialog"
        x-transition:enter="transition ease-out duration-300"
        x-transition:enter-start="opacity-0"
        x-transition:enter-end="opacity-100"
@@ -961,6 +970,7 @@
       <div class="flex justify-end space-x-3">
         <!-- 取消按钮 -->
         <button x-show="dialog.showCancel"
+                data-testid="btn-confirm-cancel"
                 @click="dialog.onCancel()"
                 class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium 
                        text-gray-700 bg-white hover:bg-gray-50 focus:outline-none 
@@ -970,7 +980,8 @@
 
         <!-- 确认按钮（根据 type 变色） -->
         <template x-if="dialog.type === 'danger'">
-          <button @click="dialog.onConfirm()"
+          <button data-testid="btn-confirm-ok"
+                  @click="dialog.onConfirm()"
                   class="px-4 py-2 border border-transparent rounded-md text-sm font-medium 
                          text-white bg-red-600 hover:bg-red-700 focus:outline-none 
                          focus:ring-2 focus:ring-offset-2 focus:ring-red-500 transition-colors">
@@ -979,7 +990,8 @@
         </template>
 
         <template x-if="dialog.type !== 'danger'">
-          <button @click="dialog.onConfirm()"
+          <button data-testid="btn-confirm-ok"
+                  @click="dialog.onConfirm()"
                   class="px-4 py-2 border border-transparent rounded-md text-sm font-medium 
                          text-white bg-blue-600 hover:bg-blue-700 focus:outline-none 
                          focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors">
@@ -1037,6 +1049,20 @@
         resolveTargetError: null,
         resolveTargetResult: null,
 
+        // 资源告警响应式镜像（taskManager.showResourceAlert 是非响应式全局对象，
+        // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 x-show 更新）
+        showResourceAlert: false,
+        resourceAlertType: null,
+        resourceAlertMessage: '',
+        resourceSuggestion: '',
+        resourceEstimate: null,
+
+        // 分页响应式镜像（taskManager.totalPages/totalTasks/page 是非响应式全局对象，
+        // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 x-show/x-text 更新）
+        totalPages: 0,
+        totalTasks: 0,
+        currentPage: 1,
+
         async init() {
           const authenticated = await authManager.ensureAuthenticated();
           if (!authenticated) return;
@@ -1079,6 +1105,13 @@
           this.addNotification('info', '任务列表已刷新');
         },
 
+        // 同步分页状态到 Alpine 响应式属性
+        _syncPagination() {
+          this.totalPages = taskManager.totalPages;
+          this.totalTasks = taskManager.totalTasks;
+          this.currentPage = taskManager.page;
+        },
+
         // 刷新任务并同步到 Alpine 响应式数据
         async refreshTasks() {
           this.loading = true;
@@ -1097,6 +1130,9 @@
             taskManager.tasks = this.tasks;
             taskManager.totalTasks = result.total || 0;
             taskManager.totalPages = Math.ceil(taskManager.totalTasks / taskManager.pageSize) || 1;
+
+            // 同步分页状态到 Alpine 响应式属性
+            this._syncPagination();
 
             // 更新最后同步时间
             this.lastSyncTime = this._formatSyncTime();
@@ -1262,6 +1298,12 @@
 
           try {
             await taskManager.createTask();
+            // 同步资源告警状态到 Alpine 响应式属性（驱动 x-show 更新）
+            this._syncResourceAlert();
+            // 若显示了资源告警弹窗，不继续创建流程（不关闭弹窗、不显示成功通知）
+            if (taskManager.showResourceAlert) {
+              return;
+            }
             // 创建后立即刷新 Alpine 本地数据
             await this.refreshTasks();
             this.addNotification('success', '任务创建成功');
@@ -1269,6 +1311,25 @@
           } catch (error) {
             this.addNotification('error', `创建失败: ${error.message}`);
           }
+        },
+
+        /**
+         * 同步 taskManager 的资源告警状态到 Alpine 响应式属性
+         */
+        _syncResourceAlert() {
+          this.showResourceAlert = taskManager.showResourceAlert;
+          this.resourceAlertType = taskManager.resourceAlertType;
+          this.resourceAlertMessage = taskManager.resourceAlertMessage;
+          this.resourceSuggestion = taskManager.resourceSuggestion;
+          this.resourceEstimate = taskManager.resourceEstimate;
+        },
+
+        /**
+         * 关闭资源告警弹窗（同步 taskManager 状态到 Alpine 响应式属性）
+         */
+        closeResourceAlert() {
+          taskManager.closeResourceAlert();
+          this._syncResourceAlert();
         },
 
         logout() {
@@ -1279,14 +1340,25 @@
           this.notifications.push({ type, message });
           setTimeout(() => this.notifications.shift(), 5000);
         },
+
+        /**
+         * 解析多行 ID/链接输入的数量（基于 Alpine 响应式 createForm.rawItems）
+         */
+        getParsedItemCount() {
+          if (!this.createForm.rawItems) return 0;
+          return this.createForm.rawItems
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line.length > 0).length;
+        },
       };
     }
 
     // 全局通知函数
     window.showNotification = function(type, message) {
       const app = document.querySelector('[x-data]');
-      if (app && app.__x) {
-        app.__x.getUnobservedData().addNotification(type, message);
+      if (app && window.Alpine) {
+        window.Alpine.$data(app).addNotification(type, message);
       }
     };
 

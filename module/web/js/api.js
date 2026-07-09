@@ -114,6 +114,11 @@ class ApiClient {
 
       // 处理 401 未授权
       if (response.status === 401) {
+        // 如果正在验证Token（登录流程），抛出错误而非自动跳转
+        if (this._verifyingToken) {
+          this.clearToken();
+          throw new Error('Token 无效或已过期，请重新输入');
+        }
         this.clearToken();
         window.location.href = '/web/login.html?redirect=' + encodeURIComponent(window.location.pathname);
         return null;

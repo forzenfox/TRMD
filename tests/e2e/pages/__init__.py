@@ -5,6 +5,7 @@ Page Object模块
 """
 
 from .base_page import BasePage
+from .config_page import ConfigPage
 from .login_page import LoginPage
 
-__all__ = ["BasePage", "LoginPage"]
+__all__ = ["BasePage", "ConfigPage", "LoginPage"]

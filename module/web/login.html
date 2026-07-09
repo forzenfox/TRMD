@@ -195,13 +195,17 @@
             // 设置 Token
             api.setToken(this.token, true);
 
+            // 标记正在验证Token，阻止api.js的401自动跳转逻辑
+            api._verifyingToken = true;
             // 验证 Token
             await api.getMe();
+            api._verifyingToken = false;
 
             // 登录成功，跳转
             console.log('[Auto-Login] 认证成功，即将跳转...');
             window.location.href = this.redirectUrl;
           } catch (error) {
+            api._verifyingToken = false;
             this.error = error.message || 'Token 验证失败，请检查后重试';
 
             // 自动登录失败时，清除标记让用户手动重试（避免循环）

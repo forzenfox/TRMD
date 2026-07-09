@@ -18,7 +18,7 @@ class FileManager {
   async loadFiles(path) {
     try {
       const response = await api.getFiles(path);
-      return response.files || [];
+      return response.items || [];
     } catch (error) {
       console.error('加载文件列表失败:', error);
       throw error;

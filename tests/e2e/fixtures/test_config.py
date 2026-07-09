@@ -118,6 +118,18 @@ def get_test_token() -> str:
     return _get_config_value("test_token", "TRMD_TEST_TOKEN", "")
 
 
+def get_expired_token() -> str:
+    """
+    获取过期Token（用于测试Token过期场景）
+
+    优先级：环境变量 TRMD_EXPIRED_TOKEN > 配置文件 expired_token > 空字符串
+
+    Returns:
+        过期Token（可能为空，对应测试会被skip）
+    """
+    return _get_config_value("expired_token", "TRMD_EXPIRED_TOKEN", "")
+
+
 def get_test_token_or_raise() -> str:
     """
     获取测试Token（严格模式）
@@ -263,6 +275,76 @@ def get_slowmo() -> int:
         延迟时间
     """
     return int(_get_config_value("slowmo", "E2E_SLOWMO", "0"))
+
+
+def is_prepare_test_data() -> bool:
+    """
+    是否自动准备测试数据
+
+    Returns:
+        bool
+    """
+    value = _get_config_value("prepare_test_data", "E2E_PREPARE_TEST_DATA", "false")
+    return value.lower() in ("true", "1", "yes")
+
+
+def get_test_download_count() -> int:
+    """
+    获取下载测试数据条数
+
+    Returns:
+        int
+    """
+    return int(_get_config_value("test_download_count", "E2E_TEST_DOWNLOAD_COUNT", "5"))
+
+
+def get_test_media_types() -> list:
+    """
+    获取下载媒体类型过滤列表
+
+    Returns:
+        list
+    """
+    yaml_config = _load_yaml_config()
+    media_types = yaml_config.get("test_media_types", ["photo"])
+    if isinstance(media_types, list):
+        return media_types
+    return ["photo"]
+
+
+def is_cleanup_test_data() -> bool:
+    """
+    是否清理测试数据
+
+    Returns:
+        bool
+    """
+    value = _get_config_value("cleanup_test_data", "E2E_CLEANUP_TEST_DATA", "true")
+    return value.lower() in ("true", "1", "yes")
+
+
+def get_test_download_timeout() -> int:
+    """
+    获取下载任务等待超时（秒）
+
+    Returns:
+        int
+    """
+    return int(
+        _get_config_value("test_download_timeout", "E2E_TEST_DOWNLOAD_TIMEOUT", "120")
+    )
+
+
+def get_pagination_task_count() -> int:
+    """
+    获取分页测试所需任务数量
+
+    Returns:
+        int
+    """
+    return int(
+        _get_config_value("pagination_task_count", "E2E_PAGINATION_TASK_COUNT", "25")
+    )
 
 
 # 导出配置变量（兼容旧代码）

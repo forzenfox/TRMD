@@ -20,22 +20,10 @@ from module.api.models.chat import (
     MessageEstimateRequest,
     MessageAnalyzeRequest,
 )
-from module.core.identifier_service import IdentifierService, IdentifierServiceError
+from module.core.identifier_service import IdentifierService
 
 router = APIRouter(prefix="/chats", tags=["频道"])
 logger = logging.getLogger(__name__)
-
-
-def _handle_identifier_error(e: IdentifierServiceError):
-    """将 IdentifierServiceError 转换为统一错误响应。"""
-    status_code = e.status_code
-    data = {"retry_after": e.retry_after} if e.retry_after is not None else None
-    return error_json_response(
-        code=status_code,
-        message=e.message,
-        data=data,
-        status_code=status_code,
-    )
 
 
 def _get_client(request: Request):
@@ -124,27 +112,19 @@ async def resolve_chat(
     - 裸 username
     - https://t.me/username 或 t.me/username
     """
-    try:
-        resolved = await identifier_service.resolve(identifier)
-        return json_response(
-            data=ChatResolveOut(
-                chat_id=resolved.chat_id,
-                chat_type=resolved.chat_type,
-                chat_name=resolved.chat_name,
-                username=resolved.username,
-                message_count=resolved.message_count,
-                media_count=resolved.media_count,
-                has_access=resolved.has_access,
-                is_private=resolved.is_private,
-            ).model_dump()
-        )
-    except IdentifierServiceError as e:
-        return error_json_response(
-            code=e.status_code,
-            message=e.message,
-            data={"retry_after": e.retry_after} if e.retry_after is not None else None,
-            status_code=e.status_code,
-        )
+    resolved = await identifier_service.resolve(identifier)
+    return json_response(
+        data=ChatResolveOut(
+            chat_id=resolved.chat_id,
+            chat_type=resolved.chat_type,
+            chat_name=resolved.chat_name,
+            username=resolved.username,
+            message_count=resolved.message_count,
+            media_count=resolved.media_count,
+            has_access=resolved.has_access,
+            is_private=resolved.is_private,
+        ).model_dump()
+    )
 
 
 @router.post("/messages/estimate")
@@ -167,11 +147,8 @@ async def estimate_messages(
     支持缓存以减少 Telegram API 调用。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
-    try:
-        resolved = await identifier_service.resolve(body.chat_id)
-        chat_id = resolved.chat_id
-    except IdentifierServiceError as e:
-        return _handle_identifier_error(e)
+    resolved = await identifier_service.resolve(body.chat_id)
+    chat_id = resolved.chat_id
 
     # 转换为 MessageRangeRequest 用于验证
     range_req = MessageRangeRequest(
@@ -249,11 +226,8 @@ async def analyze_messages(
     大范围降级为抽样估算并标记 sampled=True。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
-    try:
-        resolved = await identifier_service.resolve(body.chat_id)
-        chat_id = resolved.chat_id
-    except IdentifierServiceError as e:
-        return _handle_identifier_error(e)
+    resolved = await identifier_service.resolve(body.chat_id)
+    chat_id = resolved.chat_id
 
     client = _get_client(request)
     if client is None:

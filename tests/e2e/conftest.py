@@ -13,7 +13,7 @@ import subprocess
 import time
 import pytest
 import requests
-from playwright.sync_api import Page, BrowserContext
+from playwright.sync_api import Page
 
 from .fixtures.test_config import (
     PROJECT_ROOT,
@@ -24,6 +24,10 @@ from .fixtures.test_config import (
     get_test_token,
     PYTHON_EXECUTABLE,
     _get_config_value,
+)
+from .fixtures.test_data_setup import (  # noqa: F401
+    test_download_data,
+    test_pagination_tasks,
 )
 
 
@@ -63,12 +67,17 @@ def live_server():
         test_env["TRMD_E2E_TEST"] = "1"
         test_env["PYTHONUNBUFFERED"] = "1"
 
+        # 将服务输出重定向到日志文件，便于调试服务崩溃问题
+        server_log_path = PROJECT_ROOT / "tests" / "reports" / "server_output.log"
+        server_log_path.parent.mkdir(parents=True, exist_ok=True)
+        server_log_file = open(server_log_path, "w", encoding="utf-8")
+
         process = subprocess.Popen(
             [PYTHON_EXECUTABLE, "main.py", "--port", str(E2E_SERVER_PORT)],
             cwd=PROJECT_ROOT,
             env=test_env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=server_log_file,
+            stderr=subprocess.STDOUT,
         )
 
         # 等待服务就绪
@@ -91,13 +100,15 @@ def live_server():
 
         yield base_url
 
-        # 清理：终止进程
+        # 清理：终止进程并关闭日志文件
         process.terminate()
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
+        finally:
+            server_log_file.close()
     else:
         # 模式2：连接已运行的服务（推荐）
         print("\n[E2E] 连接已运行服务模式...")
@@ -166,6 +177,53 @@ def test_token(live_server):
     pytest.fail("无法获取测试Token")
 
 
+@pytest.fixture(scope="session")
+def browser():
+    """
+    Playwright浏览器实例
+
+    使用chromium，支持headless模式。
+    """
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--disable-gpu"],
+        )
+        yield browser
+        browser.close()
+
+
+@pytest.fixture
+def context(browser):
+    """
+    Playwright浏览器上下文
+
+    每个测试使用独立的浏览器上下文。
+    """
+    context = browser.new_context(
+        viewport={"width": 1280, "height": 720},
+        ignore_https_errors=True,
+        locale="zh-CN",
+    )
+    yield context
+    context.close()
+
+
+@pytest.fixture
+def page(context):
+    """
+    Playwright页面
+
+    每个测试使用独立的页面。
+    """
+    page = context.new_page()
+    page.set_default_timeout(NAVIGATION_TIMEOUT)
+    yield page
+    page.close()
+
+
 @pytest.fixture
 def authenticated_page(page: Page, test_token: str, live_server: str):
     """
@@ -184,7 +242,7 @@ def authenticated_page(page: Page, test_token: str, live_server: str):
 
 
 @pytest.fixture(autouse=True)
-def setup_trace(context: BrowserContext, request):
+def setup_trace(context, request):
     """
     自动启动Playwright trace
 
@@ -238,3 +296,65 @@ def browser_context_args():
         "ignore_https_errors": True,
         "locale": "zh-CN",
     }
+
+
+@pytest.fixture
+def test_task(live_server: str, test_token: str):
+    """
+    自动创建测试任务（下载类型，pending状态）
+
+    通过API创建任务，测试后自动删除。
+    用于测试任务详情、启动、取消等需要已有任务的场景。
+    """
+    headers = {
+        "Authorization": f"Bearer {test_token}",
+        "Content-Type": "application/json",
+    }
+    source_channel = _get_config_value(
+        "test_source_channel", "E2E_TEST_SOURCE_CHANNEL", ""
+    )
+    if not source_channel:
+        pytest.skip("未配置test_source_channel，跳过需要测试任务的用例")
+
+    create_url = f"{live_server}/api/tasks"
+    payload = {
+        "task_type": "download",
+        "params": {
+            "source_identifier": source_channel,
+            "range_mode": "id_range",
+            "min_id": 1,
+            "max_id": 1,
+        },
+    }
+
+    resp = requests.post(create_url, json=payload, headers=headers, timeout=30)
+    # POST /api/tasks 创建任务成功返回 201 Created（RESTful 标准）
+    if resp.status_code not in (200, 201):
+        pytest.skip(f"自动创建测试任务失败: {resp.status_code} {resp.text}")
+
+    data = resp.json()
+    task_id = data.get("data", {}).get("id")
+    if not task_id:
+        pytest.skip(f"无法获取测试任务ID: {data}")
+
+    yield str(task_id)
+
+    # 清理：删除测试任务
+    try:
+        delete_url = f"{live_server}/api/tasks/{task_id}"
+        requests.delete(delete_url, headers=headers, timeout=5)
+    except Exception:
+        pass
+
+
+@pytest.fixture(scope="session")
+def expired_token():
+    """
+    过期Token fixture
+
+    从E2E测试配置获取过期Token，用于测试Token过期场景。
+    """
+    token = _get_config_value("expired_token", "E2E_EXPIRED_TOKEN", "")
+    if not token:
+        pytest.skip("未配置expired_token，跳过Token过期测试")
+    return token

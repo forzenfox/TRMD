@@ -38,14 +38,26 @@ async def list_files(
     """
     # 获取下载根目录
     config_manager = get_config_manager(request)
-    if path:
-        target_path = os.path.abspath(path)
+    try:
+        base_dir = os.path.abspath(config_manager.save_directory or "downloads")
+    except AttributeError:
+        base_dir = os.path.abspath("downloads")
+
+    # 前端路径格式为虚拟路径（'/' 表示根目录，'/subdir' 表示子目录）
+    # 需要映射到实际的下载根目录下
+    if not path or path == "/":
+        # 根路径：使用下载根目录
+        target_path = base_dir
     else:
-        # 默认使用下载目录
-        try:
-            target_path = os.path.abspath(config_manager.save_directory or "downloads")
-        except AttributeError:
-            target_path = os.path.abspath("downloads")
+        # 子路径：基于下载根目录拼接，防止路径穿越
+        # 去掉开头的 '/'，然后拼接
+        relative_path = path.lstrip("/")
+        target_path = os.path.abspath(os.path.join(base_dir, relative_path))
+        # 安全检查：确保目标路径在下载根目录下，防止路径穿越攻击
+        if not target_path.startswith(base_dir):
+            return json_response(
+                data={"path": target_path, "items": [], "error": "非法路径"}
+            )
 
     if not os.path.exists(target_path):
         return json_response(data={"path": target_path, "items": []})

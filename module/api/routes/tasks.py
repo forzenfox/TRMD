@@ -32,7 +32,7 @@ from module.core.task_manager import (
     TaskStateError,
     TaskConflictError as CoreTaskConflictError,
 )
-from module.core.identifier_service import IdentifierService, IdentifierServiceError
+from module.core.identifier_service import IdentifierService
 
 router = APIRouter(prefix="/tasks", tags=["任务"])
 logger = logging.getLogger(__name__)
@@ -47,18 +47,6 @@ def _get_client(request: Request):
         return ctx.client if ctx else None
     except Exception:
         return None
-
-
-def _handle_identifier_error(e: IdentifierServiceError):
-    """将 IdentifierServiceError 转换为统一错误响应。"""
-    status_code = e.status_code
-    data = {"retry_after": e.retry_after} if e.retry_after is not None else None
-    return error_json_response(
-        code=status_code,
-        message=e.message,
-        data=data,
-        status_code=status_code,
-    )
 
 
 def _task_to_out(task: Task) -> TaskOut:
@@ -199,11 +187,8 @@ async def create_task(
     target_input = params.get("target_identifier") or params.get("forward_target")
     target_chat_id = None
     if target_input:
-        try:
-            resolved_target = await identifier_service.resolve(target_input)
-            target_chat_id = resolved_target.chat_id
-        except IdentifierServiceError as e:
-            return _handle_identifier_error(e)
+        resolved_target = await identifier_service.resolve(target_input)
+        target_chat_id = resolved_target.chat_id
 
     # forward / listen_forward 任务必须提供有效目标频道
     if task_type in (TaskType.FORWARD, TaskType.LISTEN_FORWARD) and (
@@ -261,8 +246,6 @@ async def create_task(
             task_type=task_type,
             params=task_params,
         )
-    except IdentifierServiceError as e:
-        return _handle_identifier_error(e)
     except CoreTaskConflictError as e:
         raise TaskConflictError("LISTEN_ALREADY_EXISTS") from e
 
