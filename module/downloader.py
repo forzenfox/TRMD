@@ -2077,7 +2077,8 @@ class TelegramRestrictedMediaDownloader(Bot):
         end_id: int = -1,
         task_id: str = None,
         progress_callback: Callable = None,
-    ) -> list[str]:
+        message_ids: list[int] = None,
+    ) -> tuple[list[str], dict[int, dict]]:
         """按消息 ID 范围下载媒体文件（Web API 任务执行入口）。
 
         Args:
@@ -2086,9 +2087,12 @@ class TelegramRestrictedMediaDownloader(Bot):
             end_id: 结束消息 ID，-1 表示不限。
             task_id: 任务 ID，用于进度回调。
             progress_callback: 进度回调函数，签名 (task_id, item_id, status, error=None)。
+            message_ids: 明确的消息 ID 列表（优先使用），避免连续范围迭代导致
+                         处理无对应 item 的消息 ID。
 
         Returns:
-            成功下载的文件路径列表。
+            tuple: (成功下载的文件路径列表, 消息ID到处理结果的映射字典)
+                映射字典格式: {msg_id: {"status": ItemStatus, "file_path": str|None, "error": str|None}}
         """
         from module.core.task_manager import ItemStatus
 
@@ -2100,8 +2104,17 @@ class TelegramRestrictedMediaDownloader(Bot):
         ]
 
         downloaded_files: list[str] = []
+        processing_results: dict[int, dict] = {}
 
-        for msg_id in range(start_id, end_id + 1) if end_id > 0 else [start_id]:
+        # 优先使用明确的 message_ids 列表，否则回退到范围迭代
+        if message_ids is not None:
+            ids_to_process = message_ids
+        elif end_id > 0:
+            ids_to_process = list(range(start_id, end_id + 1))
+        else:
+            ids_to_process = [start_id]
+
+        for msg_id in ids_to_process:
             item_id = f"{task_id}_msg_{msg_id}" if task_id else f"msg_{msg_id}"
 
             try:
@@ -2109,6 +2122,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                 message = await self.app.client.get_messages(chat_id, msg_id)
 
                 if not message:
+                    result = {"status": ItemStatus.FAILED, "file_path": None, "error": "MESSAGE_NOT_FOUND"}
+                    processing_results[msg_id] = result
                     if progress_callback:
                         await progress_callback(
                             task_id, item_id, ItemStatus.FAILED, "MESSAGE_NOT_FOUND"
@@ -2127,6 +2142,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                         break
 
                 if not valid_dtype or not message.media:
+                    result = {"status": ItemStatus.SKIPPED, "file_path": None, "error": "无媒体内容"}
+                    processing_results[msg_id] = result
                     if progress_callback:
                         await progress_callback(
                             task_id, item_id, ItemStatus.SKIPPED, "无媒体内容"
@@ -2153,6 +2170,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                 ):
                     log.info(f"文件已存在，跳过: {file_name}")
                     downloaded_files.append(final_path)
+                    result = {"status": ItemStatus.SUCCESS, "file_path": final_path, "error": None}
+                    processing_results[msg_id] = result
                     if progress_callback:
                         await progress_callback(task_id, item_id, ItemStatus.SUCCESS)
                     continue
@@ -2172,16 +2191,20 @@ class TelegramRestrictedMediaDownloader(Bot):
                         raise Exception(f"下载未完成，临时文件未重命名: {temp_path}")
 
                 downloaded_files.append(final_path)
+                result = {"status": ItemStatus.SUCCESS, "file_path": final_path, "error": None}
+                processing_results[msg_id] = result
 
                 if progress_callback:
                     await progress_callback(task_id, item_id, ItemStatus.SUCCESS)
 
             except Exception as e:
                 log.error(f"下载失败: msg_id={msg_id}, error={e}")
+                result = {"status": ItemStatus.FAILED, "file_path": None, "error": str(e)}
+                processing_results[msg_id] = result
                 if progress_callback:
                     await progress_callback(task_id, item_id, ItemStatus.FAILED, str(e))
 
-        return downloaded_files
+        return downloaded_files, processing_results
 
     async def download_chat(
         self, chat_id: str, callback_query: pyrogram.types.CallbackQuery

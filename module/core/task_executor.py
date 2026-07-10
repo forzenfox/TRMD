@@ -8,6 +8,7 @@ import os
 import asyncio
 import logging
 import concurrent.futures
+from enum import Enum
 from typing import Optional, Any, Callable
 
 import pyrogram
@@ -790,13 +791,21 @@ class TaskExecutor:
                     )
                 await self._task_manager.add_items(task.task_id, new_items)
 
-            downloaded_files = await self._downloader.download_range(
+            (
+                downloaded_files,
+                processing_results,
+            ) = await self._downloader.download_range(
                 chat_id=chat_id,
                 start_id=message_ids[0],
                 end_id=message_ids[-1],
                 task_id=task.task_id,
                 progress_callback=self._on_item_progress,
+                message_ids=message_ids,
             )
+
+            # 修复：根据 processing_results 更新子任务状态
+            # 这种情况发生在 progress_callback 执行失败时
+            await self._finalize_pending_items(task, processing_results)
         else:
             # 降级方案：手动下载（并发控制）
             if not task.items:
@@ -899,6 +908,74 @@ class TaskExecutor:
         # 保存已下载的文件路径到任务
         if downloaded_files:
             await self._task_manager.update_file_paths(task.task_id, downloaded_files)
+
+    async def _finalize_pending_items(
+        self, task: Task, processing_results: dict[int, dict]
+    ) -> None:
+        """检查并更新仍处于 PENDING 状态的子任务。
+
+        当 progress_callback 执行失败时，子任务可能仍保持 PENDING 状态。
+        此方法根据 processing_results 中的处理结果来更新子任务状态。
+
+        Args:
+            task: 任务对象
+            processing_results: 消息ID到处理结果的映射字典
+                格式: {msg_id: {"status": ItemStatus, "file_path": str|None, "error": str|None}}
+        """
+        if not processing_results:
+            return
+
+        pending_items = [
+            item for item in task.items if item.status == ItemStatus.PENDING
+        ]
+        if not pending_items:
+            return
+
+        fixed_count = 0
+        for item in pending_items:
+            msg_id = item.source_id
+            if msg_id not in processing_results:
+                # 这个消息ID没有被处理，标记为失败
+                await self._task_manager.update_item_status(
+                    task.task_id,
+                    item.id,
+                    ItemStatus.FAILED,
+                    error_code="NOT_PROCESSED",
+                    error_message="消息未被处理",
+                )
+                fixed_count += 1
+                continue
+
+            result = processing_results[msg_id]
+            expected_status = result["status"]
+
+            # 根据处理结果更新子任务状态
+            if expected_status == ItemStatus.SUCCESS:
+                await self._task_manager.update_item_status(
+                    task.task_id, item.id, ItemStatus.SUCCESS
+                )
+                fixed_count += 1
+            elif expected_status == ItemStatus.FAILED:
+                error_msg = result.get("error", "下载失败")
+                await self._task_manager.update_item_status(
+                    task.task_id,
+                    item.id,
+                    ItemStatus.FAILED,
+                    error_code="DOWNLOAD_FAILED",
+                    error_message=error_msg,
+                )
+                fixed_count += 1
+            elif expected_status == ItemStatus.SKIPPED:
+                error_msg = result.get("error", "跳过")
+                await self._task_manager.update_item_status(
+                    task.task_id, item.id, ItemStatus.SKIPPED, error_message=error_msg
+                )
+                fixed_count += 1
+
+        if fixed_count > 0:
+            log.info(
+                f"任务 {task.task_id}: 修复了 {fixed_count} 个 PENDING 状态的子任务"
+            )
 
     async def _execute_forward(self, task: Task) -> None:
         """执行转发任务。"""
@@ -1189,9 +1266,11 @@ class TaskExecutor:
 
         # 检查是否是 Pyrogram 的 MessageMediaType 枚举
         # Pyrogram 2.x 中，message.media 可能是枚举类型（如 MessageMediaType.PHOTO）
-        if hasattr(media, "name"):
+        # 使用 isinstance(media, Enum) 而非 hasattr(media, "name")，
+        # 因为 MagicMock 也有 name 属性，会导致误判。
+        if isinstance(media, Enum):
             # 枚举类型，通过 name 判断（如 'PHOTO', 'VIDEO', 'DOCUMENT'）
-            media_name = media.name if hasattr(media, "name") else str(media)
+            media_name = media.name
             # 枚举名称映射到标准类型
             name_mapping = {
                 "PHOTO": "photo",

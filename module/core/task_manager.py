@@ -151,16 +151,17 @@ class Task:
     @property
     def success_count(self) -> int:
         """成功子任务数。"""
-        if self.success_items > 0 or self.completed_at:
-            return self.success_items
-        return sum(1 for item in self.items if item.status == ItemStatus.SUCCESS)
+        # 优先从 items 实时计算（items 已加载时），确保与数据库一致
+        if self.items:
+            return sum(1 for item in self.items if item.status == ItemStatus.SUCCESS)
+        return self.success_items
 
     @property
     def failed_count(self) -> int:
         """失败子任务数。"""
-        if self.failed_items > 0 or self.completed_at:
-            return self.failed_items
-        return sum(1 for item in self.items if item.status == ItemStatus.FAILED)
+        if self.items:
+            return sum(1 for item in self.items if item.status == ItemStatus.FAILED)
+        return self.failed_items
 
     @property
     def pending_count(self) -> int:
@@ -1022,6 +1023,17 @@ class TaskManager:
             task.items.extend(items)
             for item in items:
                 self._save_item(task_id, item)
+            # 更新汇总字段
+            task.success_items = sum(
+                1 for i in task.items if i.status == ItemStatus.SUCCESS
+            )
+            task.failed_items = sum(
+                1 for i in task.items if i.status == ItemStatus.FAILED
+            )
+            task.skipped_items = sum(
+                1 for i in task.items if i.status == ItemStatus.SKIPPED
+            )
+            task.total_items = len(task.items)
             self._save_task(task)
 
     async def update_item_status(
@@ -1061,6 +1073,18 @@ class TaskManager:
                     for key, value in kwargs.items():
                         if hasattr(item, key):
                             setattr(item, key, value)
+                    # 重新计算汇总字段，确保 success_count/failed_count 等
+                    # 在 API 响应和数据库持久化中保持一致
+                    task.success_items = sum(
+                        1 for i in task.items if i.status == ItemStatus.SUCCESS
+                    )
+                    task.failed_items = sum(
+                        1 for i in task.items if i.status == ItemStatus.FAILED
+                    )
+                    task.skipped_items = sum(
+                        1 for i in task.items if i.status == ItemStatus.SKIPPED
+                    )
+                    task.total_items = len(task.items)
                     self._save_item(task_id, item)
                     self._save_task(task)
                     break

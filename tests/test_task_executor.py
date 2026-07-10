@@ -57,7 +57,15 @@ def mock_client():
 def mock_downloader():
     """Mock 下载器。"""
     dl = AsyncMock()
-    dl.download_range.return_value = ["/downloads/file1.mp4", "/downloads/file2.mp4"]
+    # 返回新格式：(downloaded_files, processing_results)
+    dl.download_range.return_value = (
+        ["/downloads/file1.mp4", "/downloads/file2.mp4"],
+        {
+            100: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file1.mp4", "error": None},
+            101: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file2.mp4", "error": None},
+            102: {"status": ItemStatus.SUCCESS, "file_path": None, "error": None},
+        }
+    )
     return dl
 
 
@@ -91,6 +99,210 @@ def mock_repository_manager():
     rm.compute_content_hash.return_value = "abc123sha256"
     rm.distribute_to_target = AsyncMock(return_value=999)
     return rm
+
+
+# ============================================================
+# 测试：_finalize_pending_items
+# ============================================================
+
+
+class TestFinalizePendingItems:
+    """测试 _finalize_pending_items 方法修复 PENDING 状态子任务。"""
+
+    @pytest.mark.asyncio
+    async def test_finalize_updates_pending_items_with_processing_results(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试根据 processing_results 更新 PENDING 状态的子任务。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 3},
+        )
+
+        # 创建 3 个子任务，初始状态为 PENDING
+        items = []
+        for msg_id in [1, 2, 3]:
+            item_id = f"{task.task_id}_msg_{msg_id}"
+            items.append(executor._create_item(task, item_id, message_id=msg_id))
+        await task_manager.add_items(task.task_id, items)
+
+        # 模拟 progress_callback 失败，导致所有子任务仍为 PENDING
+        # 但 processing_results 记录了实际的处理结果
+        processing_results = {
+            1: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file1.mp4", "error": None},
+            2: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file2.mp4", "error": None},
+            3: {"status": ItemStatus.FAILED, "file_path": None, "error": "下载失败"},
+        }
+
+        # 调用 _finalize_pending_items，传入 processing_results
+        await executor._finalize_pending_items(task, processing_results)
+
+        # 验证：应该有 2 个 SUCCESS
+        task = await task_manager.get_task(task.task_id)
+        success_count = sum(
+            1 for item in task.items if item.status == ItemStatus.SUCCESS
+        )
+        assert success_count == 2
+
+        # 验证：应该有 1 个 FAILED
+        failed_count = sum(
+            1 for item in task.items if item.status == ItemStatus.FAILED
+        )
+        assert failed_count == 1
+
+        # 验证：不应该有 PENDING
+        pending_count = sum(
+            1 for item in task.items if item.status == ItemStatus.PENDING
+        )
+        assert pending_count == 0
+
+    @pytest.mark.asyncio
+    async def test_finalize_marks_pending_as_failed_when_not_processed(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试当消息ID不在 processing_results 中时，标记为 FAILED。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 3},
+        )
+
+        # 创建 3 个子任务，初始状态为 PENDING
+        items = []
+        for msg_id in [1, 2, 3]:
+            item_id = f"{task.task_id}_msg_{msg_id}"
+            items.append(executor._create_item(task, item_id, message_id=msg_id))
+        await task_manager.add_items(task.task_id, items)
+
+        # processing_results 只包含消息ID 1 和 2，不包含 3
+        processing_results = {
+            1: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file1.mp4", "error": None},
+            2: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file2.mp4", "error": None},
+        }
+
+        # 调用 _finalize_pending_items
+        await executor._finalize_pending_items(task, processing_results)
+
+        # 验证：消息ID 3 应被标记为 FAILED（NOT_PROCESSED）
+        task = await task_manager.get_task(task.task_id)
+        item_3 = [item for item in task.items if item.source_id == 3][0]
+        assert item_3.status == ItemStatus.FAILED
+        assert item_3.error_code == "NOT_PROCESSED"
+        assert item_3.error_message == "消息未被处理"
+
+    @pytest.mark.asyncio
+    async def test_finalize_does_nothing_when_no_pending_items(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试当没有 PENDING 子任务时，方法不执行任何操作。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 2},
+        )
+
+        # 创建 2 个子任务并标记为 SUCCESS
+        items = []
+        for msg_id in [1, 2]:
+            item_id = f"{task.task_id}_msg_{msg_id}"
+            items.append(executor._create_item(task, item_id, message_id=msg_id))
+        await task_manager.add_items(task.task_id, items)
+
+        await task_manager.update_item_status(
+            task.task_id, items[0].id, ItemStatus.SUCCESS
+        )
+        await task_manager.update_item_status(
+            task.task_id, items[1].id, ItemStatus.SUCCESS
+        )
+
+        # 调用 _finalize_pending_items
+        processing_results = {
+            1: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file1.mp4", "error": None},
+            2: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file2.mp4", "error": None},
+        }
+        await executor._finalize_pending_items(task, processing_results)
+
+        # 验证：状态未改变
+        task = await task_manager.get_task(task.task_id)
+        success_count = sum(
+            1 for item in task.items if item.status == ItemStatus.SUCCESS
+        )
+        assert success_count == 2
+
+        pending_count = sum(
+            1 for item in task.items if item.status == ItemStatus.PENDING
+        )
+        assert pending_count == 0
+
+    @pytest.mark.asyncio
+    async def test_finalize_handles_skipped_status(
+        self, task_manager, mock_client, mock_file_manager
+    ):
+        """测试处理 SKIPPED 状态的子任务。"""
+        executor = TaskExecutor(
+            task_manager=task_manager,
+            file_manager=mock_file_manager,
+            client=mock_client,
+        )
+
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 2},
+        )
+
+        # 创建 2 个子任务，初始状态为 PENDING
+        items = []
+        for msg_id in [1, 2]:
+            item_id = f"{task.task_id}_msg_{msg_id}"
+            items.append(executor._create_item(task, item_id, message_id=msg_id))
+        await task_manager.add_items(task.task_id, items)
+
+        # processing_results 包含 SUCCESS 和 SKIPPED
+        processing_results = {
+            1: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file1.mp4", "error": None},
+            2: {"status": ItemStatus.SKIPPED, "file_path": None, "error": "无媒体内容"},
+        }
+
+        # 调用 _finalize_pending_items
+        await executor._finalize_pending_items(task, processing_results)
+
+        # 验证：应该有 1 个 SUCCESS 和 1 个 SKIPPED
+        task = await task_manager.get_task(task.task_id)
+        success_count = sum(
+            1 for item in task.items if item.status == ItemStatus.SUCCESS
+        )
+        assert success_count == 1
+
+        skipped_count = sum(
+            1 for item in task.items if item.status == ItemStatus.SKIPPED
+        )
+        assert skipped_count == 1
+
+        # 验证：不应该有 PENDING
+        pending_count = sum(
+            1 for item in task.items if item.status == ItemStatus.PENDING
+        )
+        assert pending_count == 0
 
 
 # ============================================================
@@ -281,6 +493,7 @@ class TestExecuteDownload:
             end_id=102,
             task_id=task.task_id,
             progress_callback=executor._on_item_progress,
+            message_ids=[100, 101, 102],
         )
 
         # 验证 file_paths 已保存到任务
@@ -334,7 +547,7 @@ class TestExecuteDownload:
     ):
         """测试下载器返回空列表时 file_paths 保持为空。"""
         mock_downloader = AsyncMock()
-        mock_downloader.download_range.return_value = []
+        mock_downloader.download_range.return_value = ([], {})
 
         executor = TaskExecutor(
             task_manager=task_manager,
@@ -444,7 +657,10 @@ class TestExecuteDownload:
     ):
         """测试 progress_callback 正确传递到 downloader。"""
         mock_downloader = AsyncMock()
-        mock_downloader.download_range.return_value = ["/file.mp4"]
+        mock_downloader.download_range.return_value = (
+            ["/file.mp4"],
+            {10: {"status": ItemStatus.SUCCESS, "file_path": "/file.mp4", "error": None}}
+        )
 
         executor = TaskExecutor(
             task_manager=task_manager,
@@ -456,7 +672,7 @@ class TestExecuteDownload:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            params={"message_range_start": 10, "message_range_end": 20},
+            params={"message_range_start": 10, "message_range_end": 10},
         )
 
         await executor._execute_download(task)
@@ -481,7 +697,10 @@ class TestExecuteTask:
     ):
         """测试下载任务整体执行成功流程。"""
         mock_downloader = AsyncMock()
-        mock_downloader.download_range.return_value = ["/file.mp4"]
+        mock_downloader.download_range.return_value = (
+            ["/file.mp4"],
+            {1: {"status": ItemStatus.SUCCESS, "file_path": "/file.mp4", "error": None}}
+        )
 
         executor = TaskExecutor(
             task_manager=task_manager,
@@ -493,7 +712,7 @@ class TestExecuteTask:
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
-            params={"message_range_start": 1, "message_range_end": 5},
+            params={"message_range_start": 1, "message_range_end": 1},
         )
         await task_manager.start_task(task.task_id)
 
@@ -1570,7 +1789,10 @@ class TestPhase3PrivateChatReuse:
     ):
         """测试私聊下载任务（source_identifier 创建）走 _execute_download() 路径。"""
         mock_downloader = AsyncMock()
-        mock_downloader.download_range.return_value = ["/downloads/file.mp4"]
+        mock_downloader.download_range.return_value = (
+            ["/downloads/file.mp4"],
+            {100: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file.mp4", "error": None}}
+        )
 
         executor = TaskExecutor(
             task_manager=task_manager,
@@ -1586,7 +1808,7 @@ class TestPhase3PrivateChatReuse:
                 "source_identifier": "@seseYunBot",
                 "source_type": "private",
                 "message_range_start": 100,
-                "message_range_end": 102,
+                "message_range_end": 100,
             },
         )
         await executor._execute_download(task)
@@ -1960,7 +2182,10 @@ class TestPhase3HandleListenDownload:
     ):
         """测试有 downloader 时执行下载并标记成功。"""
         mock_downloader = AsyncMock()
-        mock_downloader.download_range.return_value = ["/downloads/file.mp4"]
+        mock_downloader.download_range.return_value = (
+            ["/downloads/file.mp4"],
+            {1: {"status": ItemStatus.SUCCESS, "file_path": "/downloads/file.mp4", "error": None}}
+        )
 
         executor = TaskExecutor(
             task_manager=task_manager,
