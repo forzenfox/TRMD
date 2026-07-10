@@ -127,32 +127,6 @@
           </button>
           <h1 class="text-xl font-semibold text-white">任务管理</h1>
         </div>
-        <div class="flex items-center space-x-3">
-          <!-- 手动刷新按钮 -->
-          <button
-            data-testid="btn-refresh-tasks"
-            @click="manualRefresh()"
-            class="btn btn-secondary"
-            :class="{ 'opacity-50': loading }"
-            :disabled="loading"
-            title="刷新任务列表"
-          >
-            <svg class="w-5 h-5" :class="{ 'animate-spin': loading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
-            </svg>
-            <span>刷新</span>
-            <!-- 显示最后同步时间 -->
-            <span x-show="lastSyncTime" class="text-xs text-slate-400 ml-2 hidden lg:inline">
-              <span x-text="lastSyncTime"></span>
-            </span>
-          </button>
-          <button data-testid="btn-create-task" @click="openCreateModal()" class="btn btn-primary">
-            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-            </svg>
-            <span>新建任务</span>
-          </button>
-        </div>
       </header>
 
       <main class="flex-1 p-4 lg:p-6 overflow-y-auto">
@@ -293,6 +267,37 @@
 
         <!-- 任务列表 -->
         <div x-show="!loading" class="card">
+          <!-- 任务列表头部：标题 + 操作按钮 -->
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-semibold text-white">任务列表</h2>
+            <div class="flex items-center space-x-3">
+              <!-- 手动刷新按钮 -->
+              <button
+                data-testid="btn-refresh-tasks"
+                @click="manualRefresh()"
+                class="btn btn-secondary"
+                :class="{ 'opacity-50': loading }"
+                :disabled="loading"
+                title="刷新任务列表"
+              >
+                <svg class="w-5 h-5" :class="{ 'animate-spin': loading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                </svg>
+                <span>刷新</span>
+                <!-- 显示最后同步时间 -->
+                <span x-show="lastSyncTime" class="text-xs text-slate-400 ml-2 hidden lg:inline">
+                  <span x-text="lastSyncTime"></span>
+                </span>
+              </button>
+              <button data-testid="btn-create-task" @click="openCreateModal()" class="btn btn-primary">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                <span>新建任务</span>
+              </button>
+            </div>
+          </div>
+
           <div x-show="tasks.length === 0" class="py-8 text-center">
             <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
@@ -314,7 +319,11 @@
               </thead>
               <tbody data-testid="tasks-table-body">
                 <template x-for="task in tasks" :key="task.id">
-                  <tr :data-testid="`task-row-${task.id}`">
+                  <tr
+                    :data-testid="`task-row-${task.id}`"
+                    @click="viewTaskDetail(task)"
+                    class="cursor-pointer"
+                  >
                     <td data-testid="task-id" class="font-mono text-sm" x-text="`#${task.id}`"></td>
                     <td data-testid="task-type">
                       <span x-text="taskManager.getTypeText(task.task_type)"></span>
@@ -349,10 +358,10 @@
                     </td>
                     <td data-testid="task-created-at" class="text-sm text-slate-400" x-text="taskManager.formatTime(task.created_at)"></td>
                     <td data-testid="task-actions" class="space-x-2">
-                      <button 
+                      <button
                         data-testid="btn-task-start"
                         x-show="task.status === 'pending' || task.status === 'failed'"
-                        @click="taskManager.startTask(task.id)"
+                        @click.stop="startTask(task.id)"
                         class="btn btn-sm btn-success"
                       >
                         启动
@@ -360,7 +369,7 @@
                       <button
                         data-testid="btn-task-cancel"
                         x-show="task.status === 'running' || task.status === 'queued'"
-                        @click="cancelTask(task.id)"
+                        @click.stop="cancelTask(task.id)"
                         class="btn btn-sm btn-warning"
                       >
                         取消
@@ -368,22 +377,15 @@
                       <button
                         data-testid="btn-task-retry"
                         x-show="task.status === 'failed'"
-                        @click="retryTask(task.id)"
+                        @click.stop="retryTask(task.id)"
                         class="btn btn-sm btn-primary"
                       >
                         重试
                       </button>
-                      <button 
-                        data-testid="btn-task-detail"
-                        @click="viewTaskDetail(task)"
-                        class="btn btn-sm btn-secondary"
-                      >
-                        详情
-                      </button>
                       <button
                         data-testid="btn-task-delete"
                         x-show="task.status === 'pending' || task.status === 'completed' || task.status === 'cancelled' || task.status === 'failed'"
-                        @click="deleteTask(task.id)"
+                        @click.stop="deleteTask(task.id)"
                         class="btn btn-sm btn-error"
                       >
                         删除
@@ -622,18 +624,6 @@
                   <span>📲 监听转发</span>
                 </label>
               </div>
-            </div>
-
-            <!-- 任务名称 -->
-            <div class="form-group">
-              <label class="form-label">任务名称（可选）</label>
-              <input
-                data-testid="input-task-name"
-                type="text"
-                x-model="createForm.taskName"
-                class="form-input"
-                placeholder="留空将自动生成"
-              >
             </div>
 
             <!-- 源频道 -->
@@ -1020,9 +1010,9 @@
         showCreateModal: false, // Alpine 响应式状态
         createForm: { // Alpine 响应式状态
           taskType: 'download',
-          taskName: '',
           sourceChat: '',
           targetChat: '',
+          selectedFiles: [],
           messageRangeMode: 'id_range',
           minId: 0,
           maxId: 0,

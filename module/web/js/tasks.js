@@ -46,10 +46,10 @@ class TaskManager {
    */
   _resetCreateForm() {
     return {
-      taskName: "",
       taskType: "download", // download, forward, upload, listen_download, listen_forward
       sourceChat: "",
       targetChat: "",
+      selectedFiles: [],
       messageRangeMode: "id_range", // date_range, id_range, multiple_ids, all, recent
       startDate: "",
       endDate: "",
@@ -62,9 +62,7 @@ class TaskManager {
       maxSize: "",
       minSizeUnit: "MB",
       maxSizeUnit: "MB",
-      savePath: "",
       deleteAfterUpload: true, // 默认上传后删除本地文件（符合设计文档 4.2.1.3）
-      sendAsMediaGroup: false,
     };
   }
 
@@ -261,7 +259,7 @@ class TaskManager {
       }
       _addSizeFilter();
     } else if (this.createForm.taskType === "upload") {
-      params.chat_id = this.createForm.target_chat;
+      params.chat_id = this.createForm.targetChat;
       params.file_paths = this.createForm.selectedFiles || [];
     } else if (this.createForm.taskType === "listen_download") {
       params.source_identifier = this.createForm.sourceChat;
@@ -470,29 +468,6 @@ class TaskManager {
     if (!value || value <= 0) return null;
     const multiplier = unit === "GB" ? 1024 * 1024 * 1024 : 1024 * 1024;
     return parseInt(value) * multiplier;
-  }
-
-  /**
-   * 生成默认任务名称
-   */
-  _generateTaskName() {
-    const typeNames = {
-      download: "下载",
-      forward: "转发",
-      upload: "上传",
-      listen_download: "监听下载",
-      listen_forward: "监听转发",
-    };
-    const typeName = typeNames[this.createForm.taskType] || "任务";
-    const timestamp = new Date()
-      .toLocaleString("zh-CN", {
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-      .replace(/[/:]/g, "");
-    return `${typeName}_${timestamp}`;
   }
 
   /**

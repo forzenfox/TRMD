@@ -6,6 +6,8 @@
 
 import logging
 import os
+import shutil
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
 import yaml
@@ -42,7 +44,13 @@ def via_log_level(
 
 
 class CustomDumper(yaml.Dumper):
-    """自定义 YAML Dumper，将 None 表示为 ~。"""
+    """自定义 YAML Dumper，将 None 表示为 ~。
+
+    .. deprecated::
+        已由 module.yaml_utils 中的 ruamel.yaml 方案替代。
+        保留此类仅为向后兼容（通过 module/__init__.py 导出），
+        新代码请使用 module.yaml_utils 中的 get_yaml()/dump_yaml()。
+    """
 
     def represent_none(self, data):
         return self.represent_scalar("tag:yaml.org,2002:null", "~")
@@ -91,6 +99,44 @@ def _load_log_levels_from_config():
 
 # 加载日志级别
 _load_log_levels_from_config()
+
+
+def _backup_existing_log_file():
+    """备份已存在的日志文件。
+
+    如果日志文件存在且大小大于0，则将其重命名为带时间戳的备份文件。
+    这样每次服务重启都会创建新的日志文件，同时保留历史日志。
+
+    如果文件被占用（例如正在被其他进程使用），则跳过备份。
+    这通常发生在热重启或进程还在运行时。
+    """
+    if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 0:
+        # 生成备份文件名：trmd_YYYYMMDD_HHMMSS.log
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_dir = os.path.dirname(LOG_PATH)
+        log_name = os.path.basename(LOG_PATH)
+        log_ext = os.path.splitext(log_name)[1]
+        log_base = os.path.splitext(log_name)[0]
+
+        backup_path = os.path.join(log_dir, f"{log_base}_{timestamp}{log_ext}")
+
+        # 如果备份文件已存在（极少情况），添加计数器
+        counter = 1
+        while os.path.exists(backup_path):
+            backup_path = os.path.join(log_dir, f"{log_base}_{timestamp}_{counter}{log_ext}")
+            counter += 1
+
+        try:
+            # 尝试移动旧日志文件到备份位置
+            shutil.move(LOG_PATH, backup_path)
+        except PermissionError:
+            # 文件被占用，跳过备份（可能是热重启或进程还在运行）
+            # 在 Windows 上，文件可能被其他进程锁定
+            pass
+
+
+# 备份旧日志文件
+_backup_existing_log_file()
 
 # 创建控制台
 console = Console(log_path=False, log_time_format=LOG_TIME_FORMAT)

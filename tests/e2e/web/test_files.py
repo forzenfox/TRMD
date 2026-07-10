@@ -668,6 +668,77 @@ class TestUploadSubmit:
             "点击开始上传后，应关闭弹窗或显示通知以表明提交逻辑已触发"
         )
 
+    def test_upload_payload_structure(
+        self,
+        files_page: FilesPage,
+        test_token: str,
+        live_server: str,
+        test_download_data: dict,
+    ):
+        """
+        T014-2: 上传任务请求体结构符合 TaskCreate API
+
+        验证点：
+        1. 选择文件并提交上传
+        2. 拦截 POST /api/tasks 请求
+        3. 请求体使用 task_type + params 结构
+        4. params 中包含 chat_id、file_paths、send_as_media_group、delete_after_upload
+        5. 不存在顶层 name、type、target_chat、files 字段
+        """
+        files_page.navigate(live_server)
+        files_page.wait_for_page_loaded()
+
+        file_index = files_page.find_first_file_index()
+        if file_index == -1:
+            pytest.skip("当前目录无文件，跳过上传 payload 结构测试")
+
+        files_page.click_file_checkbox(file_index)
+        files_page.wait_for_timeout(500)
+        files_page.open_upload_modal()
+
+        target_channel = "@test_payload_channel"
+        files_page.fill_upload_target(target_channel)
+
+        captured_body = {}
+
+        def handle_route(route, request):
+            if request.method == "POST" and request.url.endswith("/api/tasks"):
+                captured_body["body"] = request.post_data_json
+            route.continue_()
+
+        files_page.page.route("**/api/tasks", handle_route)
+
+        try:
+            files_page.click_submit_upload()
+            files_page.wait_for_timeout(2000)
+        finally:
+            files_page.page.unroute("**/api/tasks", handle_route)
+
+        body = captured_body.get("body")
+        assert body is not None, "应拦截到上传任务的 POST /api/tasks 请求"
+        assert body.get("task_type") == "upload", (
+            f"请求体 task_type 应为 'upload'，实际为: {body.get('task_type')}"
+        )
+
+        params = body.get("params", {})
+        assert params.get("chat_id") == target_channel, (
+            f"params.chat_id 应为 '{target_channel}'，实际为: {params.get('chat_id')}"
+        )
+        assert (
+            isinstance(params.get("file_paths"), list) and len(params["file_paths"]) > 0
+        ), "params.file_paths 应为非空列表"
+        assert isinstance(params.get("send_as_media_group"), bool), (
+            "params.send_as_media_group 应为布尔值"
+        )
+        assert isinstance(params.get("delete_after_upload"), bool), (
+            "params.delete_after_upload 应为布尔值"
+        )
+
+        assert "name" not in body, "请求体不应包含顶层 name 字段"
+        assert "type" not in body, "请求体不应包含顶层 type 字段"
+        assert "target_chat" not in body, "请求体不应包含顶层 target_chat 字段"
+        assert "files" not in body, "请求体不应包含顶层 files 字段"
+
 
 class TestFilePreviewButton:
     """T009: 文件预览按钮场景（F015）"""

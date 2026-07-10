@@ -13,6 +13,7 @@ import requests
 from .test_config import (
     E2E_SERVER_URL,
     get_test_source_channel,
+    get_test_target_channel,
     get_test_download_count,
     get_test_media_types,
     get_test_download_timeout,
@@ -61,7 +62,11 @@ def create_download_task(
     }
 
     # 构建任务参数：优先使用 id_range 模式
-    if message_id_range and "min_id" in message_id_range and "max_id" in message_id_range:
+    if (
+        message_id_range
+        and "min_id" in message_id_range
+        and "max_id" in message_id_range
+    ):
         # id_range 模式（避免 FloodWait）
         payload = {
             "task_type": "download",
@@ -73,7 +78,9 @@ def create_download_task(
                 "media_types": media_types,
             },
         }
-        print(f"[E2E] 使用 id_range 模式，范围: {message_id_range['min_id']}-{message_id_range['max_id']}")
+        print(
+            f"[E2E] 使用 id_range 模式，范围: {message_id_range['min_id']}-{message_id_range['max_id']}"
+        )
     else:
         # recent 模式（可能触发 FloodWait）
         recent_count = recent_count or get_test_download_count()
@@ -101,6 +108,95 @@ def create_download_task(
     task_id = data.get("data", {}).get("id")
     assert task_id, f"无法获取任务 ID: {data}"
 
+    return str(task_id)
+
+
+def create_forward_task(
+    test_token: str,
+    source_channel: Optional[str] = None,
+    target_channel: Optional[str] = None,
+    message_id_range: Optional[dict] = None,
+    filter_types: Optional[list] = None,
+) -> str:
+    """
+    创建转发任务。
+
+    Args:
+        test_token: 认证 Token
+        source_channel: 源频道标识符，默认从配置读取
+        target_channel: 目标频道标识符，默认从配置读取
+        message_id_range: 消息ID范围 {min_id: int, max_id: int}，默认从配置读取
+        filter_types: 媒体类型过滤列表
+
+    Returns:
+        任务 ID
+
+    Raises:
+        AssertionError: 创建失败时抛出
+        ValueError: 缺少必要参数时抛出
+    """
+    source_channel = source_channel or get_test_source_channel()
+    target_channel = target_channel or get_test_target_channel()
+
+    if not source_channel:
+        raise ValueError("未配置 test_source_channel，无法创建转发任务")
+    if not target_channel:
+        raise ValueError("未配置 test_target_channel，无法创建转发任务")
+
+    # 优先使用消息ID范围（避免 FloodWait）
+    if message_id_range is None:
+        message_id_range = get_test_message_id_range()
+
+    headers = {
+        "Authorization": f"Bearer {test_token}",
+        "Content-Type": "application/json",
+    }
+
+    # 构建任务参数
+    params = {
+        "source_identifier": source_channel,
+        "forward_target": target_channel,
+    }
+
+    if (
+        message_id_range
+        and "min_id" in message_id_range
+        and "max_id" in message_id_range
+    ):
+        params["range_mode"] = "id_range"
+        params["min_id"] = message_id_range["min_id"]
+        params["max_id"] = message_id_range["max_id"]
+        print(
+            f"[E2E] 转发任务使用 id_range 模式，范围: {message_id_range['min_id']}-{message_id_range['max_id']}"
+        )
+    else:
+        recent_count = get_test_download_count()
+        params["range_mode"] = "recent"
+        params["recent_count"] = recent_count
+        print(f"[E2E] 转发任务使用 recent 模式，数量: {recent_count}")
+
+    if filter_types:
+        params["filter_types"] = filter_types
+
+    payload = {
+        "task_type": "forward",
+        "params": params,
+    }
+
+    resp = requests.post(
+        f"{E2E_SERVER_URL}/api/tasks",
+        json=payload,
+        headers=headers,
+        timeout=30,
+    )
+
+    assert resp.status_code == 201, f"创建转发任务失败: {resp.status_code} {resp.text}"
+
+    data = resp.json()
+    task_id = data.get("data", {}).get("id")
+    assert task_id, f"无法获取任务 ID: {data}"
+
+    print(f"[E2E] 创建转发任务成功: {task_id}")
     return str(task_id)
 
 
@@ -181,6 +277,7 @@ def wait_for_task_completion(
     # 动态计算超时时间
     if timeout is None:
         from .test_config import calculate_download_timeout
+
         timeout = calculate_download_timeout()
 
     start_time = time.time()
@@ -512,3 +609,113 @@ def cleanup_residual_tasks(test_token: str) -> int:
         print(f"[E2E] 已清理 {cleaned} 个残留 running/queued 任务")
 
     return cleaned
+
+
+def query_repository_files(
+    test_token: str,
+    file_unique_id: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 100,
+) -> dict:
+    """
+    查询仓库文件记录。
+
+    通过 REST API 查询 repository.db 中的文件记录，用于验证下载/转发任务的仓库入库。
+
+    Args:
+        test_token: 认证 Token
+        file_unique_id: 文件唯一标识（可选，指定时查询单个文件详情）
+        offset: 偏移量
+        limit: 每页数量
+
+    Returns:
+        查询结果字典，包含 items/total 或单个文件详情
+    """
+    headers = {
+        "Authorization": f"Bearer {test_token}",
+    }
+
+    if file_unique_id:
+        # 查询单个文件详情
+        resp = requests.get(
+            f"{E2E_SERVER_URL}/api/repository/files/{file_unique_id}",
+            headers=headers,
+            timeout=10,
+        )
+    else:
+        # 查询文件列表
+        resp = requests.get(
+            f"{E2E_SERVER_URL}/api/repository/files",
+            headers=headers,
+            params={"offset": offset, "limit": limit},
+            timeout=10,
+        )
+
+    if resp.status_code != 200:
+        return {"items": [], "total": 0}
+
+    data = resp.json()
+    return data.get("data", {})
+
+
+def query_repository_status(test_token: str) -> dict:
+    """
+    查询仓库状态（文件数、来源映射数、分发记录数）。
+
+    Args:
+        test_token: 认证 Token
+
+    Returns:
+        状态字典，包含 files_count, sources_count, distributions_count
+    """
+    headers = {
+        "Authorization": f"Bearer {test_token}",
+    }
+
+    resp = requests.get(
+        f"{E2E_SERVER_URL}/api/repository/status",
+        headers=headers,
+        timeout=10,
+    )
+
+    if resp.status_code != 200:
+        return {"files_count": 0, "sources_count": 0, "distributions_count": 0}
+
+    data = resp.json()
+    return data.get("data", {})
+
+
+def query_repository_sources(
+    test_token: str,
+    file_unique_id: Optional[str] = None,
+) -> list[dict]:
+    """
+    查询仓库来源映射记录。
+
+    Args:
+        test_token: 认证 Token
+        file_unique_id: 文件唯一标识过滤（可选）
+
+    Returns:
+        来源映射列表
+    """
+    headers = {
+        "Authorization": f"Bearer {test_token}",
+    }
+
+    params = {}
+    if file_unique_id:
+        params["file_unique_id"] = file_unique_id
+
+    resp = requests.get(
+        f"{E2E_SERVER_URL}/api/repository/sources",
+        headers=headers,
+        params=params,
+        timeout=10,
+    )
+
+    if resp.status_code != 200:
+        return []
+
+    data = resp.json()
+    return data.get("data", {}).get("items", [])

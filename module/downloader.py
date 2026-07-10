@@ -2122,7 +2122,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                 message = await self.app.client.get_messages(chat_id, msg_id)
 
                 if not message:
-                    result = {"status": ItemStatus.FAILED, "file_path": None, "error": "MESSAGE_NOT_FOUND"}
+                    result = {
+                        "status": ItemStatus.FAILED,
+                        "file_path": None,
+                        "error": "MESSAGE_NOT_FOUND",
+                    }
                     processing_results[msg_id] = result
                     if progress_callback:
                         await progress_callback(
@@ -2142,7 +2146,11 @@ class TelegramRestrictedMediaDownloader(Bot):
                         break
 
                 if not valid_dtype or not message.media:
-                    result = {"status": ItemStatus.SKIPPED, "file_path": None, "error": "无媒体内容"}
+                    result = {
+                        "status": ItemStatus.SKIPPED,
+                        "file_path": None,
+                        "error": "无媒体内容",
+                    }
                     processing_results[msg_id] = result
                     if progress_callback:
                         await progress_callback(
@@ -2170,10 +2178,16 @@ class TelegramRestrictedMediaDownloader(Bot):
                 ):
                     log.info(f"文件已存在，跳过: {file_name}")
                     downloaded_files.append(final_path)
-                    result = {"status": ItemStatus.SUCCESS, "file_path": final_path, "error": None}
+                    result = {
+                        "status": ItemStatus.SUCCESS,
+                        "file_path": final_path,
+                        "error": None,
+                    }
                     processing_results[msg_id] = result
                     if progress_callback:
-                        await progress_callback(task_id, item_id, ItemStatus.SUCCESS)
+                        await progress_callback(
+                            task_id, item_id, ItemStatus.SUCCESS, file_path=final_path
+                        )
                     continue
 
                 # 执行下载（支持断点续传）
@@ -2191,15 +2205,25 @@ class TelegramRestrictedMediaDownloader(Bot):
                         raise Exception(f"下载未完成，临时文件未重命名: {temp_path}")
 
                 downloaded_files.append(final_path)
-                result = {"status": ItemStatus.SUCCESS, "file_path": final_path, "error": None}
+                result = {
+                    "status": ItemStatus.SUCCESS,
+                    "file_path": final_path,
+                    "error": None,
+                }
                 processing_results[msg_id] = result
 
                 if progress_callback:
-                    await progress_callback(task_id, item_id, ItemStatus.SUCCESS)
+                    await progress_callback(
+                        task_id, item_id, ItemStatus.SUCCESS, file_path=final_path
+                    )
 
             except Exception as e:
                 log.error(f"下载失败: msg_id={msg_id}, error={e}")
-                result = {"status": ItemStatus.FAILED, "file_path": None, "error": str(e)}
+                result = {
+                    "status": ItemStatus.FAILED,
+                    "file_path": None,
+                    "error": str(e),
+                }
                 processing_results[msg_id] = result
                 if progress_callback:
                     await progress_callback(task_id, item_id, ItemStatus.FAILED, str(e))

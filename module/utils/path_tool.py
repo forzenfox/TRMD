@@ -357,3 +357,41 @@ def calc_sha256(file_path, chunk_size=8192) -> Union[str, None]:
         log.error(f'权限不足,无法计算文件SHA256,{_t(KeyWord.REASON)}:"{e}"')
     except Exception as e:
         log.exception(f'计算文件SHA256失败,{_t(KeyWord.REASON)}:"{e}"')
+
+
+def to_portable_path(file_path: str, save_root: str) -> str:
+    """将文件路径转换为可移植的相对路径（/ 分隔符）。
+
+    用于数据库存储：将绝对路径转为相对于 save_root 的路径，
+    统一使用 `/` 分隔符（POSIX 风格），确保跨平台可移植。
+
+    Args:
+        file_path: 文件的绝对路径或相对路径
+        save_root: 保存根目录（如 save_directory 配置值）
+
+    Returns:
+        相对于 save_root 的路径，使用 / 分隔符
+        （如 "MyChannel/photo/112063.jpg"）
+    """
+    abs_path = os.path.abspath(file_path)
+    abs_root = os.path.abspath(save_root)
+    rel = os.path.relpath(abs_path, abs_root)
+    return rel.replace(os.sep, "/")
+
+
+def from_portable_path(portable_path: str, save_root: str) -> str:
+    """将可移植相对路径还原为当前环境的绝对路径。
+
+    用于从数据库读取：将 `/` 分隔的相对路径还原为
+    当前操作系统可用的绝对路径。
+
+    Args:
+        portable_path: 数据库中存储的可移植相对路径（/ 分隔符）
+        save_root: 保存根目录（如 save_directory 配置值）
+
+    Returns:
+        当前环境的绝对路径
+    """
+    local_path = portable_path.replace("/", os.sep)
+    abs_root = os.path.abspath(save_root)
+    return os.path.normpath(os.path.join(abs_root, local_path))

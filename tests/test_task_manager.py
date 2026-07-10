@@ -1455,3 +1455,102 @@ class TestPhase2RepositoryBackup:
                 params=base_params,
             )
             assert "enable_repository_backup" not in task.params
+
+
+# ============================================================
+# 测试：list_tasks 不应替换 self._tasks 中的 Task 引用
+# ============================================================
+
+
+class TestListTasksPreservesReference:
+    """测试 list_tasks 分页查询不会替换 self._tasks 中的 Task 对象引用。
+
+    根因缺陷：list_tasks 分页查询时从数据库重建 Task 对象，
+    并用 L979 `self._tasks[task.task_id] = task` 覆盖原有引用。
+    导致持有旧引用的代码（如 _execute_forward 中的 task 参数）
+    和 add_items 修改的新引用不同，子任务状态失步。
+    """
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_preserves_task_reference(self, task_manager):
+        """list_tasks 后 self._tasks 中的 Task 对象引用不应改变。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+        original_ref = task_manager._tasks[task.task_id]
+        assert task is original_ref
+
+        # 调用 list_tasks（分页查询，会从数据库加载）
+        tasks, total = await task_manager.list_tasks(limit=10, offset=0)
+
+        # 验证引用没有被替换
+        current_ref = task_manager._tasks[task.task_id]
+        assert current_ref is original_ref, (
+            "list_tasks 不应替换 self._tasks 中的 Task 对象引用"
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_preserves_items_after_add_items(self, task_manager):
+        """list_tasks 后 add_items 添加的子任务仍然可以通过原引用访问。"""
+        from module.core.task_manager import TaskItem
+
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+
+        # 保存原始引用
+        original_ref = task_manager._tasks[task.task_id]
+
+        # 先调用 list_tasks（可能替换引用）
+        await task_manager.list_tasks(limit=10, offset=0)
+
+        # 添加子任务
+        items = [
+            TaskItem(
+                id=f"{task.task_id}_msg_1",
+                task_id=task.task_id,
+                source_id=1,
+                created_at="2024-01-01T00:00:00",
+                updated_at="2024-01-01T00:00:00",
+            )
+        ]
+        await task_manager.add_items(task.task_id, items)
+
+        # 验证原始引用的 items 被正确更新
+        assert len(original_ref.items) == 1, (
+            f"add_items 后原始引用的 items 应为 1，实际为 {len(original_ref.items)}"
+        )
+
+        # 再次调用 list_tasks
+        await task_manager.list_tasks(limit=10, offset=0)
+
+        # 验证原始引用仍然有效（不被替换）
+        current_ref = task_manager._tasks[task.task_id]
+        assert current_ref is original_ref, "list_tasks 后原始引用应保持有效"
+
+    @pytest.mark.asyncio
+    async def test_list_tasks_updates_status_on_existing_ref(self, task_manager):
+        """list_tasks 应更新现有 Task 对象的属性而非替换整个对象。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+            params={"message_range_start": 1, "message_range_end": 10},
+        )
+
+        original_ref = task_manager._tasks[task.task_id]
+
+        # 修改任务状态
+        await task_manager.start_task(task.task_id)
+        assert original_ref.status == TaskStatus.RUNNING
+
+        # 重新从数据库查询（list_tasks 会从 DB 加载最新数据）
+        await task_manager.list_tasks(limit=10, offset=0)
+
+        # 验证引用不变，但属性被更新
+        current_ref = task_manager._tasks[task.task_id]
+        assert current_ref is original_ref, "引用不应被替换"
+        assert current_ref.status == TaskStatus.RUNNING, "属性应反映最新状态"

@@ -5,15 +5,14 @@
 # File:config.py
 import copy
 import os
+import shutil
 import sys
 import logging
 import datetime
 
-import yaml
 from typing import Union
 
 from module import (
-    CustomDumper,
     FILE_LOG_LEVEL,
     CONSOLE_LOG_LEVEL,
     log,
@@ -24,6 +23,12 @@ from module.language import _t
 from module.parser import PARSE_ARGS
 from module.utils.path_tool import gen_backup_config, safe_scan_directory_file
 from module.enums import KeyWord
+from module.yaml_utils import (
+    load_yaml,
+    dump_yaml,
+    deep_merge,
+    init_config_from_template,
+)
 
 
 class BaseConfig:
@@ -34,6 +39,7 @@ class BaseConfig:
     def __init__(self):
         self.config: dict = self.TEMPLATE.copy()
         self.config_path: str = self.PATH
+        self._raw_yaml_data = None  # 缓存原始 CommentedMap，保留注释
 
     @staticmethod
     def add_missing_keys(target, template, log_message) -> None:
@@ -96,15 +102,14 @@ class BaseConfig:
         """加载全局配置文件。"""
         try:
             if not os.path.exists(self.PATH):
-                with open(file=self.PATH, mode="w", encoding="UTF-8") as f:
-                    yaml.dump(self.TEMPLATE, f, Dumper=CustomDumper)
+                init_config_from_template(self.TEMPLATE, self.PATH)
                 return
-            with open(file=self.PATH, mode="r", encoding="UTF-8") as f:
-                config = yaml.safe_load(f)
-                if config:
-                    self.config = config
-                else:
-                    raise ValueError("The file is empty or has invalid format.")
+            config = load_yaml(self.PATH)
+            self._raw_yaml_data = config
+            if config:
+                self.config = config
+            else:
+                raise ValueError("The file is empty or has invalid format.")
         except Exception as e:
             log.error(
                 f'检测到无效或损坏的全局配置文件。已生成新的模板文件. . .{_t(KeyWord.REASON)}:"{e}"'
@@ -113,10 +118,17 @@ class BaseConfig:
             self.save_config(self.config)
 
     def save_config(self, config: dict) -> None:
-        """保存配置文件。"""
+        """保存配置文件。保留原始文件中的注释。"""
         try:
-            with open(file=self.config_path, mode="w", encoding="UTF-8") as f:
-                yaml.dump(config, f)
+            if self._raw_yaml_data is not None:
+                # 将 config 的变更合并到 _raw_yaml_data（保留注释）
+                deep_merge(self._raw_yaml_data, config)
+                dump_yaml(self._raw_yaml_data, self.config_path)
+                # 重新加载以同步 _raw_yaml_data
+                self._raw_yaml_data = load_yaml(self.config_path)
+            else:
+                dump_yaml(config, self.config_path)
+                self._raw_yaml_data = load_yaml(self.config_path)
             log.info("全局配置文件已保存。")
         except Exception as e:
             log.error(f'保存全局配置文件失败,{_t(KeyWord.REASON)}:"{e}"')
@@ -251,6 +263,21 @@ class UserConfig(BaseConfig):
             migrated["task"]["max_retries"] = config["max_retries"]
         return migrated
 
+    def _init_config_file(self, config_path: str) -> None:
+        """当配置文件不存在时，生成初始配置文件。
+
+        优先从 config.example.yaml 复制（保留注释），否则从 TEMPLATE 生成。
+        """
+        example_path = os.path.join(
+            os.path.dirname(config_path), "config.example.yaml"
+        )
+        if os.path.exists(example_path):
+            shutil.copy2(example_path, config_path)
+            console.log("未找到配置文件,已从示例文件复制. . .")
+        else:
+            init_config_from_template(UserConfig.TEMPLATE, config_path)
+            console.log("未找到配置文件,已生成新的模板文件. . .")
+
     def __init__(self):
         super().__init__()
         self.config_path: str = (
@@ -357,8 +384,7 @@ class UserConfig(BaseConfig):
             last_config_file: str = os.path.join(
                 UserConfig.ABSOLUTE_BACKUP_DIRECTORY, min_config_file
             )  # 拼接文件路径。
-            with open(file=last_config_file, mode="r", encoding="UTF-8") as f:
-                config: dict = yaml.safe_load(f)
+            config = load_yaml(last_config_file)
             last_record: dict = self.__check_params(
                 config, history=True
             )  # v1.1.6修复读取历史如果缺失字段使得flag置True。
@@ -458,14 +484,12 @@ class UserConfig(BaseConfig):
         config: dict = copy.deepcopy(UserConfig.TEMPLATE)
         try:
             if not os.path.exists(self.config_path):
-                with open(file=self.config_path, mode="w", encoding="UTF-8") as f:
-                    yaml.dump(UserConfig.TEMPLATE, f, Dumper=CustomDumper)
-                console.log("未找到配置文件,已生成新的模板文件. . .")
+                self._init_config_file(self.config_path)
                 self.re_config = (
                     True  # v1.3.4 修复配置文件不存在时,无法重新生成配置文件的问题。
                 )
-            with open(self.config_path, "r", encoding="UTF-8") as f:
-                config: dict = yaml.safe_load(f)  # v1.1.4 加入对每个字段的完整性检测。
+            config = load_yaml(self.config_path)
+            self._raw_yaml_data = config
             # 迁移旧版扁平配置到分组结构
             config = self._migrate_legacy_config(config)
             compare_config: dict = config.copy() if config else {}
@@ -512,10 +536,17 @@ class UserConfig(BaseConfig):
             console.log("配置文件与模板文件完全一致,无需备份。")
 
     def save_config(self, config: dict) -> None:
-        """保存配置文件。"""
+        """保存配置文件。保留原始文件中的注释。"""
         try:
-            with open(file=self.config_path, mode="w", encoding="UTF-8") as f:
-                yaml.dump(config, f)
+            if self._raw_yaml_data is not None:
+                # 将 config 的变更合并到 _raw_yaml_data（保留注释）
+                deep_merge(self._raw_yaml_data, config)
+                dump_yaml(self._raw_yaml_data, self.config_path)
+                # 重新加载以同步 _raw_yaml_data
+                self._raw_yaml_data = load_yaml(self.config_path)
+            else:
+                dump_yaml(config, self.config_path)
+                self._raw_yaml_data = load_yaml(self.config_path)
             log.info("配置文件已保存。")
         except Exception as e:
             log.error(f'保存配置文件失败,{_t(KeyWord.REASON)}:"{e}"')

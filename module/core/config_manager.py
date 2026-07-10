@@ -13,6 +13,8 @@ import logging
 import re
 from typing import Any, Optional
 
+from module.yaml_utils import deep_merge
+
 log = logging.getLogger(__name__)
 
 # 敏感字段列表（Web 接口返回时脱敏）
@@ -166,8 +168,8 @@ class ConfigManager:
         update_config.pop("resource_limits", None)
         update_config.pop("upload", None)
 
-        # 合并到当前配置
-        merged_config = {**current_config, **update_config}
+        # 合并到当前配置（使用 deep_merge 保留 CommentedMap 注释元数据）
+        merged_config = deep_merge(current_config, update_config)
 
         return self._save_raw_config(merged_config)
 

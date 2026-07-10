@@ -1,0 +1,99 @@
+# TRMD 配置文件
+# Telegram 资源管理与下载工具
+# 复制此文件为 config.yaml 并填入你的实际配置
+
+# ======================== 凭证配置 ========================
+# Telegram API 凭证，从 https://my.telegram.org 获取
+credential:
+  api_hash: your_api_hash_here   # Telegram API Hash
+  api_id: your_api_id_here       # Telegram API ID（数字）
+  bot_token: ~                    # Telegram Bot Token，从 @BotFather 获取；修改后需重启服务生效
+
+# ======================== 数据目录 ========================
+# 应用数据存储目录，用于存放数据库、缓存等运行时数据
+data_directory: ./.trmd
+
+# ======================== 下载类型（全局） ========================
+# 允许下载的媒体类型列表，不在列表中的媒体类型将被跳过
+# 可选值: video, photo, document, audio, voice, animation, video_note
+download_type:
+- video          # 视频
+- photo          # 图片
+- document       # 文档/文件
+- audio          # 音频
+- voice          # 语音消息
+- animation      # GIF 动图
+- video_note     # 视频消息（圆形视频）
+
+# ======================== 日志配置 ========================
+log:
+  console_log_level: INFO    # 控制台日志级别，可选: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file_log_level: DEBUG      # 文件日志级别，建议设为 DEBUG 以便排查问题
+
+# ======================== 偏好设置 ========================
+preference:
+  # 导出表格选项，控制导出任务列表时包含哪些列
+  export_table:
+    count: false    # 是否在导出表中包含计数列
+    link: false     # 是否在导出表中包含链接列
+    upload: false   # 是否在导出表中包含上传状态列
+
+  # 转发类型过滤器，控制哪些媒体类型允许转发
+  # 设为 true 表示允许转发该类型，false 表示跳过
+  forward_type:
+    animation: true     # GIF 动图
+    audio: true         # 音频
+    document: true      # 文档/文件
+    photo: true         # 图片
+    text: true          # 纯文本消息
+    video: true         # 视频
+    video_note: true    # 视频消息（圆形视频）
+    voice: true         # 语音消息
+
+  is_shutdown: false    # 关机标志，设为 true 时服务将停止接受新任务
+  notice: true          # 是否启用通知提醒
+
+  # 上传相关设置
+  upload:
+    delete: false          # 上传完成后是否删除本地文件
+    download_upload: true  # 是否在下载完成后自动上传到仓库频道
+
+# ======================== 代理配置 ========================
+# 用于连接 Telegram 的网络代理设置（中国大陆用户通常需要配置）
+proxy:
+  enable_proxy: false   # 是否启用代理
+  hostname: 127.0.0.1   # 代理服务器地址
+  password: ~           # 代理认证密码，无需认证设为 ~
+  port: 7890            # 代理服务器端口
+  scheme: socks5        # 代理协议，可选: socks5, http, https
+  username: ~           # 代理认证用户名，无需认证设为 ~
+
+# ======================== 仓库配置 ========================
+# 用于存储和同步已下载资源的 Telegram 频道
+repository:
+  enabled: true                        # 是否启用仓库功能
+  chat_id: ~                           # 仓库频道的 Chat ID（负数表示超级群组/频道）
+  auto_sync_enabled: false             # 是否启用自动同步
+  auto_sync_interval_minutes: 60       # 自动同步间隔（分钟）
+
+# ======================== 任务配置 ========================
+# 控制下载和上传任务的行为与并发限制
+task:
+  download_type: ~    # 任务级下载类型覆盖，~ 表示使用全局 download_type 设置
+
+  is_shutdown: false     # 任务系统关机标志，设为 true 时停止处理新任务
+
+  # 最大重试次数，任务失败后自动重试的上限
+  max_retries:
+    download: 3    # 下载任务最大重试次数
+    upload: 3      # 上传任务最大重试次数
+
+  # 最大并发任务数，控制同时执行的任务数量
+  max_tasks:
+    download: 4    # 下载任务最大并发数
+    upload: 4      # 上传任务最大并发数
+
+  # 目录配置
+  save_directory: ./downloads       # 下载文件保存目录
+  session_directory: ./sessions     # Telegram 会话文件存储目录
+  temp_directory: ./temp            # 临时文件目录（下载过程中的 .temp 文件）

@@ -54,7 +54,6 @@ class TasksPage(BasePage):
     BTN_TASK_START = "btn-task-start"
     BTN_TASK_CANCEL = "btn-task-cancel"
     BTN_TASK_RETRY = "btn-task-retry"
-    BTN_TASK_DETAIL = "btn-task-detail"
     BTN_TASK_DELETE = "btn-task-delete"
 
     # 任务详情抽屉
@@ -80,7 +79,6 @@ class TasksPage(BasePage):
     INPUT_TASK_TYPE_UPLOAD = "input-task-type-upload"
     INPUT_TASK_TYPE_LISTEN_DOWNLOAD = "input-task-type-listen-download"
     INPUT_TASK_TYPE_LISTEN_FORWARD = "input-task-type-listen-forward"
-    INPUT_TASK_NAME = "input-task-name"
     INPUT_SOURCE_CHAT = "input-source-chat"
     BTN_RESOLVE_SOURCE = "btn-resolve-source"
     INPUT_TARGET_CHAT = "input-target-chat"
@@ -263,13 +261,12 @@ class TasksPage(BasePage):
 
         Args:
             task_id: 任务ID
-            action: 操作类型（start/cancel/retry/detail/delete）
+            action: 操作类型（start/cancel/retry/delete）
         """
         action_map = {
             "start": self.BTN_TASK_START,
             "cancel": self.BTN_TASK_CANCEL,
             "retry": self.BTN_TASK_RETRY,
-            "detail": self.BTN_TASK_DETAIL,
             "delete": self.BTN_TASK_DELETE,
         }
         testid = action_map.get(action)
@@ -279,9 +276,14 @@ class TasksPage(BasePage):
         row = self.get_task_row(task_id)
         row.locator(f'[data-testid="{testid}"]').click()
 
+    def click_task_row(self, task_id: str) -> None:
+        """点击任务整行打开详情抽屉"""
+        row = self.get_task_row(task_id)
+        row.click()
+
     def click_task_detail(self, task_id: str) -> None:
-        """点击任务详情按钮"""
-        self.click_task_action(task_id, "detail")
+        """打开任务详情抽屉（通过点击任务行）"""
+        self.click_task_row(task_id)
 
     # ========== 创建任务弹窗 ==========
 
@@ -319,10 +321,6 @@ class TasksPage(BasePage):
         if not testid:
             raise ValueError(f"Unknown task type: {task_type}")
         self.click_by_testid(testid)
-
-    def fill_task_name(self, name: str) -> None:
-        """填写任务名称"""
-        self.fill_by_testid(self.INPUT_TASK_NAME, name)
 
     def fill_source_chat(self, chat: str) -> None:
         """填写源频道"""
@@ -487,7 +485,6 @@ class TasksPage(BasePage):
         range_mode: str = "id_range",
         min_id: str = None,
         max_id: str = None,
-        task_name: str = None,
     ) -> None:
         """
         快捷创建下载任务
@@ -497,7 +494,6 @@ class TasksPage(BasePage):
             range_mode: 消息范围模式
             min_id: 最小ID（id_range模式）
             max_id: 最大ID（id_range模式）
-            task_name: 任务名称（可选）
         """
         # 打开创建弹窗
         self.click_create_task()
@@ -505,10 +501,6 @@ class TasksPage(BasePage):
 
         # 选择下载类型
         self.select_task_type("download")
-
-        # 填写任务名称（可选）
-        if task_name:
-            self.fill_task_name(task_name)
 
         # 填写源频道
         self.fill_source_chat(source_chat)
@@ -800,17 +792,6 @@ class TasksPage(BasePage):
     def click_prev_page(self) -> None:
         """点击上一页按钮"""
         self.click_by_testid(self.BTN_PAGINATION_PREV)
-
-    # ========== 任务名称 ==========
-
-    def get_task_name_value(self) -> str:
-        """
-        获取任务名称输入框的值
-
-        Returns:
-            任务名称
-        """
-        return self.get_value_by_testid(self.INPUT_TASK_NAME)
 
     # ========== 综合快捷操作 ==========
 

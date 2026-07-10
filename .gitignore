@@ -29,6 +29,7 @@ DownloadRecordForm/
 # Tests
 .coverage
 *.yaml
+!config.example.yaml
 /tests/reports/
 
 # Config backup

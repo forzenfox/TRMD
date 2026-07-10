@@ -969,15 +969,40 @@ class TaskManager:
                 rows = cursor.fetchall()
                 tasks = []
                 for row in rows:
-                    task = self._row_to_task(row)
-                    cursor.execute(
-                        "SELECT * FROM tm_task_items WHERE task_id = ?",
-                        (task.task_id,),
-                    )
-                    for item_row in cursor.fetchall():
-                        task.items.append(self._row_to_item(item_row))
-                    self._tasks[task.task_id] = task
-                    tasks.append(task)
+                    new_task = self._row_to_task(row)
+                    existing = self._tasks.get(new_task.task_id)
+                    if existing:
+                        # 更新现有对象的属性（保持引用不变）
+                        existing.status = new_task.status
+                        existing.error_message = new_task.error_message
+                        existing.started_at = new_task.started_at
+                        existing.completed_at = new_task.completed_at
+                        existing.total_items = new_task.total_items
+                        existing.success_items = new_task.success_items
+                        existing.failed_items = new_task.failed_items
+                        existing.skipped_items = new_task.skipped_items
+                        existing.total_size_bytes = new_task.total_size_bytes
+                        existing.retry_count = new_task.retry_count
+                        existing.extra = new_task.extra
+                        # 同步子任务：用数据库数据替换 items 列表内容
+                        existing.items.clear()
+                        cursor.execute(
+                            "SELECT * FROM tm_task_items WHERE task_id = ?",
+                            (new_task.task_id,),
+                        )
+                        for item_row in cursor.fetchall():
+                            existing.items.append(self._row_to_item(item_row))
+                        tasks.append(existing)
+                    else:
+                        # 新发现的任务（理论上不应发生，但做防御性处理）
+                        cursor.execute(
+                            "SELECT * FROM tm_task_items WHERE task_id = ?",
+                            (new_task.task_id,),
+                        )
+                        for item_row in cursor.fetchall():
+                            new_task.items.append(self._row_to_item(item_row))
+                        self._tasks[new_task.task_id] = new_task
+                        tasks.append(new_task)
                 return tasks, total
         else:
             # 内存模式或无分页时直接过滤
@@ -1094,7 +1119,7 @@ class TaskManager:
 
         Args:
             task_id: 任务 ID
-            file_paths: 已下载文件的完整路径列表
+            file_paths: 已下载文件的可移植相对路径列表（/ 分隔符）
         """
         async with self._lock:
             task = self._tasks.get(task_id)

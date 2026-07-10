@@ -115,12 +115,13 @@ class FileManager {
     // 为每个组创建上传任务
     for (const fileGroup of fileGroups) {
       const payload = {
-        type: 'upload',
-        name: `上传_${new Date().toLocaleString('zh-CN').replace(/[/:]/g, '')}`,
-        target_chat: targetChat,
-        files: fileGroup.map(f => f.path),
-        send_as_media_group: sendAsMediaGroup && fileGroup.length > 1,
-        delete_after_upload: deleteAfterUpload,
+        task_type: 'upload',
+        params: {
+          chat_id: targetChat,
+          file_paths: fileGroup.map(f => f.path),
+          send_as_media_group: sendAsMediaGroup && fileGroup.length > 1,
+          delete_after_upload: deleteAfterUpload,
+        },
       };
 
       await api.createTask(payload);
