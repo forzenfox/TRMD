@@ -360,7 +360,7 @@
                     <td data-testid="task-actions" class="space-x-2">
                       <button
                         data-testid="btn-task-start"
-                        x-show="task.status === 'pending' || task.status === 'failed'"
+                        x-show="task.status === 'pending'"
                         @click.stop="startTask(task.id)"
                         class="btn btn-sm btn-success"
                       >
