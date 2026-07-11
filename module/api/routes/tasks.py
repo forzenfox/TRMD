@@ -314,14 +314,28 @@ async def retry_task(
     request: Request,
     token: str = Depends(require_token),
     task_manager: TaskManager = Depends(get_task_manager),
+    executor=Depends(get_task_executor),
 ):
-    """重试任务。"""
+    """重试任务，重置状态后自动触发执行。"""
     try:
+        # 1. 重置任务状态为 pending（重试子任务、清空错误信息）
         await task_manager.retry_task(task_id)
+
+        # 2. 自动启动任务（PENDING → RUNNING/QUEUED）
+        started = await task_manager.start_task(task_id)
+
         task = await task_manager.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        return json_response(data=_task_to_out(task).model_dump(), message="任务已重试")
+
+        # 3. 触发 TaskExecutor 异步执行
+        if executor is not None:
+            executor.submit_task(task)
+
+        return json_response(
+            data=_task_to_out(task).model_dump(),
+            message="任务已重试并开始执行" if started else "任务已重试并加入队列",
+        )
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)
     except TaskStateError:

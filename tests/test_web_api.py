@@ -534,7 +534,45 @@ class TestTaskEndpoints:
         resp = await ac.post(f"/api/tasks/{task.task_id}/retry")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["data"]["status"] == "pending"
+        assert data["data"]["status"] in ("running", "queued", "pending")
+
+    @pytest.mark.asyncio
+    async def test_retry_failed_task_triggers_execution(self, client):
+        """重试失败任务后应自动触发执行（start + submit_task）。
+
+        之前 bug: retry_task() 仅将状态重置为 pending 但不调用 start_task()
+        和 executor.submit_task()，导致任务永远停在 pending 不执行。
+        """
+        ac, app, token = client
+        task_manager = app.state.task_manager
+
+        # 创建并标记为失败
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+        )
+        await task_manager.start_task(task.task_id)
+        await task_manager.fail_task(task.task_id, reason="测试失败")
+
+        # 注入 mock executor
+        mock_executor = MagicMock()
+        app.state.task_executor = mock_executor
+
+        # 重试
+        resp = await ac.post(f"/api/tasks/{task.task_id}/retry")
+        assert resp.status_code == 200
+        data = resp.json()
+
+        # 验证：重试后任务状态应为 running 或 queued（而非停留在 pending）
+        assert data["data"]["status"] in ("running", "queued"), (
+            f"重试后任务应自动启动，状态应为 running/queued，实际为 {data['data']['status']}"
+        )
+
+        # 验证：executor.submit_task 应被调用
+        mock_executor.submit_task.assert_called_once()
+
+        # 清理
+        del app.state.task_executor
 
     @pytest.mark.asyncio
     async def test_delete_completed_task(self, client):
