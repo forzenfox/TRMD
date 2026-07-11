@@ -328,6 +328,12 @@ class UserConfig(BaseConfig):
         self.data_directory: str = (
             self.config.get("data_directory") or UserConfig.DATA_DIRECTORY
         )
+        # 规范化的数据目录绝对路径，与 AppContext.data_dir 解析逻辑一致
+        from module.utils.path_tool import resolve_data_directory
+
+        self.resolved_data_directory: str = resolve_data_directory(
+            self.config.get("data_directory"), UserConfig.DIRECTORY_NAME
+        )
 
     def get_last_history_record(self) -> None:
         """获取最近一次保存的历史配置文件。"""

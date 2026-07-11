@@ -68,7 +68,19 @@ class ProcessTimeMiddleware:
 
 
 class RequestLogMiddleware:
-    """记录请求方法、路径、状态码。不记录敏感 Token。"""
+    """记录请求方法、路径、状态码。不记录敏感 Token。
+
+    被前端定时轮询的 GET 接口不记录日志（太频繁，无诊断价值），
+    非轮询路径和非 GET 方法（如 POST/PUT）仍正常记录。
+    """
+
+    # 被前端定时轮询的接口路径，无需记录每次请求
+    _POLLING_PATHS = frozenset({
+        "/api/tasks",
+        "/api/auth/me",
+        "/api/monitor/resource/status",
+        "/api/config",
+    })
 
     def __init__(self, app):
         self.app = app
@@ -81,7 +93,11 @@ class RequestLogMiddleware:
         request = Request(scope)
         await self.app(scope, receive, send)
         # 注意：在 __call__ 中无法直接获取 Response，这里仅记录请求信息
-        logger.debug("%s %s", request.method, request.url.path)
+        path = request.url.path
+        # 轮询接口的 GET 请求不记录日志（太频繁，无诊断价值）
+        if request.method == "GET" and path in self._POLLING_PATHS:
+            return
+        logger.debug("%s %s", request.method, path)
 
 
 class SecurityHeadersMiddleware:

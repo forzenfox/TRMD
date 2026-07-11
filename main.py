@@ -22,7 +22,7 @@ def _run_web_api(port: int = 8000):
             app,
             host="0.0.0.0",
             port=port,
-            log_level="info",
+            log_level="warning",
             ws_ping_interval=None,
             ws_ping_timeout=None,
         )

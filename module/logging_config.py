@@ -174,6 +174,11 @@ logging.basicConfig(
 log = logging.getLogger("rich")
 # 抑制 Pyrogram 的 INFO 级别日志
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
+# 抑制 Pyrogram 连接层频繁的 DEBUG 日志（Sent/Recv MTProto 消息）
+logging.getLogger("pyrogram.connection").setLevel(logging.WARNING)
+logging.getLogger("pyrogram.session").setLevel(logging.WARNING)
+# 抑制 uvicorn 的 access log（由 RequestLogMiddleware 替代，可按需过滤）
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 log.info(f"{SOFTWARE_SHORT_NAME}:{__version__},更新日期:{__update_date__}。")
 log.info(f'文件日志等级:"{logging.getLevelName(FILE_LOG_LEVEL)}"。')
 log.info(f'终端日志等级:"{logging.getLevelName(CONSOLE_LOG_LEVEL)}"。')

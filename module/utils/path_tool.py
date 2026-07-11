@@ -395,3 +395,64 @@ def from_portable_path(portable_path: str, save_root: str) -> str:
     local_path = portable_path.replace("/", os.sep)
     abs_root = os.path.abspath(save_root)
     return os.path.normpath(os.path.join(abs_root, local_path))
+
+
+def resolve_data_directory(
+    raw_value: Optional[str], project_root: str
+) -> str:
+    """将配置中的 data_directory 值解析为绝对路径。
+
+    统一 UserConfig.data_directory 和 AppContext.data_dir 的解析逻辑，
+    确保两者使用相同的路径解析规则。
+
+    Args:
+        raw_value: 配置文件中的 data_directory 原始值，可为 None、空字符串、
+                   相对路径（如 "./.trmd"）或绝对路径。
+        project_root: 项目根目录，用于解析相对路径。
+
+    Returns:
+        规范化后的绝对路径字符串。
+    """
+    if not raw_value:
+        return os.path.normpath(os.path.join(project_root, ".trmd"))
+    if os.path.isabs(raw_value):
+        return os.path.normpath(raw_value)
+    return os.path.normpath(os.path.join(project_root, raw_value))
+
+
+def migrate_repository_db_if_needed(
+    project_root: str, data_dir: str
+) -> None:
+    """检查并迁移项目根目录下遗留的 repository.db 到配置的数据目录。
+
+    当 downloader.py 旧代码使用 DIRECTORY_NAME 创建了根目录下的
+    repository.db 时，此函数将其迁移到正确的数据目录下。
+
+    迁移规则：
+    - 根目录有 + data_dir 没有 → 移动到 data_dir
+    - 两边都有 → 删除根目录的，保留 data_dir 的
+    - 根目录没有 → 空操作
+
+    Args:
+        project_root: 项目根目录（旧 repository.db 可能存在的位置）
+        data_dir: 配置的数据目录（repository.db 的正确位置）
+    """
+    old_db_path = os.path.join(project_root, "repository.db")
+    new_db_path = os.path.join(data_dir, "repository.db")
+
+    if not os.path.exists(old_db_path):
+        return
+
+    if os.path.exists(new_db_path):
+        # 两边都有：删除根目录的，保留 data_dir 下的
+        os.remove(old_db_path)
+        log.warning(
+            f"检测到根目录下存在遗留的 repository.db，已删除（保留 {new_db_path}）"
+        )
+    else:
+        # 只有根目录有：移动到 data_dir
+        os.makedirs(data_dir, exist_ok=True)
+        shutil.move(old_db_path, new_db_path)
+        log.info(
+            f"已将 repository.db 从根目录迁移到 {new_db_path}"
+        )

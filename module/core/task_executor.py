@@ -92,10 +92,15 @@ class TaskExecutor:
 
     def _should_use_repository(self) -> bool:
         """判断是否启用仓库去重。"""
-        return (
+        result = (
             self._repository_manager is not None
             and self._repository_manager.should_use_repository()
         )
+        log.debug(
+            f"_should_use_repository: result={result}, "
+            f"repo_mgr={'exists' if self._repository_manager else 'None'}"
+        )
+        return result
 
     def _get_save_root(self) -> str:
         """获取保存根目录（用于路径转换）。
@@ -897,7 +902,7 @@ class TaskExecutor:
                     )
                     try:
                         message = await self._client.get_messages(
-                            chat_id, item.source_id
+                            chat_id, int(item.source_id)
                         )
                         if message and message.media:
                             if filter_types:
@@ -959,8 +964,8 @@ class TaskExecutor:
 
             await asyncio.gather(*[_download_one(item) for item in task.items])
 
-            # 仓库入库：上传到仓库频道并写入记录
-            await self._ingest_downloaded_files(task)
+        # 仓库入库：上传到仓库频道并写入记录（无论是否有 downloader 都执行）
+        await self._ingest_downloaded_files(task)
 
         # 保存已下载的文件路径到任务（转为可移植格式存储）
         if downloaded_files:
@@ -992,7 +997,7 @@ class TaskExecutor:
 
         fixed_count = 0
         for item in pending_items:
-            msg_id = item.source_id
+            msg_id = int(item.source_id) if item.source_id is not None else None
             if msg_id not in processing_results:
                 # 这个消息ID没有被处理，标记为失败
                 await self._task_manager.update_item_status(
@@ -1049,6 +1054,7 @@ class TaskExecutor:
         仅在仓库模式启用且 preference.upload.download_upload=True 时执行。
         """
         if not self._should_use_repository():
+            log.info(f"下载入库: 仓库模式未启用，跳过入库 task={task.task_id}")
             return
 
         # 读取 download_upload 配置
@@ -1056,7 +1062,15 @@ class TaskExecutor:
         upload_config = repo_config.get("preference", {}).get("upload", {})
         download_upload = upload_config.get("download_upload", True)
         if not download_upload:
+            log.info(
+                f"下载入库: download_upload=False，跳过入库 task={task.task_id}"
+            )
             return
+
+        log.info(
+            f"下载入库: 开始处理 task={task.task_id}, "
+            f"items={len(task.items)}, repo_chat_id={self._repository_manager.get_repository_chat_id()}"
+        )
 
         chat_id = task.chat_id
         repo_chat_id = self._repository_manager.get_repository_chat_id()
@@ -1179,6 +1193,12 @@ class TaskExecutor:
                 f"转发任务 {task.task_id} 没有可转发的消息（消息范围无效或全部被过滤）"
             )
 
+        log.info(
+            f"转发任务: {task.task_id}, chat_id={chat_id}, "
+            f"target={target_chat_id}, filter={filter_types}, "
+            f"msg_count={len(message_ids)}, existing_items={len(task.items)}"
+        )
+
         # 创建子任务项并持久化到数据库
         if not task.items:
             new_items = []
@@ -1199,7 +1219,7 @@ class TaskExecutor:
                     message = None
                     if filter_types:
                         message = await self._client.get_messages(
-                            chat_id, item.source_id
+                            chat_id, int(item.source_id)
                         )
                         if message and message.media:
                             media_type = self._get_media_type(message)
@@ -1212,12 +1232,16 @@ class TaskExecutor:
                     # 仓库中转模式
                     if self._should_use_repository():
                         repo_chat_id = self._repository_manager.get_repository_chat_id()
+                        log.info(
+                            f"转发仓库中转: item={item.id}, "
+                            f"repo_chat_id={repo_chat_id}, target={target_chat_id}"
+                        )
                         file_unique_id = None
 
                         # 获取消息以提取 file_unique_id
                         if not message:
                             message = await self._client.get_messages(
-                                chat_id, item.source_id
+                                chat_id, int(item.source_id)
                             )
                         if message:
                             file_unique_id = self._extract_file_unique_id(message)
@@ -1253,7 +1277,7 @@ class TaskExecutor:
                             repo_msg = await self._client.copy_message(
                                 chat_id=int(repo_chat_id),
                                 from_chat_id=chat_id,
-                                message_id=item.source_id,
+                                message_id=int(item.source_id),
                             )
                             # 写入仓库记录
                             await self._repository_manager.on_upload_success(
@@ -1282,7 +1306,7 @@ class TaskExecutor:
                                 result_message = await self._client.copy_message(
                                     chat_id=target_chat_id,
                                     from_chat_id=chat_id,
-                                    message_id=item.source_id,
+                                    message_id=int(item.source_id),
                                 )
                                 await self._task_manager.update_item_status(
                                     task.task_id,
@@ -1297,7 +1321,7 @@ class TaskExecutor:
                     result_message = await self._client.copy_message(
                         chat_id=target_chat_id,
                         from_chat_id=chat_id,
-                        message_id=item.source_id,
+                        message_id=int(item.source_id),
                     )
                     await self._task_manager.update_item_status(
                         task.task_id,
@@ -1307,6 +1331,10 @@ class TaskExecutor:
                         uploaded_message_id=result_message.id,
                     )
                 except Exception as e:
+                    log.warning(
+                        f"转发子任务失败: item={item.id}, "
+                        f"source_id={item.source_id}, error={e}"
+                    )
                     await self._task_manager.update_item_status(
                         task.task_id,
                         item.id,

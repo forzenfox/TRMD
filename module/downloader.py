@@ -2630,7 +2630,7 @@ class TelegramRestrictedMediaDownloader(Bot):
             }
         except BotMethodInvalid as e:
             res: bool = safe_delete(
-                file_p_d=os.path.join(self.app.DIRECTORY_NAME, "sessions")
+                file_p_d=self.app.work_directory
             )
             error_msg: str = (
                 "已删除旧会话文件" if res else "请手动删除软件目录下的sessions文件夹"
@@ -2675,14 +2675,13 @@ class TelegramRestrictedMediaDownloader(Bot):
     def _init_repository_manager(self):
         """初始化仓库模式管理器。
 
-        当全局配置中仓库模式启用时，创建 RepositoryDB 和 RepositoryManager 实例。
+        当全局配置中仓库模式启用时，优先从 AppContext 获取已初始化的
+        RepositoryManager（确保 Web API 和 Bot 共享同一数据库）。
+        若 AppContext 不可用，则降级创建本地实例。
         如果仓库模式未启用或配置无效，repository_manager 保持为 None。
         """
         try:
-            from module.core.repository_db import RepositoryDB
-            from module.core.repository_manager import RepositoryManager
-
-            # 使用 ConfigManager 检查仓库配置
+            # 检查仓库配置
             repo_config = self.app.config.get("repository", {})
             if not repo_config or not repo_config.get("enabled", False):
                 return
@@ -2692,17 +2691,30 @@ class TelegramRestrictedMediaDownloader(Bot):
                 log.warning("仓库模式已启用但 chat_id 为空，跳过初始化")
                 return
 
-            # 初始化数据库
-            db_path = os.path.join(self.app.DIRECTORY_NAME, "repository.db")
+            # 优先从 AppContext 获取已初始化的 repository_manager
+            try:
+                from module.integration import get_context
+
+                _ctx = get_context()
+                if _ctx and _ctx.repository_manager is not None:
+                    self.repository_manager = _ctx.repository_manager
+                    log.info("仓库模式使用 AppContext 的 RepositoryManager 实例")
+                    return
+            except Exception:
+                pass
+
+            # 降级：使用 resolved_data_directory 创建本地实例
+            from module.core.repository_db import RepositoryDB
+            from module.core.repository_manager import RepositoryManager
+
+            db_path = os.path.join(self.app.resolved_data_directory, "repository.db")
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
             repo_db = RepositoryDB(db_path=db_path)
-
-            # 创建 RepositoryManager
             self.repository_manager = RepositoryManager(
                 repository_db=repo_db,
                 config_manager=None,
             )
-            log.info(f"仓库模式已初始化，仓库频道: {chat_id}")
+            log.info("仓库模式使用本地 RepositoryManager 实例（AppContext 不可用）")
         except Exception as e:
             log.warning(f"仓库模式初始化失败，将使用普通模式: {e}")
             self.repository_manager = None
@@ -2841,7 +2853,7 @@ class TelegramRestrictedMediaDownloader(Bot):
         except (SessionRevoked, AuthKeyUnregistered, SessionExpired, Unauthorized) as e:
             log.error(f'登录时遇到错误,{_t(KeyWord.REASON)}:"{e}"')
             res: bool = safe_delete(
-                file_p_d=os.path.join(self.app.DIRECTORY_NAME, "sessions")
+                file_p_d=self.app.work_directory
             )
             record_error: bool = True
             if res:

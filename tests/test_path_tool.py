@@ -2,6 +2,7 @@
 """测试 path_tool.py 中的可移植路径工具函数。"""
 
 import os
+import sqlite3
 
 from module.utils.path_tool import to_portable_path, from_portable_path
 
@@ -186,3 +187,164 @@ class TestRoundTrip:
         expected_prod = os.path.normpath(os.path.join(prod_root, "photo", "img.jpg"))
 
         assert os.path.normpath(restored_prod) == expected_prod
+
+
+class TestResolveDataDirectory:
+    """测试 resolve_data_directory()：配置原始值 → 绝对路径。"""
+
+    def test_relative_path(self, tmp_path):
+        """相对路径 ./some_dir → 基于 project_root 的绝对路径。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        project_root = str(tmp_path / "project")
+        result = resolve_data_directory("./.trmd", project_root)
+        expected = os.path.normpath(os.path.join(project_root, ".trmd"))
+        assert result == expected
+
+    def test_absolute_path(self, tmp_path):
+        """绝对路径直接返回（规范化后）。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        abs_path = str(tmp_path / "absolute_data")
+        result = resolve_data_directory(abs_path, str(tmp_path / "irrelevant"))
+        assert os.path.isabs(result)
+        assert result == os.path.normpath(abs_path)
+
+    def test_none_value(self, tmp_path):
+        """None 值回退到默认 <project_root>/.trmd。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        project_root = str(tmp_path / "project")
+        result = resolve_data_directory(None, project_root)
+        expected = os.path.normpath(os.path.join(project_root, ".trmd"))
+        assert result == expected
+
+    def test_empty_string(self, tmp_path):
+        """空字符串等同于 None，回退到默认路径。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        project_root = str(tmp_path / "project")
+        result = resolve_data_directory("", project_root)
+        expected = os.path.normpath(os.path.join(project_root, ".trmd"))
+        assert result == expected
+
+    def test_normpath(self, tmp_path):
+        """路径分隔符规范化，去除 ./ 等。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        project_root = str(tmp_path / "project")
+        result = resolve_data_directory("./data/../.trmd", project_root)
+        # 规范化后应该是 project_root/data 的上级再 .trmd = project_root/.trmd
+        expected = os.path.normpath(os.path.join(project_root, "data", "..", ".trmd"))
+        assert result == expected
+
+
+class TestMigrateRepositoryDb:
+    """测试 migrate_repository_db_if_needed()：旧路径数据库迁移。"""
+
+    def test_migrate_from_root(self, tmp_path):
+        """根目录有 repository.db → 移动到 data_dir 下。"""
+        from module.utils.path_tool import migrate_repository_db_if_needed
+
+        project_root = str(tmp_path / "project")
+        os.makedirs(project_root, exist_ok=True)
+        data_dir = os.path.join(project_root, ".trmd")
+        os.makedirs(data_dir, exist_ok=True)
+
+        # 在项目根目录创建旧 repository.db
+        old_db_path = os.path.join(project_root, "repository.db")
+        conn = sqlite3.connect(old_db_path)
+        conn.execute("CREATE TABLE test (id INTEGER)")
+        conn.execute("INSERT INTO test VALUES (1)")
+        conn.commit()
+        conn.close()
+
+        assert os.path.exists(old_db_path)
+
+        migrate_repository_db_if_needed(project_root, data_dir)
+
+        # 旧文件应被移动到新位置
+        assert not os.path.exists(old_db_path)
+        new_db_path = os.path.join(data_dir, "repository.db")
+        assert os.path.exists(new_db_path)
+        # 数据应完整保留
+        conn = sqlite3.connect(new_db_path)
+        rows = conn.execute("SELECT * FROM test").fetchall()
+        conn.close()
+        assert rows == [(1,)]
+
+    def test_both_exist(self, tmp_path):
+        """两边都存在 → 删除根目录的，保留 data_dir 下的。"""
+        from module.utils.path_tool import migrate_repository_db_if_needed
+
+        project_root = str(tmp_path / "project")
+        os.makedirs(project_root, exist_ok=True)
+        data_dir = os.path.join(project_root, ".trmd")
+        os.makedirs(data_dir, exist_ok=True)
+
+        # 在两边都创建 repository.db（用不同内容区分）
+        old_db_path = os.path.join(project_root, "repository.db")
+        new_db_path = os.path.join(data_dir, "repository.db")
+
+        conn_old = sqlite3.connect(old_db_path)
+        conn_old.execute("CREATE TABLE old_data (id INTEGER)")
+        conn_old.execute("INSERT INTO old_data VALUES (99)")
+        conn_old.commit()
+        conn_old.close()
+
+        conn_new = sqlite3.connect(new_db_path)
+        conn_new.execute("CREATE TABLE new_data (id INTEGER)")
+        conn_new.execute("INSERT INTO new_data VALUES (1)")
+        conn_new.commit()
+        conn_new.close()
+
+        migrate_repository_db_if_needed(project_root, data_dir)
+
+        # 根目录的应被删除，data_dir 的应保留且数据完整
+        assert not os.path.exists(old_db_path)
+        assert os.path.exists(new_db_path)
+        conn = sqlite3.connect(new_db_path)
+        rows = conn.execute("SELECT * FROM new_data").fetchall()
+        conn.close()
+        assert rows == [(1,)]
+
+    def test_no_migration_needed(self, tmp_path):
+        """根目录没有 repository.db → 空操作。"""
+        from module.utils.path_tool import migrate_repository_db_if_needed
+
+        project_root = str(tmp_path / "project")
+        data_dir = os.path.join(project_root, ".trmd")
+        os.makedirs(data_dir, exist_ok=True)
+
+        # 根目录下没有 repository.db
+        assert not os.path.exists(os.path.join(project_root, "repository.db"))
+
+        migrate_repository_db_if_needed(project_root, data_dir)
+
+        # 不应有任何文件被创建
+        assert not os.path.exists(os.path.join(project_root, "repository.db"))
+        assert not os.path.exists(os.path.join(data_dir, "repository.db"))
+
+    def test_new_db_not_exists_dir_created(self, tmp_path):
+        """data_dir 不存在时自动创建目录后迁移。"""
+        from module.utils.path_tool import migrate_repository_db_if_needed
+
+        project_root = str(tmp_path / "project")
+        os.makedirs(project_root, exist_ok=True)
+        data_dir = os.path.join(project_root, ".trmd")
+        # data_dir 不创建
+
+        # 在项目根目录创建旧 repository.db
+        old_db_path = os.path.join(project_root, "repository.db")
+        conn = sqlite3.connect(old_db_path)
+        conn.execute("CREATE TABLE test (id INTEGER)")
+        conn.execute("INSERT INTO test VALUES (1)")
+        conn.commit()
+        conn.close()
+
+        migrate_repository_db_if_needed(project_root, data_dir)
+
+        # 应自动创建 data_dir 并迁移
+        assert os.path.isdir(data_dir)
+        assert not os.path.exists(old_db_path)
+        assert os.path.exists(os.path.join(data_dir, "repository.db"))

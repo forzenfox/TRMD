@@ -53,6 +53,14 @@ class AppContext:
         )
         os.makedirs(self.data_dir, exist_ok=True)
 
+        # 迁移旧路径的 repository.db 到配置的数据目录
+        _project_root = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+        from module.utils.path_tool import migrate_repository_db_if_needed
+
+        migrate_repository_db_if_needed(_project_root, self.data_dir)
+
         self.root_user_id = root_user_id
         self.web_host = web_host
         self.web_port = web_port
@@ -246,20 +254,22 @@ def init_context(**kwargs) -> AppContext:
         _config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
         )
+        _project_root = os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
         try:
             import yaml
 
             with open(_config_path, "r", encoding="UTF-8") as _f:
                 _cfg = yaml.safe_load(_f)
-            if _cfg and isinstance(_cfg, dict) and _cfg.get("data_directory"):
-                _resolved = _cfg["data_directory"]
-                # 相对路径基于项目根目录解析
-                if not os.path.isabs(_resolved):
-                    _resolved = os.path.join(
-                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        _resolved,
-                    )
-                kwargs["data_dir"] = os.path.normpath(_resolved)
+            from module.utils.path_tool import resolve_data_directory
+
+            raw_value = (
+                _cfg.get("data_directory")
+                if _cfg and isinstance(_cfg, dict)
+                else None
+            )
+            kwargs["data_dir"] = resolve_data_directory(raw_value, _project_root)
         except Exception:
             pass
     return AppContext(**kwargs)

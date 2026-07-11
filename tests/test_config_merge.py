@@ -533,3 +533,65 @@ class TestConfigManagerNoGlobalConfig:
         cm = ConfigManager(user_config=mock_user_config)
         config = cm.load_config(mask_sensitive=False)
         assert config.get("preference", {}).get("notice") is True
+
+
+# ==================== resolved_data_directory 路径解析一致性测试 ====================
+
+
+class TestResolvedDataDirectory:
+    """验证 UserConfig.resolved_data_directory 与 AppContext.data_dir 解析一致。"""
+
+    def test_resolved_data_directory_with_relative_path(self, tmp_path):
+        """配置 data_directory: ./.trmd 时，resolved_data_directory 应为绝对路径。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        project_root = str(tmp_path / "project")
+        result = resolve_data_directory("./.trmd", project_root)
+        expected = os.path.normpath(os.path.join(project_root, ".trmd"))
+        assert result == expected
+        assert os.path.isabs(result)
+
+    def test_resolved_data_directory_with_none(self, tmp_path):
+        """配置 data_directory 为 null 时，回退到默认 <project_root>/.trmd。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        project_root = str(tmp_path / "project")
+        result = resolve_data_directory(None, project_root)
+        expected = os.path.normpath(os.path.join(project_root, ".trmd"))
+        assert result == expected
+
+    def test_resolved_data_directory_with_absolute_path(self, tmp_path):
+        """配置 data_directory 为绝对路径时，直接使用。"""
+        from module.utils.path_tool import resolve_data_directory
+
+        abs_path = str(tmp_path / "custom_data")
+        result = resolve_data_directory(abs_path, str(tmp_path / "irrelevant"))
+        assert result == os.path.normpath(abs_path)
+
+    def test_user_config_has_resolved_data_directory(self, tmp_path):
+        """UserConfig 实例应有 resolved_data_directory 属性。"""
+        config_path = str(tmp_path / "config.yaml")
+        config_data = {
+            "data_directory": "./.trmd",
+            "credential": {"api_id": 12345, "api_hash": "abc", "bot_token": None},
+        }
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config_data, f)
+
+        import sys
+        original_argv = sys.argv
+        try:
+            sys.argv = [str(tmp_path / "main.py")]
+            uc = UserConfig()
+            uc.config_path = config_path
+            uc.config = config_data
+            # 触发 resolved_data_directory 计算
+            from module.utils.path_tool import resolve_data_directory
+            result = resolve_data_directory(
+                uc.config.get("data_directory"),
+                uc.DIRECTORY_NAME,
+            )
+            assert os.path.isabs(result)
+            assert ".trmd" in result
+        finally:
+            sys.argv = original_argv

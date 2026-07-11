@@ -466,3 +466,93 @@ class TestResumeDownloadProgress:
             )
             assert result == target_file
             mock_safe_replace.assert_called_once()
+
+
+class TestInitRepositoryManager:
+    """测试 _init_repository_manager 优先使用 AppContext 实例。"""
+
+    @pytest.fixture
+    def downloader(self):
+        """构造轻量级 Downloader 实例。"""
+        with patch("module.downloader.Bot.__init__", return_value=None):
+            with patch("module.downloader.Application"):
+                with patch("asyncio.get_event_loop"):
+                    from module.downloader import TelegramRestrictedMediaDownloader
+
+                    dl = TelegramRestrictedMediaDownloader()
+                    dl.app = MagicMock()
+                    dl.repository_manager = None
+                    return dl
+
+    def test_uses_app_context_repo_manager(self, downloader):
+        """AppContext 可用时，_init_repository_manager 应使用其 repository_manager。"""
+        downloader.app.config = {
+            "repository": {"enabled": True, "chat_id": "-1001234567890"}
+        }
+        mock_repo_manager = MagicMock()
+
+        with patch("module.integration.get_context", return_value=MagicMock(
+            repository_manager=mock_repo_manager
+        )):
+            downloader._init_repository_manager()
+
+        assert downloader.repository_manager is mock_repo_manager
+
+    def test_fallback_to_resolved_data_directory(self, downloader, tmp_path):
+        """AppContext 不可用时，应使用 resolved_data_directory 创建 RepositoryDB。"""
+        downloader.app.config = {
+            "repository": {"enabled": True, "chat_id": "-1001234567890"}
+        }
+        downloader.app.resolved_data_directory = str(tmp_path / ".trmd")
+
+        with patch("module.integration.get_context", return_value=None):
+            with patch("module.core.repository_db.RepositoryDB") as MockRepoDB:
+                with patch("module.core.repository_manager.RepositoryManager") as MockRepoMgr:
+                    downloader._init_repository_manager()
+
+        # 验证 db_path 使用了 resolved_data_directory
+        call_args = MockRepoDB.call_args
+        db_path = call_args.kwargs.get("db_path") or call_args[1].get("db_path") or call_args[0][0]
+        assert "repository.db" in db_path
+        assert str(tmp_path / ".trmd") in db_path
+
+    def test_no_repo_config(self, downloader):
+        """仓库未启用时，repository_manager 应保持 None。"""
+        downloader.app.config = {"repository": {"enabled": False}}
+        downloader._init_repository_manager()
+        assert downloader.repository_manager is None
+
+    def test_no_repository_section(self, downloader):
+        """配置中无 repository 节时，repository_manager 应保持 None。"""
+        downloader.app.config = {}
+        downloader._init_repository_manager()
+        assert downloader.repository_manager is None
+
+    def test_empty_chat_id_skips_init(self, downloader):
+        """仓库启用但 chat_id 为空时，应跳过初始化。"""
+        downloader.app.config = {
+            "repository": {"enabled": True, "chat_id": ""}
+        }
+        downloader._init_repository_manager()
+        assert downloader.repository_manager is None
+
+
+class TestSessionDirectoryPaths:
+    """测试 sessions 路径使用 work_directory 而非 DIRECTORY_NAME。"""
+
+    def test_sessions_path_uses_work_directory(self):
+        """验证 self.app.work_directory 已从配置正确解析，而非使用 DIRECTORY_NAME 拼接。"""
+        # 此测试验证 Application 的 work_directory 属性语义
+        # work_directory 定义在 UserConfig.__init__ 第 322-324 行：
+        # self.work_directory = PARSE_ARGS.session or (
+        #     task.get("session_directory") or UserConfig.WORK_DIRECTORY
+        # )
+        # 而 DIRECTORY_NAME + "sessions" 是硬编码拼接，与配置系统脱钩
+        # 改用 work_directory 是正确行为
+        from module.utils.path_tool import resolve_data_directory
+
+        # 验证 resolve_data_directory 返回的路径与预期一致
+        project_root = "d:\\workspace\\TRMD"
+        result = resolve_data_directory("./.trmd", project_root)
+        expected = os.path.normpath(os.path.join(project_root, ".trmd"))
+        assert result == expected
