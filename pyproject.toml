@@ -12,6 +12,7 @@ dependencies = [
     "pymediainfo==7.0.1",
     "pyreadline3>=3.5.4",
     "pyyaml>=6.0.3",
+    "ruamel.yaml>=0.18.0",
     "qrcode>=8.2",
     "rich==14.2.0",
     "pyaes>=1.6.1",
