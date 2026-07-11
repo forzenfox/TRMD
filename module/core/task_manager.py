@@ -914,11 +914,18 @@ class TaskManager:
             task.started_at = None
             task.completed_at = None
 
-            # 重置失败的子任务
+            # 重置/跳过失败的子任务
             for item in task.items:
-                if item.status == ItemStatus.FAILED and item.can_retry():
-                    item.status = ItemStatus.PENDING
-                    item.error_message = None
+                if item.status == ItemStatus.FAILED:
+                    if item.can_retry():
+                        # 可重试：重置为 PENDING
+                        item.status = ItemStatus.PENDING
+                        item.error_message = None
+                    else:
+                        # 不可重试：标记为 SKIPPED，避免重复执行无效操作
+                        item.status = ItemStatus.SKIPPED
+                        if not item.error_message:
+                            item.error_message = "不可重试，已跳过"
                     self._save_item(task_id, item)
 
             self._save_task(task)

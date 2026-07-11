@@ -570,10 +570,121 @@ class TestRetryLogic:
         item3.retry_count = 3
         assert item3.can_retry() is False
 
+    @pytest.mark.asyncio
+    async def test_retry_resets_retryable_failed_items_to_pending(self, task_manager):
+        """重试时，can_retry=True 的 FAILED 子任务应被重置为 PENDING。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+        )
+        await task_manager.start_task(task.task_id)
 
-# ============================================================
-# 测试：资源保护
-# ============================================================
+        # 添加两个子任务：一个可重试，一个不可重试
+        retryable_item = TaskItem(
+            id="item_retryable",
+            task_id=task.task_id,
+            status=ItemStatus.FAILED,
+            error_message="FloodWait",
+            source_id=100,
+        )
+        non_retryable_item = TaskItem(
+            id="item_non_retryable",
+            task_id=task.task_id,
+            status=ItemStatus.FAILED,
+            error_message="MESSAGE_ID_INVALID",
+            source_id=101,
+        )
+        await task_manager.add_items(task.task_id, [retryable_item, non_retryable_item])
+
+        await task_manager.fail_task(task.task_id, reason="部分子任务失败")
+        await task_manager.retry_task(task.task_id)
+
+        # 可重试的子任务应为 PENDING
+        assert retryable_item.status == ItemStatus.PENDING
+        assert retryable_item.error_message is None
+
+    @pytest.mark.asyncio
+    async def test_retry_marks_non_retryable_failed_items_as_skipped(
+        self, task_manager
+    ):
+        """重试时，can_retry=False 的 FAILED 子任务应被标记为 SKIPPED。
+
+        不可重试的错误（如 CHAT_FORBIDDEN、MESSAGE_ID_INVALID、超过重试次数）
+        不应在下次执行时被重新处理，否则会造成无意义的重试和 FloodWait 风险。
+        """
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+        )
+        await task_manager.start_task(task.task_id)
+
+        # 添加不可重试的子任务
+        non_retryable_item = TaskItem(
+            id="item_no_retry",
+            task_id=task.task_id,
+            status=ItemStatus.FAILED,
+            error_message="CHAT_FORBIDDEN",
+            source_id=200,
+        )
+        # 超过最大重试次数的子任务
+        max_retry_item = TaskItem(
+            id="item_max_retry",
+            task_id=task.task_id,
+            status=ItemStatus.FAILED,
+            error_message="TimeoutError",
+            source_id=201,
+        )
+        max_retry_item.retry_count = 3
+
+        await task_manager.add_items(task.task_id, [non_retryable_item, max_retry_item])
+
+        await task_manager.fail_task(task.task_id, reason="部分子任务失败")
+        await task_manager.retry_task(task.task_id)
+
+        # 不可重试的子任务应被标记为 SKIPPED
+        assert non_retryable_item.status == ItemStatus.SKIPPED
+        assert max_retry_item.status == ItemStatus.SKIPPED
+
+    @pytest.mark.asyncio
+    async def test_retry_preserves_success_and_skipped_items(self, task_manager):
+        """重试时，SUCCESS 和 SKIPPED 的子任务应保持原状态。"""
+        task = await task_manager.create_task(
+            task_type=TaskType.DOWNLOAD,
+            chat_id=-1001234567890,
+        )
+        await task_manager.start_task(task.task_id)
+
+        success_item = TaskItem(
+            id="item_success",
+            task_id=task.task_id,
+            status=ItemStatus.SUCCESS,
+            source_id=300,
+        )
+        skipped_item = TaskItem(
+            id="item_skipped",
+            task_id=task.task_id,
+            status=ItemStatus.SKIPPED,
+            source_id=301,
+        )
+        failed_item = TaskItem(
+            id="item_failed",
+            task_id=task.task_id,
+            status=ItemStatus.FAILED,
+            error_message="FloodWait",
+            source_id=302,
+        )
+        await task_manager.add_items(
+            task.task_id, [success_item, skipped_item, failed_item]
+        )
+
+        await task_manager.fail_task(task.task_id, reason="部分子任务失败")
+        await task_manager.retry_task(task.task_id)
+
+        # SUCCESS 和 SKIPPED 应保持不变
+        assert success_item.status == ItemStatus.SUCCESS
+        assert skipped_item.status == ItemStatus.SKIPPED
+        # FAILED (can_retry=True) 应被重置为 PENDING
+        assert failed_item.status == ItemStatus.PENDING
 
 
 class TestResourceProtection:

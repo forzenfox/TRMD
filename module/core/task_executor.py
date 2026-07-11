@@ -894,7 +894,11 @@ class TaskExecutor:
 
             # 并发下载
             async def _download_one(item):
-                if item.status in (ItemStatus.SUCCESS, ItemStatus.SKIPPED):
+                if item.status in (
+                    ItemStatus.SUCCESS,
+                    ItemStatus.SKIPPED,
+                    ItemStatus.FAILED,
+                ):
                     return
                 async with self._download_semaphore:
                     await self._task_manager.update_item_status(
@@ -1062,9 +1066,7 @@ class TaskExecutor:
         upload_config = repo_config.get("preference", {}).get("upload", {})
         download_upload = upload_config.get("download_upload", True)
         if not download_upload:
-            log.info(
-                f"下载入库: download_upload=False，跳过入库 task={task.task_id}"
-            )
+            log.info(f"下载入库: download_upload=False，跳过入库 task={task.task_id}")
             return
 
         log.info(
@@ -1209,7 +1211,11 @@ class TaskExecutor:
 
         # 并发转发
         async def _forward_one(item):
-            if item.status in (ItemStatus.SUCCESS, ItemStatus.SKIPPED):
+            if item.status in (
+                ItemStatus.SUCCESS,
+                ItemStatus.SKIPPED,
+                ItemStatus.FAILED,
+            ):
                 return
             async with self._forward_semaphore:
                 await self._task_manager.update_item_status(
