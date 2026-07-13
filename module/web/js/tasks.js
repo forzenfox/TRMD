@@ -183,9 +183,7 @@ class TaskManager {
       // 重新加载任务列表
       await this.loadTasks(true);
 
-      // 显示成功通知
-      this._notify("success", "任务创建成功");
-
+      // 成功通知交给调用方（handleCreateTask）统一处理，避免重复提示
       return task;
     } catch (error) {
       // 处理后端返回的 TaskSizeExceeded / TaskSizeWarning 异常

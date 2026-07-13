@@ -961,7 +961,7 @@
                              focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500">
                 返回修改
               </button>
-              <button @click="closeResourceAlert(); taskManager.createTask()"
+              <button @click="confirmCreateFromAlert()"
                       class="px-4 py-2 border border-transparent rounded-md text-sm font-medium
                              text-white bg-blue-600 hover:bg-blue-700 focus:outline-none
                              focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-800 focus:ring-blue-500">
@@ -1442,6 +1442,22 @@
               return;
             }
             // 创建后立即刷新 Alpine 本地数据
+            await this.refreshTasks();
+            this.addNotification('success', '任务创建成功');
+            this.closeCreateModal();
+          } catch (error) {
+            this.addNotification('error', `创建失败: ${error.message}`);
+          }
+        },
+
+        /**
+         * 资源告警弹窗中点击"确认创建"后的回调
+         */
+        async confirmCreateFromAlert() {
+          this.closeResourceAlert();
+          try {
+            await taskManager.createTask();
+            this._syncResourceAlert();
             await this.refreshTasks();
             this.addNotification('success', '任务创建成功');
             this.closeCreateModal();
