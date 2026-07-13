@@ -1104,6 +1104,7 @@
         resolveTargetLoading: false,
         resolveTargetError: null,
         resolveTargetResult: null,
+        resolvedTargetChatId: null, // 解析后的数字 ID，用于上传任务提交
 
         // 资源告警响应式镜像（taskManager.showResourceAlert 是非响应式全局对象，
         // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 x-show 更新）
@@ -1303,9 +1304,12 @@
           this.resolveTargetLoading = true;
           this.resolveTargetError = null;
           this.resolveTargetResult = null;
+          this.resolvedTargetChatId = null;
           try {
             this.resolveTargetResult = await api.resolveChat(this.createForm.targetChat);
             taskManager.createForm.targetChat = this.createForm.targetChat;
+            // 存储解析后的数字 ID，供上传任务提交时使用
+            this.resolvedTargetChatId = this.resolveTargetResult.chat_id;
           } catch (error) {
             this.resolveTargetError = this._mapResolveError(error.message);
           } finally {
@@ -1474,10 +1478,10 @@
           this.fileListLoading = true;
           try {
             const result = await api.getFiles('');
-            if (result.data && result.data.items) {
+            if (result && result.items) {
               // 只显示文件，不显示子目录
-              this.fileList = result.data.items.filter(item => item.type === 'file');
-              this.fileListPath = result.data.path || '';
+              this.fileList = result.items.filter(item => item.type === 'file');
+              this.fileListPath = result.path || '';
             } else {
               this.fileList = [];
               this.fileListPath = '';
