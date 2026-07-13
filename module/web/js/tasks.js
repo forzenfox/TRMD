@@ -259,10 +259,8 @@ class TaskManager {
       }
       _addSizeFilter();
     } else if (this.createForm.taskType === "upload") {
-      // 优先使用解析后的数字 ID（resolveTargetChat 解析成功后存储），回退到输入框原始值
-      const alpineRoot = document.querySelector("[x-data]");
-      const alpineData = alpineRoot && window.Alpine ? window.Alpine.$data(alpineRoot) : null;
-      params.chat_id = alpineData?.resolvedTargetChatId || this.createForm.targetChat;
+      // 使用 targetChat（handleCreateTask 已确保是解析后的数字 ID）
+      params.chat_id = this.createForm.targetChat;
       params.file_paths = this.createForm.selectedFiles || [];
     } else if (this.createForm.taskType === "listen_download") {
       params.source_identifier = this.createForm.sourceChat;

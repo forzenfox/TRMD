@@ -1059,10 +1059,10 @@
   </div>
 
   <!-- JavaScript 文件 -->
-  <script src="js/api.js?v=2026071004"></script>
-  <script src="js/auth.js?v=2026071004"></script>
-  <script src="js/tasks.js?v=2026071004"></script>
-  <script src="js/config.js?v=2026071004"></script>
+  <script src="js/api.js?v=2026071301"></script>
+  <script src="js/auth.js?v=2026071301"></script>
+  <script src="js/tasks.js?v=2026071301"></script>
+  <script src="js/config.js?v=2026071301"></script>
   <script>
     /**
      * 任务页面逻辑
@@ -1104,7 +1104,6 @@
         resolveTargetLoading: false,
         resolveTargetError: null,
         resolveTargetResult: null,
-        resolvedTargetChatId: null, // 解析后的数字 ID，用于上传任务提交
 
         // 资源告警响应式镜像（taskManager.showResourceAlert 是非响应式全局对象，
         // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 x-show 更新）
@@ -1304,12 +1303,13 @@
           this.resolveTargetLoading = true;
           this.resolveTargetError = null;
           this.resolveTargetResult = null;
-          this.resolvedTargetChatId = null;
           try {
-            this.resolveTargetResult = await api.resolveChat(this.createForm.targetChat);
+            const result = await api.resolveChat(this.createForm.targetChat);
+            this.resolveTargetResult = result;
+            // 直接更新 targetChat 为数字 ID，确保后续提交使用正确的值
+            this.createForm.targetChat = Number(result.chat_id);
             taskManager.createForm.targetChat = this.createForm.targetChat;
-            // 存储解析后的数字 ID，供上传任务提交时使用
-            this.resolvedTargetChatId = this.resolveTargetResult.chat_id;
+            console.log('[Resolve] 解析成功，targetChat 已更新为:', this.createForm.targetChat);
           } catch (error) {
             this.resolveTargetError = this._mapResolveError(error.message);
           } finally {
@@ -1405,6 +1405,26 @@
 
           // 同步 Alpine createForm 到 taskManager
           Object.assign(taskManager.createForm, this.createForm);
+
+          // 对于上传任务，确保 targetChat 是数字 ID
+          if (this.createForm.taskType === 'upload') {
+            // 如果 targetChat 不是数字，自动解析
+            if (typeof this.createForm.targetChat !== 'number' && this.createForm.targetChat) {
+              console.log('[Upload] targetChat 不是数字，自动解析:', this.createForm.targetChat);
+              try {
+                this.resolveTargetLoading = true;
+                const result = await api.resolveChat(this.createForm.targetChat);
+                this.resolveTargetResult = result;
+                this.createForm.targetChat = Number(result.chat_id);
+                this.resolveTargetLoading = false;
+                // 同步到 taskManager
+                taskManager.createForm.targetChat = this.createForm.targetChat;
+              } catch (error) {
+                this.createFormError = `目标频道解析失败：${error.message}`;
+                return;
+              }
+            }
+          }
 
           // 验证表单
           const errors = taskManager.validateCreateForm();
