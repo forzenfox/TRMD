@@ -323,6 +323,13 @@ class ApiClient {
   async getResourceStatus() {
     return this.request('GET', '/api/monitor/resource/status');
   }
+
+  /**
+   * 手动触发 Telegram Client 重连
+   */
+  async reconnectClient() {
+    return this.request('POST', '/api/monitor/client/reconnect');
+  }
 }
 
 // 创建单例实例

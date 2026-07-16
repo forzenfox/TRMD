@@ -231,11 +231,17 @@ class Monitor:
                 }
             client = ctx.client
             is_conn = getattr(client, "is_connected", False)
-            return {
+            result = {
                 "connected": is_conn,
                 "status": "connected" if is_conn else "disconnected",
                 "bot_connected": self._check_bot_connected(ctx),
             }
+
+            # 添加重连状态信息
+            if hasattr(ctx, "client_manager") and ctx.client_manager:
+                result["reconnect_status"] = ctx.client_manager.get_status()
+
+            return result
         except Exception as e:
             log.warning("获取 Client 状态失败: %s", e)
             return {"connected": False, "status": "error", "bot_connected": False}

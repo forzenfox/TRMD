@@ -19,6 +19,7 @@ from module.core.file_manager import FileManager
 from module.core.repository_db import RepositoryDB
 from module.core.repository_sync import RepositorySync
 from module.core.config_manager import ConfigManager
+from module.core.client_manager import ClientManager
 from module.interaction_manager import InteractionManager
 
 log = logging.getLogger("rich")
@@ -54,9 +55,7 @@ class AppContext:
         os.makedirs(self.data_dir, exist_ok=True)
 
         # 迁移旧路径的 repository.db 到配置的数据目录
-        _project_root = os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__))
-        )
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         from module.utils.path_tool import migrate_repository_db_if_needed
 
         migrate_repository_db_if_needed(_project_root, self.data_dir)
@@ -77,6 +76,7 @@ class AppContext:
         self.interaction_manager = self._init_interaction_manager()
         self.repository_db = self._init_repository_db()
         self.repository_manager = self._init_repository_manager()
+        self.client_manager = self._init_client_manager()
         self.repository_sync = None  # 延迟初始化，需要 client
 
         # 延迟初始化（需在 client 启动后调用 init_task_executor）
@@ -136,7 +136,20 @@ class AppContext:
 
     def _init_config_manager(self) -> ConfigManager:
         """初始化 ConfigManager。"""
-        cm = ConfigManager(user_config=None)
+        user_config = None
+        try:
+            # 尝试创建 UserConfig 实例以读取配置文件
+            from module.config.legacy_config import UserConfig
+
+            user_config = UserConfig()
+            log.info("ConfigManager 使用 UserConfig 实例")
+        except Exception as e:
+            import traceback
+            log.warning(
+                f"无法创建 UserConfig 实例，ConfigManager 将从文件读取配置: {e}\n{traceback.format_exc()}"
+            )
+
+        cm = ConfigManager(user_config=user_config)
         log.info("ConfigManager 已初始化")
         return cm
 
@@ -157,6 +170,12 @@ class AppContext:
         )
         log.info("RepositoryManager 已初始化")
         return rm
+
+    def _init_client_manager(self) -> ClientManager:
+        """初始化 ClientManager。"""
+        cm = ClientManager()
+        log.info("ClientManager 已初始化")
+        return cm
 
     def init_repository_sync(self, client) -> None:
         """延迟初始化并启动 RepositorySync。
@@ -205,6 +224,27 @@ class AppContext:
         self.task_manager._identifier_service = IdentifierService(client)
         log.info("TaskManager 已注入 IdentifierService")
 
+    def start_client_health_check(self, client) -> None:
+        """启动 ClientManager 的后台健康检查。
+
+        需在 Pyrogram Client 启动后调用。
+
+        Args:
+            client: 已启动的 Pyrogram Client 实例
+        """
+        if self.client_manager is None:
+            log.warning("ClientManager 未初始化，跳过健康检查启动")
+            return
+
+        self.client_manager.start_health_check(client)
+        log.info("ClientManager 健康检查已启动")
+
+    def stop_client_health_check(self) -> None:
+        """停止 ClientManager 的后台健康检查。"""
+        if self.client_manager is not None:
+            self.client_manager.stop_health_check()
+            log.info("ClientManager 健康检查已停止")
+
     async def init_task_executor(self, client, downloader=None, uploader=None):
         """初始化任务执行器（需在 client 启动后调用）。
 
@@ -214,6 +254,14 @@ class AppContext:
             uploader: 上传器实例（可选）
         """
         from module.core.task_executor import TaskExecutor
+
+        # 向 FileManager 注入真实的 client、config 和 RepositoryManager（初始化时为占位值）
+        self.file_manager._client = client
+        self.file_manager._config = self.config_manager.load_config(
+            mask_sensitive=False
+        )
+        self.file_manager.repository_manager = self.repository_manager
+        log.info("FileManager 已注入 client、config 和 RepositoryManager")
 
         self.task_executor = TaskExecutor(
             task_manager=self.task_manager,
@@ -235,6 +283,7 @@ class AppContext:
 
     def cleanup(self):
         """清理资源。"""
+        self.stop_client_health_check()
         self.stop_repository_sync()
         if hasattr(self, "_initialized"):
             self._initialized = False
@@ -254,9 +303,7 @@ def init_context(**kwargs) -> AppContext:
         _config_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.yaml"
         )
-        _project_root = os.path.dirname(
-            os.path.dirname(os.path.abspath(__file__))
-        )
+        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         try:
             import yaml
 
@@ -265,9 +312,7 @@ def init_context(**kwargs) -> AppContext:
             from module.utils.path_tool import resolve_data_directory
 
             raw_value = (
-                _cfg.get("data_directory")
-                if _cfg and isinstance(_cfg, dict)
-                else None
+                _cfg.get("data_directory") if _cfg and isinstance(_cfg, dict) else None
             )
             kwargs["data_dir"] = resolve_data_directory(raw_value, _project_root)
         except Exception:

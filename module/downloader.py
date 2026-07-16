@@ -2758,6 +2758,16 @@ class TelegramRestrictedMediaDownloader(Bot):
         except Exception as _svc_err:
             log.warning(f"TaskManager 服务注入失败（非致命）: {_svc_err}")
 
+        # 启动 ClientManager 健康检查（后台自动重连）
+        try:
+            from module.integration import get_context
+
+            _ctx = get_context()
+            if _ctx:
+                _ctx.start_client_health_check(self.app.client)
+        except Exception as _hc_err:
+            log.warning(f"ClientManager 健康检查启动失败（非致命）: {_hc_err}")
+
         if self.app.bot_token is not None:
             result = await self.start_bot(
                 self.app,

@@ -2,7 +2,7 @@
 """频道与消息相关 Pydantic 数据模型。"""
 
 import re
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 from pydantic import BaseModel, field_validator, model_validator
 
 
@@ -144,7 +144,7 @@ class MessageRangeRequest(BaseModel):
 class MessageEstimateRequest(BaseModel):
     """消息估算请求体（包含 chat_id）。"""
 
-    chat_id: str  # 用户原始输入（URL/@username/数字ID）
+    chat_id: Union[str, int]  # 用户原始输入（URL/@username/数字ID）
     range_mode: Literal["id_range", "date_range", "multiple_ids", "all", "recent"] = (
         "all"
     )

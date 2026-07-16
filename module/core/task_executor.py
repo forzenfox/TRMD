@@ -25,12 +25,13 @@ from module.core.task_manager import (
     ItemStatus,
     ExecutorError,
 )
-from module.core.file_manager import FileManager, UploadProgress
+from module.core.file_manager import FileManager, UploadProgress, FileInfo
 from module.utils.path_tool import (
     safe_scan_directory_file,
     to_portable_path,
     from_portable_path,
 )
+from module.utils.timezone import parse_user_date
 
 log = logging.getLogger("rich")
 
@@ -646,7 +647,7 @@ class TaskExecutor:
 
         使用 client.get_chat_history() 遍历指定日期范围内的消息，收集其 ID。
         """
-        from datetime import datetime, timezone
+        from datetime import timezone
 
         chat_id = task.chat_id
         start_date_str = task.params.get("start_date")
@@ -658,12 +659,8 @@ class TaskExecutor:
             )
 
         try:
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").replace(
-                tzinfo=timezone.utc
-            )
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").replace(
-                hour=23, minute=59, second=59, tzinfo=timezone.utc
-            )
+            start_date = parse_user_date(start_date_str, is_end=False)
+            end_date = parse_user_date(end_date_str, is_end=True)
         except ValueError as e:
             raise ExecutorError(f"任务 {task.task_id} 日期格式无效: {e}")
 
@@ -673,8 +670,15 @@ class TaskExecutor:
                 chat_id,
                 offset_date=end_date,
             ):
-                if message.date and message.date < start_date:
-                    break
+                if message.date:
+                    # 统一时区：Pyrogram 部分消息日期可能是 naive，按 UTC 处理
+                    msg_date = (
+                        message.date.replace(tzinfo=timezone.utc)
+                        if message.date.tzinfo is None
+                        else message.date.astimezone(timezone.utc)
+                    )
+                    if msg_date < start_date:
+                        break
                 message_ids.append(message.id)
         except Exception as e:
             raise ExecutorError(f"任务 {task.task_id} 获取日期范围内消息失败: {e}")
@@ -771,14 +775,14 @@ class TaskExecutor:
         """获取消息媒体文件大小（字节），无媒体返回 None。"""
         if not message or not message.media:
             return None
-        media = message.media
+        # 直接访问 message 的属性，而不是 message.media（枚举值）的属性
         for attr in ("video", "document", "audio", "animation", "voice", "video_note"):
-            obj = getattr(media, attr, None)
+            obj = getattr(message, attr, None)
             if obj:
                 return getattr(obj, "file_size", None)
-        if hasattr(media, "photo") and media.photo:
+        if message.photo:
             # Photo 大小取最大尺寸
-            sizes = getattr(media.photo, "sizes", [])
+            sizes = getattr(message.photo, "sizes", [])
             if sizes:
                 return getattr(sizes[-1], "file_size", None)
         return None
@@ -1056,13 +1060,14 @@ class TaskExecutor:
         """下载完成后，将文件入库到仓库频道（PRD §2.2.1 步骤7-10）。
 
         仅在仓库模式启用且 preference.upload.download_upload=True 时执行。
+        按 source_message_id 分组，使用相册模式上传以保持源频道消息结构。
         """
         if not self._should_use_repository():
             log.info(f"下载入库: 仓库模式未启用，跳过入库 task={task.task_id}")
             return
 
         # 读取 download_upload 配置
-        repo_config = self._config_manager.get_config() if self._config_manager else {}
+        repo_config = self._config_manager.load_config() if self._config_manager else {}
         upload_config = repo_config.get("preference", {}).get("upload", {})
         download_upload = upload_config.get("download_upload", True)
         if not download_upload:
@@ -1079,54 +1084,243 @@ class TaskExecutor:
         delete_after = upload_config.get("delete", False)
         save_root = self._get_save_root()
 
+        # 按 source_message_id 分组（同组 = 源频道同一条消息）
+        groups: dict[int, list[TaskItem]] = {}
         for item in task.items:
             if item.status != ItemStatus.SUCCESS or not item.file_path:
                 continue
+            source_id = int(item.source_id) if item.source_id else 0
+            if source_id not in groups:
+                groups[source_id] = []
+            groups[source_id].append(item)
 
-            # item.file_path 为可移植格式，需还原为绝对路径
+        # 逐组处理
+        for source_message_id, items in groups.items():
+            await self._ingest_downloaded_group(
+                task=task,
+                items=items,
+                chat_id=chat_id,
+                repo_chat_id=repo_chat_id,
+                source_message_id=source_message_id,
+                delete_after=delete_after,
+                save_root=save_root,
+            )
+
+    async def _ingest_downloaded_group(
+        self,
+        task: Task,
+        items: list[TaskItem],
+        chat_id: int,
+        repo_chat_id: str,
+        source_message_id: int,
+        delete_after: bool,
+        save_root: str,
+    ) -> None:
+        """处理同一 source_message_id 的一组文件入库。
+
+        流程：
+        1. 计算每个文件的 SHA256，执行 L3 去重
+        2. 构建 FileInfo 列表
+        3. 调用 split_media_group 分为 album 组和 single 组
+        4. album 组（>1 文件）→ upload_media_group
+        5. single 组 → 并发 upload
+        6. 对上传成功的消息，调用 on_upload_success_batch 写入仓库记录
+        7. 更新各 item 状态
+        """
+        # 步骤1: 去重 + 构建 FileInfo
+        file_infos: list[FileInfo] = []
+        item_map: dict[str, tuple[TaskItem, str]] = {}  # file_path -> (item, sha256)
+        dedup_items: list[tuple[TaskItem, str]] = []  # (item, sha256) 去重命中的
+
+        for item in items:
             abs_file_path = from_portable_path(item.file_path, save_root)
             file_sha256 = self._repository_manager.compute_content_hash(abs_file_path)
             dedup = self._repository_manager.check_dedup(
                 source_chat_id=chat_id,
-                source_message_id=item.source_id,
+                source_message_id=source_message_id,
                 content_hash=file_sha256,
             )
 
             if dedup:
-                # L3 命中：仅新增 source 映射记录，跳过上传
                 log.info(
-                    f"下载入库: L3去重命中，跳过上传 file_unique_id={dedup.file_unique_id}"
+                    f"下载入库: L3去重命中，跳过上传 item={item.id} "
+                    f"file_unique_id={dedup.file_unique_id}"
                 )
                 await self._task_manager.update_item_status(
                     task.task_id, item.id, item.status, file_sha256=file_sha256
                 )
+                dedup_items.append((item, file_sha256))
                 continue
 
-            # L3 未命中：上传到仓库频道
+            file_info = await self._file_manager.get_file_info(abs_file_path)
+            file_infos.append(file_info)
+            item_map[abs_file_path] = (item, file_sha256)
+
+        if not file_infos:
+            log.info(f"下载入库: 组 source_message_id={source_message_id} 全部去重命中，跳过上传")
+            return
+
+        # 步骤2: 拆分为 album 组和 single 组
+        groups = await self._file_manager.split_media_group(file_infos)
+
+        for group in groups:
+            is_album = group.get("is_album", False)
+            group_files = group.get("files", [])
+
+            if is_album and len(group_files) > 1:
+                # 相册模式上传
+                await self._upload_album_group(
+                    task=task,
+                    file_infos=group_files,
+                    item_map=item_map,
+                    chat_id=chat_id,
+                    repo_chat_id=repo_chat_id,
+                    source_message_id=source_message_id,
+                    delete_after=delete_after,
+                )
+            else:
+                # 单文件上传
+                await self._upload_single_files(
+                    task=task,
+                    file_infos=group_files,
+                    item_map=item_map,
+                    chat_id=chat_id,
+                    repo_chat_id=repo_chat_id,
+                    source_message_id=source_message_id,
+                    delete_after=delete_after,
+                )
+
+    async def _upload_album_group(
+        self,
+        task: Task,
+        file_infos: list[FileInfo],
+        item_map: dict[str, tuple[TaskItem, str]],
+        chat_id: int,
+        repo_chat_id: str,
+        source_message_id: int,
+        delete_after: bool,
+    ) -> None:
+        """相册模式上传一组文件到仓库频道。"""
+        log.info(
+            f"下载入库: 相册模式上传 {len(file_infos)} 个文件 "
+            f"source_message_id={source_message_id}"
+        )
+
+        try:
+            results = await self._file_manager.upload_media_group(
+                file_infos=file_infos,
+                chat_id=int(repo_chat_id),
+                delete_after=delete_after,
+            )
+
+            # 收集成功的消息和哈希
+            success_messages = []
+            success_hashes = []
+            for res in results:
+                if res.success and res.message:
+                    item, sha256 = item_map.get(res.file_path, (None, None))
+                    if item:
+                        await self._task_manager.update_item_status(
+                            task.task_id,
+                            item.id,
+                            item.status,
+                            file_sha256=sha256,
+                            file_unique_id=res.file_unique_id,
+                        )
+                        log.info(f"下载入库: 相册上传成功 file_path={res.file_path}")
+                        success_messages.append(res.message)
+                        success_hashes.append(sha256)
+                    else:
+                        log.warning(f"下载入库: 相册上传成功但找不到对应 item file_path={res.file_path}")
+                else:
+                    # 找到对应的 item 标记失败
+                    item, _ = item_map.get(res.file_path, (None, None))
+                    if item:
+                        await self._task_manager.update_item_status(
+                            task.task_id,
+                            item.id,
+                            ItemStatus.FAILED,
+                            error_code="UPLOAD_ERROR",
+                            error_message=res.error_msg or "UNKNOWN_ERROR",
+                        )
+                    log.warning(f"下载入库: 相册上传失败 file_path={res.file_path}")
+
+            # 批量写入仓库记录
+            if success_messages:
+                await self._repository_manager.on_upload_success_batch(
+                    messages=success_messages,
+                    source_chat_id=chat_id,
+                    source_message_id=source_message_id,
+                    content_hashes=success_hashes,
+                )
+
+        except Exception as e:
+            log.warning(f"下载入库: 相册上传异常: {e}")
+            # 标记所有 item 为失败
+            for fi in file_infos:
+                item, _ = item_map.get(fi.path, (None, None))
+                if item:
+                    await self._task_manager.update_item_status(
+                        task.task_id,
+                        item.id,
+                        ItemStatus.FAILED,
+                        error_code="UPLOAD_ERROR",
+                        error_message=str(e),
+                    )
+
+    async def _upload_single_files(
+        self,
+        task: Task,
+        file_infos: list[FileInfo],
+        item_map: dict[str, tuple[TaskItem, str]],
+        chat_id: int,
+        repo_chat_id: str,
+        source_message_id: int,
+        delete_after: bool,
+    ) -> None:
+        """单文件模式上传文件到仓库频道。"""
+        for fi in file_infos:
+            item, sha256 = item_map.get(fi.path, (None, None))
+            if not item:
+                log.warning(f"下载入库: 找不到对应 item file_path={fi.path}")
+                continue
+
             try:
                 result = await self._file_manager.upload(
-                    file_path=abs_file_path,
+                    file_path=fi.path,
                     chat_id=int(repo_chat_id),
                     source_chat_id=chat_id,
-                    source_message_id=item.source_id,
+                    source_message_id=source_message_id,
+                    content_hash=sha256,
+                    delete_after=delete_after,
                 )
                 if result.success and result.message:
-                    # 上传成功回调已在 file_manager.upload 中处理 on_upload_success
                     await self._task_manager.update_item_status(
                         task.task_id,
                         item.id,
                         item.status,
-                        file_sha256=file_sha256,
+                        file_sha256=sha256,
                         file_unique_id=result.file_unique_id,
                     )
-                    # 根据 preference.upload.delete 决定是否删除本地文件
-                    if delete_after:
-                        self._file_manager.delete_local_file(abs_file_path)
-                    log.info(f"下载入库: 上传到仓库成功 file_path={item.file_path}")
+                    log.info(f"下载入库: 单文件上传成功 file_path={item.file_path}")
                 else:
-                    log.warning(f"下载入库: 上传到仓库失败 file_path={item.file_path}")
+                    await self._task_manager.update_item_status(
+                        task.task_id,
+                        item.id,
+                        ItemStatus.FAILED,
+                        error_code="UPLOAD_ERROR",
+                        error_message=result.error_msg or "UNKNOWN_ERROR",
+                    )
+                    log.warning(f"下载入库: 单文件上传失败 file_path={item.file_path}")
             except Exception as e:
-                log.warning(f"下载入库: 上传到仓库异常，降级跳过: {e}")
+                await self._task_manager.update_item_status(
+                    task.task_id,
+                    item.id,
+                    ItemStatus.FAILED,
+                    error_code="UPLOAD_ERROR",
+                    error_message=str(e),
+                )
+                log.warning(f"下载入库: 单文件上传异常: {e}")
 
     async def _ingest_downloaded_item(
         self, task_id: str, item: TaskItem, chat_id: int
@@ -1136,7 +1330,7 @@ class TaskExecutor:
             return
 
         upload_config = (
-            (self._config_manager.get_config() or {})
+            (self._config_manager.load_config() or {})
             .get("preference", {})
             .get("upload", {})
         )
@@ -1167,6 +1361,8 @@ class TaskExecutor:
                 chat_id=int(repo_chat_id),
                 source_chat_id=chat_id,
                 source_message_id=item.source_id,
+                content_hash=file_sha256,
+                delete_after=delete_after,
             )
             if result.success:
                 await self._task_manager.update_item_status(
@@ -1251,6 +1447,18 @@ class TaskExecutor:
                             )
                         if message:
                             file_unique_id = self._extract_file_unique_id(message)
+                            log.info(
+                                f"转发仓库中转: item={item.id}, "
+                                f"message_id={item.source_id}, "
+                                f"file_unique_id={file_unique_id}, "
+                                f"has_media={message.media is not None}, "
+                                f"media_type={type(message.media).__name__ if message.media else None}"
+                            )
+                        else:
+                            log.warning(
+                                f"转发仓库中转: item={item.id}, "
+                                f"无法获取消息 message_id={item.source_id}"
+                            )
 
                         if file_unique_id:
                             # L2 去重检查
@@ -1415,40 +1623,41 @@ class TaskExecutor:
 
             if is_album and len(files) > 1:
                 # 媒体组：保持顺序整组上传
-                for file_info in files:
-                    item_id = (
-                        f"{task.task_id}_file_{item_index - files.index(file_info) - 1}"
-                    )
+                group_start_index = item_index - len(files)
+
+                # 更新整组状态为运行中
+                for i in range(len(files)):
+                    item_id = f"{task.task_id}_file_{group_start_index + i}"
                     await self._task_manager.update_item_status(
                         task.task_id, item_id, ItemStatus.RUNNING
                     )
-                    try:
-                        if file_info == files[0]:
-                            results = await self._file_manager.upload_media_group(
-                                file_infos=files,
-                                chat_id=chat_id,
-                                progress_callback=self._on_progress,
-                                delete_after=task.params.get(
-                                    "delete_after_upload", True
-                                ),
+
+                try:
+                    results = await self._file_manager.upload_media_group(
+                        file_infos=files,
+                        chat_id=chat_id,
+                        progress_callback=self._on_progress,
+                        delete_after=task.params.get(
+                            "delete_after_upload", True
+                        ),
+                    )
+                    for i, res in enumerate(results):
+                        item_id = f"{task.task_id}_file_{group_start_index + i}"
+                        if res.success:
+                            await self._task_manager.update_item_status(
+                                task.task_id, item_id, ItemStatus.SUCCESS
                             )
-                            for i, res in enumerate(results):
-                                item_id = (
-                                    f"{task.task_id}_file_{item_index - len(files) + i}"
-                                )
-                                if res.success:
-                                    await self._task_manager.update_item_status(
-                                        task.task_id, item_id, ItemStatus.SUCCESS
-                                    )
-                                else:
-                                    await self._task_manager.update_item_status(
-                                        task.task_id,
-                                        item_id,
-                                        ItemStatus.FAILED,
-                                        error_code="UPLOAD_ERROR",
-                                        error_message=res.error_msg or "UNKNOWN_ERROR",
-                                    )
-                    except Exception as e:
+                        else:
+                            await self._task_manager.update_item_status(
+                                task.task_id,
+                                item_id,
+                                ItemStatus.FAILED,
+                                error_code="UPLOAD_ERROR",
+                                error_message=res.error_msg or "UNKNOWN_ERROR",
+                            )
+                except Exception as e:
+                    for i in range(len(files)):
+                        item_id = f"{task.task_id}_file_{group_start_index + i}"
                         await self._task_manager.update_item_status(
                             task.task_id,
                             item_id,
@@ -1645,41 +1854,41 @@ class TaskExecutor:
         """从消息的媒体对象中提取 file_unique_id。"""
         if not message or not message.media:
             return None
-        media = message.media
-        if hasattr(media, "video") and media.video:
-            return getattr(media.video, "file_unique_id", None)
-        if hasattr(media, "photo") and media.photo:
-            return getattr(media.photo, "file_unique_id", None)
-        if hasattr(media, "document") and media.document:
-            return getattr(media.document, "file_unique_id", None)
-        if hasattr(media, "audio") and media.audio:
-            return getattr(media.audio, "file_unique_id", None)
-        if hasattr(media, "animation") and media.animation:
-            return getattr(media.animation, "file_unique_id", None)
-        if hasattr(media, "voice") and media.voice:
-            return getattr(media.voice, "file_unique_id", None)
-        if hasattr(media, "video_note") and media.video_note:
-            return getattr(media.video_note, "file_unique_id", None)
-        return getattr(media, "file_unique_id", None)
+        # 直接访问 message 的属性，而不是 message.media 的属性
+        if message.video:
+            return getattr(message.video, "file_unique_id", None)
+        if message.photo:
+            return getattr(message.photo, "file_unique_id", None)
+        if message.document:
+            return getattr(message.document, "file_unique_id", None)
+        if message.audio:
+            return getattr(message.audio, "file_unique_id", None)
+        if message.animation:
+            return getattr(message.animation, "file_unique_id", None)
+        if message.voice:
+            return getattr(message.voice, "file_unique_id", None)
+        if message.video_note:
+            return getattr(message.video_note, "file_unique_id", None)
+        return None
 
     @staticmethod
     def _extract_telegram_file_id(message) -> Optional[str]:
         """从消息的媒体对象中提取 file_id。"""
         if not message or not message.media:
             return None
-        media = message.media
-        if hasattr(media, "video") and media.video:
-            return getattr(media.video, "file_id", None)
-        if hasattr(media, "photo") and media.photo:
-            return getattr(media.photo, "file_id", None)
-        if hasattr(media, "document") and media.document:
-            return getattr(media.document, "file_id", None)
-        if hasattr(media, "audio") and media.audio:
-            return getattr(media.audio, "file_id", None)
-        if hasattr(media, "animation") and media.animation:
-            return getattr(media.animation, "file_id", None)
-        if hasattr(media, "voice") and media.voice:
-            return getattr(media.voice, "file_id", None)
-        if hasattr(media, "video_note") and media.video_note:
-            return getattr(media.video_note, "file_id", None)
-        return getattr(media, "file_id", None)
+        # 直接访问 message 的属性，而不是 message.media 的属性
+        if message.video:
+            return getattr(message.video, "file_id", None)
+        if message.photo:
+            return getattr(message.photo, "file_id", None)
+        if message.document:
+            return getattr(message.document, "file_id", None)
+        if message.audio:
+            return getattr(message.audio, "file_id", None)
+        if message.animation:
+            return getattr(message.animation, "file_id", None)
+        if message.voice:
+            return getattr(message.voice, "file_id", None)
+        if message.video_note:
+            return getattr(message.video_note, "file_id", None)
+        return None

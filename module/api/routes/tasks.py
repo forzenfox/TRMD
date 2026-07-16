@@ -54,7 +54,7 @@ def _task_to_out(task: Task) -> TaskOut:
         id=task.task_id,
         task_type=task.task_type.value,
         status=task.status.value,
-        progress=task.progress,
+        progress=round(task.progress, 2),
         created_at=task.created_at,
         updated_at=task.started_at or task.completed_at or task.created_at,
         message=task.error_message,

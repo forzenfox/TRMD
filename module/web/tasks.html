@@ -353,7 +353,7 @@
                             }"
                           ></div>
                         </div>
-                        <span class="text-xs text-slate-400 w-10" x-text="`${task.progress || 0}%`"></span>
+                        <span class="text-xs text-slate-400 w-10" x-text="`${Number(task.progress || 0).toFixed(2)}%`"></span>
                       </div>
                     </td>
                     <td data-testid="task-created-at" class="text-sm text-slate-400" x-text="taskManager.formatTime(task.created_at)"></td>
@@ -535,7 +535,7 @@
                       :style="`width: ${selectedTask.progress || 0}%`"
                     ></div>
                   </div>
-                  <span class="text-sm font-medium text-white w-12 text-right" x-text="`${selectedTask.progress || 0}%`"></span>
+                  <span class="text-sm font-medium text-white w-12 text-right" x-text="`${Number(selectedTask.progress || 0).toFixed(2)}%`"></span>
                 </div>
               </div>
 
@@ -647,19 +647,21 @@
                 </button>
               </div>
               <!-- 解析结果卡片 -->
-              <div x-show="resolveResult" class="mt-2 p-3 bg-slate-900/50 border border-slate-600 rounded-lg text-sm">
-                <div class="flex items-center justify-between">
-                  <span class="text-slate-300" x-text="resolveResult.chat_name"></span>
-                  <span class="badge text-xs" :class="resolveResult.has_access ? 'badge-completed' : 'badge-failed'"
-                        x-text="resolveResult.has_access ? '✅ 可访问' : '❌ 无权限'"></span>
+              <template x-if="resolveResult">
+                <div class="mt-2 p-3 bg-slate-900/50 border border-slate-600 rounded-lg text-sm">
+                  <div class="flex items-center justify-between">
+                    <span class="text-slate-300" x-text="resolveResult.chat_name"></span>
+                    <span class="badge text-xs" :class="resolveResult.has_access ? 'badge-completed' : 'badge-failed'"
+                          x-text="resolveResult.has_access ? '✅ 可访问' : '❌ 无权限'"></span>
+                  </div>
+                  <div class="flex gap-3 mt-1 text-xs text-slate-400">
+                    <span x-text="'ID: ' + resolveResult.chat_id"></span>
+                    <span x-show="resolveResult.username" x-text="'@' + resolveResult.username"></span>
+                    <span x-text="resolveResult.chat_type === 'private' ? '私聊' : resolveResult.chat_type === 'channel' ? '频道' : '群组'"></span>
+                    <span x-show="resolveResult.message_count >= 0" x-text="resolveResult.message_count + ' 条消息'"></span>
+                  </div>
                 </div>
-                <div class="flex gap-3 mt-1 text-xs text-slate-400">
-                  <span x-text="'ID: ' + resolveResult.chat_id"></span>
-                  <span x-show="resolveResult.username" x-text="'@' + resolveResult.username"></span>
-                  <span x-text="resolveResult.chat_type === 'private' ? '私聊' : resolveResult.chat_type === 'channel' ? '频道' : '群组'"></span>
-                  <span x-show="resolveResult.message_count >= 0" x-text="resolveResult.message_count + ' 条消息'"></span>
-                </div>
-              </div>
+              </template>
               <!-- 解析错误 -->
               <div x-show="resolveError" class="mt-2 text-sm text-red-400" x-text="resolveError"></div>
             </div>
@@ -685,18 +687,20 @@
                 </button>
               </div>
               <!-- 目标解析结果卡片 -->
-              <div x-show="resolveTargetResult" class="mt-2 p-3 bg-slate-900/50 border border-slate-600 rounded-lg text-sm">
-                <div class="flex items-center justify-between">
-                  <span class="text-slate-300" x-text="resolveTargetResult.chat_name"></span>
-                  <span class="badge text-xs" :class="resolveTargetResult.has_access ? 'badge-completed' : 'badge-failed'"
-                        x-text="resolveTargetResult.has_access ? '✅ 可访问' : '❌ 无权限'"></span>
+              <template x-if="resolveTargetResult">
+                <div class="mt-2 p-3 bg-slate-900/50 border border-slate-600 rounded-lg text-sm">
+                  <div class="flex items-center justify-between">
+                    <span class="text-slate-300" x-text="resolveTargetResult.chat_name"></span>
+                    <span class="badge text-xs" :class="resolveTargetResult.has_access ? 'badge-completed' : 'badge-failed'"
+                          x-text="resolveTargetResult.has_access ? '✅ 可访问' : '❌ 无权限'"></span>
+                  </div>
+                  <div class="flex gap-3 mt-1 text-xs text-slate-400">
+                    <span x-text="'ID: ' + resolveTargetResult.chat_id"></span>
+                    <span x-show="resolveTargetResult.username" x-text="'@' + resolveTargetResult.username"></span>
+                    <span x-text="resolveTargetResult.chat_type === 'private' ? '私聊' : resolveTargetResult.chat_type === 'channel' ? '频道' : '群组'"></span>
+                  </div>
                 </div>
-                <div class="flex gap-3 mt-1 text-xs text-slate-400">
-                  <span x-text="'ID: ' + resolveTargetResult.chat_id"></span>
-                  <span x-show="resolveTargetResult.username" x-text="'@' + resolveTargetResult.username"></span>
-                  <span x-text="resolveTargetResult.chat_type === 'private' ? '私聊' : resolveTargetResult.chat_type === 'channel' ? '频道' : '群组'"></span>
-                </div>
-              </div>
+              </template>
               <div x-show="resolveTargetError" class="mt-2 text-sm text-red-400" x-text="resolveTargetError"></div>
             </div>
 
@@ -763,6 +767,17 @@
                 <span class="text-slate-500" x-show="selectedFiles.length > 0">
                   总计 <span x-text="formatFileSize(selectedTotalSize)"></span>
                 </span>
+              </div>
+
+              <!-- 上传后删除本地文件 -->
+              <div class="form-group mb-0 mt-3">
+                <label class="flex items-center cursor-pointer text-sm">
+                  <input type="checkbox"
+                         x-model="createForm.deleteAfterUpload"
+                         class="mr-2 rounded"
+                         data-testid="upload-delete-after-checkbox">
+                  <span>上传后删除本地文件</span>
+                </label>
               </div>
             </div>
 
@@ -856,8 +871,7 @@
                       type="checkbox"
                       :data-testid="'checkbox-filter-type-' + option.value"
                       :value="option.value"
-                      @change="taskManager.toggleTypeFilter(option.value)"
-                      :checked="taskManager.isTypeFilterSelected(option.value)"
+                      x-model="createForm.typeFilters"
                       class="mr-2"
                     >
                     <span x-text="option.icon + ' ' + option.label"></span>
@@ -1080,12 +1094,14 @@
           targetChat: '',
           selectedFiles: [],
           messageRangeMode: 'id_range',
+          deleteAfterUpload: true,
           minId: 0,
           maxId: 0,
           startDate: '',
           endDate: '',
           rawItems: '',
           recentCount: '',
+          typeFilters: [],
           minSize: '', maxSize: '',
           minSizeUnit: 'MB', maxSizeUnit: 'MB',
         },
@@ -1289,9 +1305,13 @@
           this.resolveError = null;
           this.resolveResult = null;
           try {
-            this.resolveResult = await api.resolveChat(this.createForm.sourceChat);
+            const result = await api.resolveChat(this.createForm.sourceChat);
+            this.resolveResult = result;
+            // 将源频道更新为解析后的数字 ID，确保后续提交使用正确的值
+            this.createForm.sourceChat = Number(result.chat_id);
             // 自动同步 sourceChat 到 taskManager
             taskManager.createForm.sourceChat = this.createForm.sourceChat;
+            console.log('[Resolve] 解析成功，sourceChat 已更新为:', this.createForm.sourceChat);
           } catch (error) {
             this.resolveError = this._mapResolveError(error.message);
           } finally {
@@ -1403,9 +1423,6 @@
         async handleCreateTask() {
           this.createFormError = null;
 
-          // 同步 Alpine createForm 到 taskManager
-          Object.assign(taskManager.createForm, this.createForm);
-
           // 对于上传任务，确保 targetChat 是数字 ID
           if (this.createForm.taskType === 'upload') {
             // 如果 targetChat 不是数字，自动解析
@@ -1425,6 +1442,26 @@
               }
             }
           }
+
+          // 对于下载/转发/监听任务，确保 sourceChat 是数字 ID
+          if (this.createForm.taskType !== 'upload' && this.createForm.sourceChat) {
+            if (typeof this.createForm.sourceChat !== 'number') {
+              console.log('[Source] sourceChat 不是数字，自动解析:', this.createForm.sourceChat);
+              try {
+                this.resolveLoading = true;
+                const result = await api.resolveChat(this.createForm.sourceChat);
+                this.resolveResult = result;
+                this.createForm.sourceChat = Number(result.chat_id);
+                this.resolveLoading = false;
+              } catch (error) {
+                this.createFormError = `源频道解析失败：${error.message}`;
+                return;
+              }
+            }
+          }
+
+          // 同步 Alpine createForm 到 taskManager（解析完成后再同步，确保拿到数字 ID）
+          Object.assign(taskManager.createForm, this.createForm);
 
           // 验证表单
           const errors = taskManager.validateCreateForm();

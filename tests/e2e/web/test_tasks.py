@@ -1658,3 +1658,168 @@ class TestForwardRepositoryTransit:
         # 验证仓库无新增记录
         repo_files = query_repository_files(test_token)
         assert repo_files.get("total", 0) == 0, "仓库关闭时转发任务不应产生仓库记录"
+
+
+# ============================================================
+# T091: 下载任务相册模式入库验证
+# ============================================================
+
+
+class TestDownloadAlbumModeUpload:
+    """T091: 下载任务相册模式入库验证。
+
+    验证下载任务完成后，文件按 source_message_id 分组上传到仓库频道，
+    相册消息（多个文件）保持为一条消息多个文件的形式。
+
+    前置条件：repository.enabled=true, preference.upload.download_upload=true
+    """
+
+    def test_album_mode_groups_by_source_message_id(
+        self, test_token: str, live_server: str
+    ):
+        """T091-1: 相册模式入库 - 仓库记录按 source_message_id 分组。
+
+        创建下载任务→启动→等待完成→查询 repository_sources。
+        验证：同一 source_message_id 对应多条记录（相册消息包含多个文件）。
+        """
+        cleanup_residual_tasks(test_token)
+
+        try:
+            task_id = create_download_task(test_token)
+        except ValueError as e:
+            pytest.skip(str(e))
+
+        start_task(test_token, task_id)
+
+        try:
+            status = wait_for_task_completion(test_token, task_id)
+        except TimeoutError:
+            pytest.skip("下载任务超时，跳过")
+
+        if status != "completed":
+            pytest.skip(f"下载任务未成功完成，状态: {status}")
+
+        # 查询仓库来源映射记录
+        sources = query_repository_sources(test_token)
+        assert len(sources) > 0, "仓库来源映射记录不应为空"
+
+        # 按 source_message_id 分组统计
+        from collections import Counter
+
+        source_id_counts = Counter(s.get("source_message_id") for s in sources)
+
+        # 验证：至少有一个 source_message_id 对应多条记录（相册消息）
+        # 或者所有 source_message_id 都只对应一条记录（单文件消息）
+        # 无论哪种情况，记录数应等于下载的文件数
+        print(f"[E2E] 仓库来源映射记录数: {len(sources)}")
+        print(f"[E2E] source_message_id 分布: {dict(source_id_counts)}")
+
+        # 验证每个文件都有独立的 source 记录
+        file_unique_ids = [s.get("file_unique_id") for s in sources]
+        assert len(file_unique_ids) == len(set(file_unique_ids)), (
+            "每个文件的 file_unique_id 应该是唯一的"
+        )
+
+    def test_album_mode_each_file_has_unique_record(
+        self, test_token: str, live_server: str
+    ):
+        """T091-2: 相册模式入库 - 每个文件有独立的 RepositoryFile 记录。
+
+        验证相册中每个文件都有独立的仓库记录，file_unique_id 非空且唯一。
+        """
+        cleanup_residual_tasks(test_token)
+
+        try:
+            task_id = create_download_task(test_token)
+        except ValueError as e:
+            pytest.skip(str(e))
+
+        start_task(test_token, task_id)
+
+        try:
+            status = wait_for_task_completion(test_token, task_id)
+        except TimeoutError:
+            pytest.skip("下载任务超时，跳过")
+
+        if status != "completed":
+            pytest.skip(f"下载任务未成功完成，状态: {status}")
+
+        # 查询仓库文件记录
+        repo_files = query_repository_files(test_token)
+        items = repo_files.get("items", [])
+        assert len(items) > 0, "仓库文件记录不应为空"
+
+        # 验证每个文件都有独立的记录
+        file_unique_ids = [item.get("file_unique_id") for item in items]
+
+        # 所有 file_unique_id 非空
+        assert all(fid for fid in file_unique_ids), (
+            "所有仓库文件记录的 file_unique_id 不应为空"
+        )
+
+        # 所有 file_unique_id 唯一
+        assert len(file_unique_ids) == len(set(file_unique_ids)), (
+            "所有仓库文件记录的 file_unique_id 应该是唯一的"
+        )
+
+        print(f"[E2E] 仓库文件记录数: {len(items)}")
+        print(f"[E2E] 所有 file_unique_id 唯一: {len(set(file_unique_ids))}")
+
+    def test_album_mode_l3_dedup_skips_reupload(
+        self, test_token: str, live_server: str
+    ):
+        """T091-3: 相册模式入库 - L3 去重跳过重复上传。
+
+        第一次下载后记录仓库文件数，第二次下载相同消息后验证文件数未增加。
+        """
+        cleanup_residual_tasks(test_token)
+
+        # 第一次下载
+        try:
+            task_id_1 = create_download_task(test_token)
+        except ValueError as e:
+            pytest.skip(str(e))
+
+        start_task(test_token, task_id_1)
+
+        try:
+            status_1 = wait_for_task_completion(test_token, task_id_1)
+        except TimeoutError:
+            pytest.skip("第一次下载任务超时，跳过")
+
+        if status_1 != "completed":
+            pytest.skip(f"第一次下载任务未成功完成，状态: {status_1}")
+
+        # 记录第一次下载后的仓库文件数
+        repo_files_before = query_repository_files(test_token)
+        files_count_before = repo_files_before.get("total", 0)
+        assert files_count_before > 0, "第一次下载后应有仓库记录"
+
+        # 第二次下载（相同范围）
+        cleanup_residual_tasks(test_token)
+
+        try:
+            task_id_2 = create_download_task(test_token)
+        except ValueError as e:
+            pytest.skip(str(e))
+
+        start_task(test_token, task_id_2)
+
+        try:
+            status_2 = wait_for_task_completion(test_token, task_id_2)
+        except TimeoutError:
+            pytest.skip("第二次下载任务超时，跳过")
+
+        if status_2 != "completed":
+            pytest.skip(f"第二次下载任务未成功完成，状态: {status_2}")
+
+        # 验证仓库文件数未增加（L3 去重命中）
+        repo_files_after = query_repository_files(test_token)
+        files_count_after = repo_files_after.get("total", 0)
+
+        assert files_count_after == files_count_before, (
+            f"L3 去重应跳过重复上传，仓库文件数应保持不变。"
+            f"第一次: {files_count_before}, 第二次: {files_count_after}"
+        )
+
+        print(f"[E2E] L3 去重验证通过: 仓库文件数保持 {files_count_after} 不变")

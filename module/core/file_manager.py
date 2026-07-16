@@ -374,6 +374,7 @@ class FileManager:
         caption: str = "",
         source_chat_id: int | None = None,
         source_message_id: int | None = None,
+        content_hash: str | None = None,
     ) -> UploadResult:
         """上传单个文件到 Telegram 频道/群组。
 
@@ -516,6 +517,7 @@ class FileManager:
                         message=message,
                         source_chat_id=source_chat_id,
                         source_message_id=source_message_id,
+                        content_hash=content_hash,
                     )
                 except Exception as e:
                     log.warning(f"仓库记录写入失败: {e}")
@@ -613,12 +615,14 @@ class FileManager:
                 media=media_list,
             )
 
-            # 构建结果
-            for fi in file_infos:
+            # 构建结果（每条消息对应一个文件）
+            for i, fi in enumerate(file_infos):
+                msg = messages[i] if i < len(messages) else (messages[0] if messages else None)
                 result = UploadResult(
                     success=True,
                     file_path=fi.path,
-                    message=messages[0] if messages else None,
+                    message=msg,
+                    file_unique_id=self._extract_file_unique_id(msg) if msg else None,
                 )
 
                 if delete_after:

@@ -211,6 +211,35 @@ class RepositoryManager:
             except Exception as e:
                 logger.error(f"仓库记录写入失败: {e}")
 
+    async def on_upload_success_batch(
+        self,
+        messages: list,
+        source_chat_id: int,
+        source_message_id: int,
+        content_hashes: list[str] | None = None,
+    ) -> None:
+        """批量写入仓库记录（媒体组场景）。
+
+        为媒体组中每条消息分别调用 on_upload_success，写入独立的
+        RepositoryFile 和 RepositorySource 记录。
+
+        Args:
+            messages: Pyrogram Message 列表（媒体组返回的消息列表）
+            source_chat_id: 源频道 ID
+            source_message_id: 源消息 ID（同组文件共享）
+            content_hashes: 可选，与 messages 一一对应的内容哈希列表
+        """
+        for i, message in enumerate(messages):
+            hash_val = (
+                content_hashes[i] if content_hashes and i < len(content_hashes) else None
+            )
+            await self.on_upload_success(
+                message=message,
+                source_chat_id=source_chat_id,
+                source_message_id=source_message_id,
+                content_hash=hash_val,
+            )
+
     # --- 内容哈希计算 ---
 
     @staticmethod

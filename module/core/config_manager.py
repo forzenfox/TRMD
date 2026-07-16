@@ -83,6 +83,37 @@ class ConfigManager:
             return getattr(self._user_config, "config", {})
         if self._user_config and hasattr(self._user_config, "get_config"):
             return self._user_config.get_config()
+        # 无 UserConfig 时，直接从配置文件读取
+        return self._load_config_from_file()
+
+    @staticmethod
+    def _load_config_from_file() -> dict:
+        """直接从 config.yaml 文件读取配置。
+
+        当 ConfigManager 未绑定 UserConfig 时（如 AppContext 初始化阶段），
+        使用此方法直接从配置文件读取，避免返回空字典。
+        """
+        try:
+            import os
+            import sys
+
+            import yaml
+
+            from module.parser import PARSE_ARGS
+
+            config_path = PARSE_ARGS.config
+            if not config_path.endswith(".yaml"):
+                # 与 UserConfig 相同的路径解析
+                config_path = os.path.join(
+                    os.path.dirname(os.path.abspath(sys.argv[0])), "config.yaml"
+                )
+
+            if os.path.exists(config_path):
+                with open(config_path, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+                    return data if isinstance(data, dict) else {}
+        except Exception as e:
+            log.warning(f"ConfigManager 从文件读取配置失败: {e}")
         return {}
 
     def _save_raw_config(self, config: dict) -> bool:
@@ -94,7 +125,26 @@ class ConfigManager:
             except Exception as e:
                 log.error(f"保存配置失败: {e}")
                 return False
-        return False
+        # 无 UserConfig 时，直接写入文件
+        try:
+            import os
+            import sys
+
+            import yaml
+
+            from module.parser import PARSE_ARGS
+
+            config_path = PARSE_ARGS.config
+            if not config_path.endswith(".yaml"):
+                config_path = os.path.join(
+                    os.path.dirname(os.path.abspath(sys.argv[0])), "config.yaml"
+                )
+            with open(config_path, "w", encoding="utf-8") as f:
+                yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+            return True
+        except Exception as e:
+            log.error(f"保存配置失败(文件直写): {e}")
+            return False
 
     def load_config(self, mask_sensitive: bool = True) -> dict:
         """加载完整配置。

@@ -147,7 +147,7 @@ async def estimate_messages(
     支持缓存以减少 Telegram API 调用。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
-    resolved = await identifier_service.resolve(body.chat_id)
+    resolved = await identifier_service.resolve(str(body.chat_id))
     chat_id = resolved.chat_id
 
     # 转换为 MessageRangeRequest 用于验证
@@ -226,7 +226,7 @@ async def analyze_messages(
     大范围降级为抽样估算并标记 sampled=True。
     """
     # 解析 chat_id（支持 URL/@username/数字ID）
-    resolved = await identifier_service.resolve(body.chat_id)
+    resolved = await identifier_service.resolve(str(body.chat_id))
     chat_id = resolved.chat_id
 
     client = _get_client(request)

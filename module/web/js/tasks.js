@@ -240,7 +240,12 @@ class TaskManager {
     };
 
     if (this.createForm.taskType === "download") {
-      params.source_identifier = this.createForm.sourceChat;
+      // sourceChat 可能是用户输入的字符串标识符，也可能是解析后的数字 ID
+      if (typeof this.createForm.sourceChat === "number") {
+        params.chat_id = this.createForm.sourceChat;
+      } else {
+        params.source_identifier = this.createForm.sourceChat;
+      }
       _flattenRange(this._buildMessageRange());
       // 类型过滤（仅下载/转发任务有意义）
       if (this.createForm.typeFilters.length > 0) {
@@ -248,7 +253,11 @@ class TaskManager {
       }
       _addSizeFilter();
     } else if (this.createForm.taskType === "forward") {
-      params.source_identifier = this.createForm.sourceChat;
+      if (typeof this.createForm.sourceChat === "number") {
+        params.chat_id = this.createForm.sourceChat;
+      } else {
+        params.source_identifier = this.createForm.sourceChat;
+      }
       params.forward_target = this.createForm.targetChat;
       _flattenRange(this._buildMessageRange());
       // 类型过滤
@@ -260,13 +269,22 @@ class TaskManager {
       // 使用 targetChat（handleCreateTask 已确保是解析后的数字 ID）
       params.chat_id = this.createForm.targetChat;
       params.file_paths = this.createForm.selectedFiles || [];
+      params.delete_after_upload = this.createForm.deleteAfterUpload;
     } else if (this.createForm.taskType === "listen_download") {
-      params.source_identifier = this.createForm.sourceChat;
+      if (typeof this.createForm.sourceChat === "number") {
+        params.chat_id = this.createForm.sourceChat;
+      } else {
+        params.source_identifier = this.createForm.sourceChat;
+      }
       if (this.createForm.typeFilters.length > 0) {
         params.media_types = this.createForm.typeFilters;
       }
     } else if (this.createForm.taskType === "listen_forward") {
-      params.source_identifier = this.createForm.sourceChat;
+      if (typeof this.createForm.sourceChat === "number") {
+        params.chat_id = this.createForm.sourceChat;
+      } else {
+        params.source_identifier = this.createForm.sourceChat;
+      }
       params.target_identifier = this.createForm.targetChat;
       if (this.createForm.typeFilters.length > 0) {
         params.media_types = this.createForm.typeFilters;
@@ -288,7 +306,8 @@ class TaskManager {
    */
   async _precheckResourceLimits(payload) {
     try {
-      const chatId = payload.params.chat_id;
+      // 支持 chat_id 和 source_identifier 两种源端标识
+      const chatId = payload.params.chat_id || payload.params.source_identifier;
       if (!chatId) {
         return { blocked: false, warning: false, message: "缺少频道信息" };
       }
@@ -315,7 +334,7 @@ class TaskManager {
     const params = payload.params || {};
 
     return {
-      mode: params.range_mode || "id_range",
+      range_mode: params.range_mode || "id_range",
       min_id: params.min_id,
       max_id: params.max_id,
       start_date: params.start_date,
@@ -626,9 +645,9 @@ class TaskManager {
   toggleTypeFilter(type) {
     const index = this.createForm.typeFilters.indexOf(type);
     if (index === -1) {
-      this.createForm.typeFilters.push(type);
+      this.createForm.typeFilters = [...this.createForm.typeFilters, type];
     } else {
-      this.createForm.typeFilters.splice(index, 1);
+      this.createForm.typeFilters = this.createForm.typeFilters.filter((t) => t !== type);
     }
   }
 

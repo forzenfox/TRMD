@@ -490,6 +490,22 @@ class TaskManager:
             extra=extra,
         )
 
+    def _parse_source_id(self, value: str | None) -> int | str | None:
+        """解析 source_id，尝试转换为 int，失败则保持字符串。
+        
+        Args:
+            value: 数据库中的 source_id 值（字符串或 None）
+            
+        Returns:
+            int | str | None: 如果可以转换为 int 则返回 int，否则返回原字符串，None 返回 None
+        """
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return value
+
     def _row_to_item(self, row) -> TaskItem:
         """将数据库行转换为 TaskItem。"""
         import json
@@ -511,7 +527,7 @@ class TaskManager:
             id=row[0],
             task_id=row[1],
             status=ItemStatus(row[2]),
-            source_id=int(row[3]) if row[3] is not None else None,
+            source_id=self._parse_source_id(row[3]),
             source_link=row[4],
             target_id=int(row[5]) if row[5] is not None else None,
             file_path=row[6],

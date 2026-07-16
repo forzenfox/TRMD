@@ -64,3 +64,34 @@ async def get_resource_status(
     except Exception as e:
         logger.error(f"获取资源状态失败: {e}")
         return error_json_response("获取资源状态失败", str(e))
+
+
+@router.post("/client/reconnect")
+async def manual_reconnect_client(
+    request: Request,
+    token: str = Depends(require_token),
+):
+    """手动触发 Telegram Client 重连。
+
+    当自动重连失败或连接断开时,用户可通过此端点手动触发重连。
+    """
+    from module.integration import get_context
+
+    try:
+        ctx = get_context()
+        if ctx is None:
+            return error_json_response("应用上下文未初始化")
+
+        if ctx.client is None:
+            return error_json_response("Telegram Client 未初始化")
+
+        if not hasattr(ctx, "client_manager") or ctx.client_manager is None:
+            return error_json_response("ClientManager 未初始化")
+
+        # 执行手动重连
+        result = await ctx.client_manager.manual_reconnect(ctx.client)
+
+        return json_response(data=result)
+    except Exception as e:
+        logger.error(f"手动重连失败: {e}")
+        return error_json_response("手动重连失败", str(e))

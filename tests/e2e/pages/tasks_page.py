@@ -678,8 +678,11 @@ class TasksPage(BasePage):
         Args:
             media_type: 媒体类型（photo/video/document/audio）
         """
-        # 类型过滤checkbox没有data-testid，通过Alpine.js API操作
-        self.page.evaluate(f"() => window.taskManager.toggleTypeFilter('{media_type}')")
+        checkbox = self.page.locator(f'[data-testid="checkbox-filter-type-{media_type}"]')
+        if checkbox.is_checked():
+            checkbox.uncheck()
+        else:
+            checkbox.check()
 
     def is_type_filter_selected(self, media_type: str) -> bool:
         """
@@ -691,9 +694,7 @@ class TasksPage(BasePage):
         Returns:
             是否选中
         """
-        return self.page.evaluate(
-            f"() => window.taskManager.isTypeFilterSelected('{media_type}')"
-        )
+        return self.page.locator(f'[data-testid="checkbox-filter-type-{media_type}"]').is_checked()
 
     # ========== 弹窗内表单条件可见性 ==========
 

@@ -13,6 +13,8 @@
 import logging
 from datetime import datetime, timezone
 
+from module.utils.timezone import parse_user_date
+
 logger = logging.getLogger(__name__)
 
 # 抽样参数常量
@@ -188,12 +190,8 @@ async def _exact_traverse_by_date_range(
         return _empty_estimate(range_mode)
 
     try:
-        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").replace(
-            tzinfo=timezone.utc
-        )
-        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").replace(
-            hour=23, minute=59, second=59, tzinfo=timezone.utc
-        )
+        start_date = parse_user_date(start_date_str, is_end=False)
+        end_date = parse_user_date(end_date_str, is_end=True)
     except ValueError:
         return _empty_estimate(range_mode)
 
@@ -255,12 +253,8 @@ async def _sample_head_tail_by_date(client, chat_id, params, total_count, type_f
         return _empty_estimate("date_range")
 
     try:
-        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").replace(
-            tzinfo=timezone.utc
-        )
-        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").replace(
-            hour=23, minute=59, second=59, tzinfo=timezone.utc
-        )
+        start_date = parse_user_date(start_date_str, is_end=False)
+        end_date = parse_user_date(end_date_str, is_end=True)
     except ValueError:
         return _empty_estimate("date_range")
 
@@ -493,12 +487,8 @@ async def _count_date_range_messages(client, chat_id, params) -> int:
         return 0
 
     try:
-        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").replace(
-            tzinfo=timezone.utc
-        )
-        end_date = datetime.strptime(end_date_str, "%Y-%m-%d").replace(
-            hour=23, minute=59, second=59, tzinfo=timezone.utc
-        )
+        start_date = parse_user_date(start_date_str, is_end=False)
+        end_date = parse_user_date(end_date_str, is_end=True)
     except ValueError:
         return 0
 

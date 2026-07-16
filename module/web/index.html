@@ -137,9 +137,27 @@
           <div class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium"
                :class="clientStatusClass"
                data-testid="client-status-indicator">
-            <span class="w-2 h-2 rounded-full" :class="{'animate-pulse': clientStatus.status === 'not_initialized', 'bg-green-400': clientStatus.status === 'connected', 'bg-red-400': clientStatus.status === 'disconnected', 'bg-yellow-400': clientStatus.status === 'not_initialized', 'bg-slate-400': clientStatus.status === 'error'}"></span>
+            <span class="w-2 h-2 rounded-full" :class="{'animate-pulse': clientStatus.status === 'not_initialized' || reconnectStatus.is_reconnecting, 'bg-green-400': clientStatus.status === 'connected', 'bg-red-400': clientStatus.status === 'disconnected', 'bg-yellow-400': clientStatus.status === 'not_initialized', 'bg-slate-400': clientStatus.status === 'error'}"></span>
             <span x-text="clientStatusText"></span>
           </div>
+          <!-- 手动重连按钮 -->
+          <button
+            x-show="showReconnectButton"
+            @click="manualReconnect()"
+            :disabled="isReconnecting"
+            class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+            :class="isReconnecting ? 'bg-primary-600 text-white cursor-not-allowed' : 'bg-primary-600 hover:bg-primary-700 text-white'"
+            data-testid="reconnect-btn"
+          >
+            <span x-show="!isReconnecting">重连</span>
+            <span x-show="isReconnecting" class="flex items-center">
+              <svg class="animate-spin -ml-1 mr-1 h-3 w-3 text-white" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              重连中...
+            </span>
+          </button>
           <!-- 刷新按钮 -->
           <button @click="refreshAll" class="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700" title="刷新" data-testid="refresh-btn">
             <svg class="w-5 h-5" :class="{'animate-spin': loading}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -458,6 +476,17 @@
           bot_connected: false,
         },
 
+        // 重连状态
+        reconnectStatus: {
+          is_reconnecting: false,
+          reconnect_count: 0,
+          max_retries: 3,
+          manual_required: false,
+          auth_failed: false,
+          last_reconnect_attempt: null,
+        },
+        isReconnecting: false, // 手动重连按钮的 loading 状态
+
         async init() {
           // 验证认证
           const authenticated = await authManager.ensureAuthenticated();
@@ -511,7 +540,16 @@
             };
             // 提取 Client 连接状态
             if (status.client_status) {
-              this.clientStatus = status.client_status;
+              this.clientStatus = {
+                connected: status.client_status.connected || false,
+                status: status.client_status.status || 'not_initialized',
+                bot_connected: status.client_status.bot_connected || false,
+              };
+
+              // 同步重连状态到 Alpine 响应式作用域
+              if (status.client_status.reconnect_status) {
+                this.reconnectStatus = status.client_status.reconnect_status;
+              }
             }
           } catch (error) {
             console.error('加载资源状态失败:', error);
@@ -577,6 +615,9 @@
         },
 
         get clientStatusText() {
+          if (this.reconnectStatus.auth_failed) return '认证失效';
+          if (this.reconnectStatus.is_reconnecting) return '重连中...';
+          if (this.reconnectStatus.manual_required) return '需要手动重连';
           const map = {
             connected: 'Telegram 已连接',
             disconnected: '连接断开',
@@ -584,6 +625,39 @@
             error: '状态未知',
           };
           return map[this.clientStatus.status] || map.error;
+        },
+
+        get showReconnectButton() {
+          return !this.clientStatus.connected && !this.reconnectStatus.auth_failed && !this.reconnectStatus.is_reconnecting;
+        },
+
+        async manualReconnect() {
+          if (this.isReconnecting) return;
+          this.isReconnecting = true;
+          try {
+            const result = await api.reconnectClient();
+            if (result.connected) {
+              this.addNotification('success', '重连成功');
+              this.reconnectStatus = {
+                is_reconnecting: false,
+                reconnect_count: 0,
+                max_retries: 3,
+                manual_required: false,
+                auth_failed: false,
+                last_reconnect_attempt: null,
+              };
+              // 立即刷新状态
+              await this.loadStats();
+            } else {
+              this.addNotification('error', result.message || '重连失败');
+              // 更新重连状态
+              this.reconnectStatus.manual_required = true;
+            }
+          } catch (error) {
+            this.addNotification('error', `重连失败: ${error.message}`);
+          } finally {
+            this.isReconnecting = false;
+          }
         },
 
         formatSpeed(bytesPerSecond) {

@@ -3082,7 +3082,7 @@ class TestDownloadIngestion:
         """下载成功后将文件上传到仓库频道。"""
         mock_config = MagicMock()
         mock_config.resource_limits = {}
-        mock_config.get_config.return_value = {
+        mock_config.load_config.return_value = {
             "preference": {"upload": {"download_upload": True, "delete": False}}
         }
         mock_repository_manager.get_repository_chat_id.return_value = -1009999999999
@@ -3099,6 +3099,17 @@ class TestDownloadIngestion:
             config_manager=mock_config,
             repository_manager=mock_repository_manager,
         )
+
+        # 模拟 FileManager 返回的 FileInfo，使 _ingest_downloaded_group 能匹配到 item
+        from module.utils.path_tool import from_portable_path
+        expected_abs_path = from_portable_path(
+            "/downloads/test_photo.jpg", executor._get_save_root()
+        )
+        file_info = MagicMock(path=expected_abs_path)
+        mock_file_manager.get_file_info.return_value = file_info
+        mock_file_manager.split_media_group.return_value = [
+            {"is_album": False, "files": [file_info]}
+        ]
 
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
@@ -3126,6 +3137,8 @@ class TestDownloadIngestion:
         call_kwargs = mock_file_manager.upload.call_args
         assert call_kwargs[1]["chat_id"] == -1009999999999
         assert call_kwargs[1]["source_chat_id"] == -1001234567890
+        assert call_kwargs[1]["content_hash"] == "abc123sha256"
+        assert call_kwargs[1]["delete_after"] is False
 
     @pytest.mark.asyncio
     async def test_download_ingest_skips_when_l3_dedup_hit(
@@ -3134,7 +3147,7 @@ class TestDownloadIngestion:
         """L3 去重命中时跳过上传到仓库。"""
         mock_config = MagicMock()
         mock_config.resource_limits = {}
-        mock_config.get_config.return_value = {
+        mock_config.load_config.return_value = {
             "preference": {"upload": {"download_upload": True, "delete": False}}
         }
         # L3 去重命中：返回已存在的记录
@@ -3213,7 +3226,7 @@ class TestDownloadIngestion:
         """download_upload=False 时不执行上传到仓库。"""
         mock_config = MagicMock()
         mock_config.resource_limits = {}
-        mock_config.get_config.return_value = {
+        mock_config.load_config.return_value = {
             "preference": {"upload": {"download_upload": False, "delete": False}}
         }
 
@@ -3254,7 +3267,7 @@ class TestDownloadIngestion:
         """配置 delete=True 时入库成功后删除本地文件。"""
         mock_config = MagicMock()
         mock_config.resource_limits = {}
-        mock_config.get_config.return_value = {
+        mock_config.load_config.return_value = {
             "preference": {"upload": {"download_upload": True, "delete": True}}
         }
         mock_repository_manager.get_repository_chat_id.return_value = -1009999999999
@@ -3263,7 +3276,6 @@ class TestDownloadIngestion:
         mock_upload_result.message = MagicMock()
         mock_upload_result.file_unique_id = "test_fuid_002"
         mock_file_manager.upload = AsyncMock(return_value=mock_upload_result)
-        mock_file_manager.delete_local_file = MagicMock()
 
         executor = TaskExecutor(
             task_manager=task_manager,
@@ -3272,6 +3284,18 @@ class TestDownloadIngestion:
             config_manager=mock_config,
             repository_manager=mock_repository_manager,
         )
+
+        # 模拟 FileManager 返回的 FileInfo，使 _ingest_downloaded_group 能匹配到 item
+        from module.utils.path_tool import from_portable_path
+
+        expected_abs_path = from_portable_path(
+            "/downloads/test_photo.jpg", executor._get_save_root()
+        )
+        file_info = MagicMock(path=expected_abs_path)
+        mock_file_manager.get_file_info.return_value = file_info
+        mock_file_manager.split_media_group.return_value = [
+            {"is_album": False, "files": [file_info]}
+        ]
 
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,
@@ -3292,13 +3316,11 @@ class TestDownloadIngestion:
 
         await executor._ingest_downloaded_files(task)
 
-        # 验证 delete_local_file 被调用（from_portable_path 将可移植路径转为绝对路径）
-        from module.utils.path_tool import from_portable_path
-
-        expected_abs_path = from_portable_path(
-            "/downloads/test_photo.jpg", executor._get_save_root()
-        )
-        mock_file_manager.delete_local_file.assert_called_once_with(expected_abs_path)
+        # 验证 file_manager.upload 被调用，并携带 delete_after=True
+        mock_file_manager.upload.assert_called_once()
+        call_kwargs = mock_file_manager.upload.call_args
+        assert call_kwargs[1]["delete_after"] is True
+        assert call_kwargs[1]["content_hash"] == "abc123sha256"
 
 
 # ============================================================
