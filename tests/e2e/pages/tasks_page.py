@@ -67,6 +67,17 @@ class TasksPage(BasePage):
     DETAIL_ERROR_MESSAGE_CONTAINER = "detail-error-message-container"
     DETAIL_ERROR_MESSAGE = "detail-error-message"
 
+    # 任务配置详情（新增）
+    DETAIL_SOURCE_IDENTIFIER = "detail-source-identifier"
+    DETAIL_TARGET_IDENTIFIER = "detail-target-identifier"
+    DETAIL_RANGE_DETAIL = "detail-range-detail"
+    DETAIL_TYPE_FILTER = "detail-type-filter"
+    DETAIL_SIZE_FILTER = "detail-size-filter"
+    DETAIL_ESTIMATED_SIZE = "detail-estimated-size"
+    DETAIL_FILE_COUNT = "detail-file-count"
+    DETAIL_DELETE_AFTER_UPLOAD = "detail-delete-after-upload"
+    DETAIL_MEDIA_TYPES = "detail-media-types"
+
     # 创建任务弹窗
     MODAL_CREATE_TASK = "modal-create-task"
     BTN_CLOSE_CREATE = "btn-close-create"
@@ -438,6 +449,48 @@ class TasksPage(BasePage):
         """获取详情抽屉中的错误信息文本"""
         return self.get_text_by_testid(self.DETAIL_ERROR_MESSAGE)
 
+    # ========== 任务配置详情（新增） ==========
+
+    def get_detail_source_identifier(self) -> str:
+        """获取详情抽屉中的源频道标识"""
+        return self.get_text_by_testid(self.DETAIL_SOURCE_IDENTIFIER)
+
+    def get_detail_target_identifier(self) -> str:
+        """获取详情抽屉中的目标频道标识"""
+        return self.get_text_by_testid(self.DETAIL_TARGET_IDENTIFIER)
+
+    def get_detail_range_detail(self) -> str:
+        """获取详情抽屉中的范围详情文本"""
+        return self.get_text_by_testid(self.DETAIL_RANGE_DETAIL)
+
+    def get_detail_type_filter(self) -> str:
+        """获取详情抽屉中的类型过滤文本"""
+        return self.get_text_by_testid(self.DETAIL_TYPE_FILTER)
+
+    def get_detail_size_filter(self) -> str:
+        """获取详情抽屉中的文件大小过滤文本"""
+        return self.get_text_by_testid(self.DETAIL_SIZE_FILTER)
+
+    def get_detail_estimated_size(self) -> str:
+        """获取详情抽屉中的预估大小文本"""
+        return self.get_text_by_testid(self.DETAIL_ESTIMATED_SIZE)
+
+    def get_detail_file_count(self) -> str:
+        """获取详情抽屉中的已选文件数量"""
+        return self.get_text_by_testid(self.DETAIL_FILE_COUNT)
+
+    def get_detail_delete_after_upload(self) -> str:
+        """获取详情抽屉中的上传后删除选项文本"""
+        return self.get_text_by_testid(self.DETAIL_DELETE_AFTER_UPLOAD)
+
+    def get_detail_media_types(self) -> str:
+        """获取详情抽屉中的监听媒体类型文本"""
+        return self.get_text_by_testid(self.DETAIL_MEDIA_TYPES)
+
+    def is_detail_config_visible(self) -> bool:
+        """检查详情抽屉中的任务配置区块是否可见"""
+        return self.is_visible_by_testid(self.DETAIL_SOURCE_IDENTIFIER)
+
     # ========== 资源保护告警弹窗 ==========
 
     def is_resource_alert_visible(self) -> bool:
@@ -678,7 +731,9 @@ class TasksPage(BasePage):
         Args:
             media_type: 媒体类型（photo/video/document/audio）
         """
-        checkbox = self.page.locator(f'[data-testid="checkbox-filter-type-{media_type}"]')
+        checkbox = self.page.locator(
+            f'[data-testid="checkbox-filter-type-{media_type}"]'
+        )
         if checkbox.is_checked():
             checkbox.uncheck()
         else:
@@ -694,7 +749,9 @@ class TasksPage(BasePage):
         Returns:
             是否选中
         """
-        return self.page.locator(f'[data-testid="checkbox-filter-type-{media_type}"]').is_checked()
+        return self.page.locator(
+            f'[data-testid="checkbox-filter-type-{media_type}"]'
+        ).is_checked()
 
     # ========== 弹窗内表单条件可见性 ==========
 

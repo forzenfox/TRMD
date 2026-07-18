@@ -1,7 +1,7 @@
 # coding=UTF-8
 """TokenManager 单元测试。
 
-遵循设计文档 `docs/module-design-token-auth.md` 的接口契约，
+遵循设计文档 `docs/模块设计-Token认证.md` 的接口契约，
 覆盖 Token 生成、验证、刷新、撤销、清理、持久化等场景。
 """
 
@@ -43,13 +43,16 @@ def tmp_db_path():
 @pytest.fixture
 def memory_manager():
     """提供内存模式的 TokenManager 实例。"""
-    return TokenManager(db_path=None, default_ttl=3600, token_length=32)
+    # TokenManager 不再接受 db_path，内存模式通过未初始化数据库引擎自动启用
+    return TokenManager(default_ttl=3600, token_length=32)
 
 
 @pytest.fixture
 def sqlite_manager(tmp_db_path):
     """提供 SQLite 持久化模式的 TokenManager 实例。"""
-    return TokenManager(db_path=tmp_db_path, default_ttl=3600, token_length=32)
+    from module.core import db
+    db.init_sync_db(tmp_db_path)
+    return TokenManager(default_ttl=3600, token_length=32)
 
 
 # ==================== 生成测试 ====================
@@ -378,36 +381,41 @@ class TestPersistence:
 
     def test_persistence_across_instances(self, tmp_db_path):
         """重建 TokenManager 实例后仍应能验证旧 Token。"""
-        mgr1 = TokenManager(db_path=tmp_db_path, default_ttl=3600)
+        from module.core import db
+        db.init_sync_db(tmp_db_path)
+        mgr1 = TokenManager(default_ttl=3600)
         token = mgr1.generate(user_id=42)
 
         # 新建实例（模拟重启）
-        mgr2 = TokenManager(db_path=tmp_db_path, default_ttl=3600)
+        mgr2 = TokenManager(default_ttl=3600)
         record = mgr2.verify(token)
         assert record.user_id == 42
         assert record.token == token
 
     def test_persistence_revoked_state(self, tmp_db_path):
         """撤销状态应持久化。"""
-        mgr1 = TokenManager(db_path=tmp_db_path)
+        from module.core import db
+        db.init_sync_db(tmp_db_path)
+        mgr1 = TokenManager(default_ttl=3600)
         token = mgr1.generate(user_id=1)
         mgr1.revoke(token)
 
-        mgr2 = TokenManager(db_path=tmp_db_path)
+        mgr2 = TokenManager(default_ttl=3600)
         with pytest.raises(TokenRevokedError):
             mgr2.verify(token)
 
     def test_sqlite_table_creation(self, tmp_db_path):
-        """初始化后 SQLite 应包含 tokens 表。"""
-        TokenManager(db_path=tmp_db_path)
-        conn = sqlite3.connect(tmp_db_path)
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='tokens'"
-        )
-        row = cursor.fetchone()
-        conn.close()
-        assert row is not None
-        assert row[0] == "tokens"
+        """初始化后数据库应包含 tokens 表（通过 SQLModel 验证）。"""
+        from module.core import db
+        from module.core.models.token import TokenRecordDB
+        db.init_sync_db(tmp_db_path)
+        TokenManager()
+        # 验证 SQLModel 模型对应的表已创建
+        with db.get_sync_session() as session:
+            from sqlalchemy import inspect
+            inspector = inspect(session.bind)
+            table_names = inspector.get_table_names()
+            assert "tokens" in table_names
 
 
 # ==================== 常量时间比较测试 ====================
@@ -432,7 +440,7 @@ class TestCustomTTL:
 
     def test_custom_ttl(self):
         """指定 default_ttl 后，过期时间应正确计算。"""
-        manager = TokenManager(db_path=None, default_ttl=1800)  # 30 分钟
+        manager = TokenManager(default_ttl=1800)  # 30 分钟
         token = manager.generate(user_id=1)
         record = manager.verify(token)
         expected_diff = timedelta(seconds=1800)
@@ -441,7 +449,7 @@ class TestCustomTTL:
 
     def test_default_ttl_is_one_hour(self):
         """默认 TTL 应为 3600 秒（1 小时）。"""
-        manager = TokenManager(db_path=None)
+        manager = TokenManager()
         token = manager.generate(user_id=1)
         record = manager.verify(token)
         expected_diff = timedelta(seconds=3600)

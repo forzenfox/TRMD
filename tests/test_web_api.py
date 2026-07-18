@@ -34,7 +34,7 @@ from module.core.identifier_service import (
 @pytest.fixture
 def token_manager():
     """提供内存模式 TokenManager。"""
-    tm = TokenManager(db_path=None, default_ttl=3600)
+    tm = TokenManager(default_ttl=3600)
     return tm
 
 
@@ -44,9 +44,12 @@ def valid_token(token_manager):
     return token_manager.generate(user_id=1)
 
 
-@pytest.fixture
-def task_manager():
+@pytest_asyncio.fixture
+async def task_manager():
     """提供内存模式 TaskManager（不持久化），已注入 mock IdentifierService 与 ConfigManager。"""
+    from module.core import db
+
+    await db.init_db(":memory:")
     mock_service = MagicMock(spec=IdentifierService)
 
     def _resolve_side_effect(identifier: str):
@@ -74,12 +77,12 @@ def task_manager():
     mock_cm.get = MagicMock(return_value=False)
 
     tm = TaskManager(
-        db_path=":memory:",
         max_concurrent_tasks=2,
         identifier_service=mock_service,
         config_manager=mock_cm,
     )
-    return tm
+    yield tm
+    await db.close_db()
 
 
 @pytest.fixture

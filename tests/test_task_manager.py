@@ -14,10 +14,12 @@
 import os
 import sqlite3
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+import pytest_asyncio
 
 from module.core.task_manager import (
     TaskManager,
@@ -70,10 +72,15 @@ def db_path():
         os.unlink(f.name)
 
 
-@pytest.fixture
-def task_manager(db_path):
+@pytest_asyncio.fixture
+async def task_manager(db_path):
     """创建 TaskManager 实例。"""
-    return TaskManager(db_path=db_path, max_concurrent_tasks=2)
+    from module.core import db
+
+    await db.init_db(db_path)
+    tm = TaskManager(max_concurrent_tasks=2)
+    yield tm
+    await db.close_db()
 
 
 @pytest.fixture
@@ -112,15 +119,21 @@ def mock_config_manager():
     return cm
 
 
-@pytest.fixture
-def task_manager_with_services(db_path, mock_identifier_service, mock_config_manager):
+@pytest_asyncio.fixture
+async def task_manager_with_services(
+    db_path, mock_identifier_service, mock_config_manager
+):
     """创建已注入 IdentifierService 与 ConfigManager 的 TaskManager 实例。"""
-    return TaskManager(
-        db_path=db_path,
+    from module.core import db
+
+    await db.init_db(db_path)
+    tm = TaskManager(
         max_concurrent_tasks=2,
         identifier_service=mock_identifier_service,
         config_manager=mock_config_manager,
     )
+    yield tm
+    await db.close_db()
 
 
 # ============================================================
@@ -1123,8 +1136,11 @@ class TestPersistenceAndRecovery:
     @pytest.mark.asyncio
     async def test_tasks_survive_restart(self, db_path):
         """测试任务在重启后仍然存在。"""
+        from module.core import db
+
         # 第一轮：创建任务
-        tm1 = TaskManager(db_path=db_path, max_concurrent_tasks=2)
+        await db.init_db(db_path)
+        tm1 = TaskManager(max_concurrent_tasks=2)
         task = await tm1.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
@@ -1133,19 +1149,25 @@ class TestPersistenceAndRecovery:
         task_id = task.task_id
         await tm1.start_task(task_id)
         await tm1.complete_task(task_id)
+        await db.close_db()
 
         # 第二轮：重新加载
-        tm2 = TaskManager(db_path=db_path, max_concurrent_tasks=2)
+        await db.init_db(db_path)
+        tm2 = TaskManager(max_concurrent_tasks=2)
         tasks, total = await tm2.list_tasks()
         assert len(tasks) == 1
         assert total == 1
         assert tasks[0].task_id == task_id
         assert tasks[0].status == TaskStatus.COMPLETED
+        await db.close_db()
 
     @pytest.mark.asyncio
     async def test_load_pending_tasks_on_start(self, db_path):
         """测试启动时加载未完成任务。"""
-        tm1 = TaskManager(db_path=db_path, max_concurrent_tasks=2)
+        from module.core import db
+
+        await db.init_db(db_path)
+        tm1 = TaskManager(max_concurrent_tasks=2)
         task1 = await tm1.create_task(
             task_type=TaskType.DOWNLOAD,
             chat_id=-1001234567890,
@@ -1159,13 +1181,14 @@ class TestPersistenceAndRecovery:
         await tm1.start_task(task1.task_id)
         # task1 未完成，task2 未启动
 
-        tm2 = TaskManager(db_path=db_path, max_concurrent_tasks=2)
+        tm2 = TaskManager(max_concurrent_tasks=2)
         pending, pending_total = await tm2.list_tasks(status=TaskStatus.PENDING)
         running, running_total = await tm2.list_tasks(status=TaskStatus.RUNNING)
         assert len(pending) == 1
         assert pending_total == 1
         assert len(running) == 1
         assert running_total == 1
+        await db.close_db()
 
 
 # ============================================================
@@ -1625,8 +1648,8 @@ class TestListTasksPreservesReference:
                 id=f"{task.task_id}_msg_1",
                 task_id=task.task_id,
                 source_id=1,
-                created_at="2024-01-01T00:00:00",
-                updated_at="2024-01-01T00:00:00",
+                created_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+                updated_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
             )
         ]
         await task_manager.add_items(task.task_id, items)

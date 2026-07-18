@@ -228,6 +228,8 @@ async def create_task(
         "target_identifier": params.get("target_identifier"),
         "recent_count": params.get("recent_count"),
         "media_types": params.get("media_types"),
+        "min_size": params.get("min_size"),
+        "max_size": params.get("max_size"),
         "enable_repository_backup": params.get("enable_repository_backup"),
     }
     # source_identifier 存在时交给 TaskManager 解析，不要设置 chat_id；否则使用 chat_id 回退

@@ -8,8 +8,6 @@ CacheManager 模块 - Telegram_Restricted_Media_Downloader 项目缓存层
 - 提供强制刷新与自动过期机制
 - 支持抽样估算结果缓存
 - 单用户场景，使用 SQLite 存储
-
-设计文档：docs/module-design-cache-layer.md
 """
 
 import asyncio
@@ -17,10 +15,14 @@ import hashlib
 import json
 import logging
 import pickle
-import sqlite3
-import time
-from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+from module.core.db import get_session
+from module.core.models.cache import CacheEntryRecord, CacheParamRecord
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,7 @@ CACHE_TYPE_CHAT_LIST = "chat_list"
 CACHE_TYPE_MESSAGE_LIST = "message_list"
 CACHE_TYPE_MESSAGE_STATS = "message_stats"
 
-# 仓库模式缓存类型常量（新增）
+# 仓库模式缓存类型常量
 CACHE_TYPE_REPOSITORY_FILES = "repository_files"
 CACHE_TYPE_REPOSITORY_SOURCESS = "repository_sources"
 CACHE_TYPE_FILE_DISTRIBUTIONS = "file_distributions"
@@ -39,13 +41,13 @@ TTL_CHAT_LIST = 3600  # 1 小时
 TTL_MESSAGE_LIST = 1800  # 30 分钟
 TTL_MESSAGE_STATS = 600  # 10 分钟
 
-# 仓库缓存TTL配置（新增）
+# 仓库缓存TTL配置
 TTL_REPOSITORY_FILES = 600  # 10 分钟
 TTL_REPOSITORY_SOURCES = 3600  # 1 小时
 TTL_FILE_DISTRIBUTIONS = 600  # 10 分钟
 
 # 容量控制
-DEFAULT_MAX_ENTRIES = 10000  # 默认最大缓存条目数
+DEFAULT_MAX_ENTRIES = 10000
 
 
 class CacheError(Exception):
@@ -55,138 +57,35 @@ class CacheError(Exception):
 
 
 class CacheManager:
-    """
-    缓存管理器 - Bot 与 WebUI 共享（单用户）
+    """缓存管理器 - Bot 与 WebUI 共享（单用户）。
 
-    使用 SQLite 存储缓存数据，支持三种缓存类型：
-    - 频道列表（1 小时 TTL）
-    - 消息列表（30 分钟 TTL）
-    - 消息统计（10 分钟 TTL）
+    使用 SQLModel + 异步会话存储缓存数据。
     """
 
     def __init__(
         self,
-        db_path: str,
         serializer: str = "pickle",
         max_entries: int = DEFAULT_MAX_ENTRIES,
     ):
-        """
-        初始化缓存管理器。
-
-        Args:
-            db_path: SQLite 数据库文件路径。
-            serializer: 序列化方式，默认 "pickle"，可选 "msgpack" / "json"。
-            max_entries: 最大缓存条目数，超过时触发 LRU 淘汰。
-        """
-        self.db_path = db_path
         self.serializer = serializer
         self.MAX_ENTRIES = max_entries
         self._closed = False
-
-        # 单飞请求机制：{cache_key: asyncio.Future}
         self._in_flight: dict[str, asyncio.Future] = {}
 
-        # 初始化数据库
-        self._init_db()
-
-        # 启动时清理过期数据
-        self._cleanup_expired_on_start()
-
-    def _init_db(self) -> None:
-        """初始化数据库表结构"""
-        with self._get_connection() as conn:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS cache_entries (
-                    cache_key       TEXT PRIMARY KEY,
-                    cache_type      TEXT NOT NULL,
-                    chat_id         TEXT,
-                    payload         BLOB NOT NULL,
-                    expires_at      INTEGER NOT NULL,
-                    created_at      INTEGER NOT NULL,
-                    updated_at      INTEGER NOT NULL,
-                    version         INTEGER NOT NULL DEFAULT 1
-                );
-                
-                CREATE TABLE IF NOT EXISTS cache_params (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    cache_key       TEXT NOT NULL UNIQUE,
-                    param_hash      TEXT NOT NULL,
-                    param_json      TEXT NOT NULL,
-                    FOREIGN KEY (cache_key) REFERENCES cache_entries(cache_key)
-                        ON DELETE CASCADE
-                );
-                
-                CREATE INDEX IF NOT EXISTS idx_cache_entries_type_expires
-                    ON cache_entries(cache_type, expires_at);
-                
-                CREATE INDEX IF NOT EXISTS idx_cache_entries_chat_id
-                    ON cache_entries(chat_id);
-                
-                CREATE INDEX IF NOT EXISTS idx_cache_params_hash
-                    ON cache_params(param_hash);
-            """)
-
-    def _cleanup_expired_on_start(self) -> None:
-        """启动时清理过期数据"""
-        try:
-            now = int(time.time())
-            with self._get_connection() as conn:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE expires_at <= ?",
-                    (now,),
-                )
-                deleted = cursor.rowcount
-                if deleted > 0:
-                    logger.info(f"启动时清理了 {deleted} 条过期缓存")
-        except Exception as e:
-            logger.warning(f"启动时清理过期缓存失败: {e}")
-
-    @contextmanager
-    def _get_connection(self):
-        """获取数据库连接的上下文管理器"""
-        if self._closed:
-            raise CacheError("数据库连接已关闭")
-
-        conn = sqlite3.connect(self.db_path)
-        try:
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
     def _make_cache_key(
-        self, prefix: str, chat_id: Optional[str] = None, params: Optional[dict] = None
+        self, prefix: str, chat_id: Optional[int] = None, params: Optional[dict] = None
     ) -> str:
-        """
-        生成缓存键
-
-        Args:
-            prefix: 缓存类型前缀
-            chat_id: 频道 ID（可选）
-            params: 查询参数（可选）
-
-        Returns:
-            缓存键字符串
-        """
         if params:
-            # 参数哈希：按 key 排序后的 JSON + SHA-256 前 16 位
             param_str = json.dumps(params, sort_keys=True, default=str)
             param_hash = hashlib.sha256(param_str.encode()).hexdigest()[:16]
-            if chat_id:
+            if chat_id is not None:
                 return f"{prefix}:{chat_id}:{param_hash}"
             return f"{prefix}:{param_hash}"
-
-        if chat_id:
+        if chat_id is not None:
             return f"{prefix}:{chat_id}"
         return prefix
 
     def _serialize(self, data: Any) -> bytes:
-        """序列化数据"""
         if self.serializer == "pickle":
             return pickle.dumps(data)
         elif self.serializer == "json":
@@ -195,7 +94,6 @@ class CacheManager:
             return pickle.dumps(data)
 
     def _deserialize(self, payload: bytes) -> Any:
-        """反序列化数据"""
         if self.serializer == "pickle":
             return pickle.loads(payload)
         elif self.serializer == "json":
@@ -204,71 +102,92 @@ class CacheManager:
             return pickle.loads(payload)
 
     def _get_ttl(self, cache_type: str) -> int:
-        """获取缓存类型的 TTL（秒）"""
         ttl_map = {
             CACHE_TYPE_CHAT_LIST: TTL_CHAT_LIST,
             CACHE_TYPE_MESSAGE_LIST: TTL_MESSAGE_LIST,
             CACHE_TYPE_MESSAGE_STATS: TTL_MESSAGE_STATS,
+            CACHE_TYPE_REPOSITORY_FILES: TTL_REPOSITORY_FILES,
+            CACHE_TYPE_REPOSITORY_SOURCESS: TTL_REPOSITORY_SOURCES,
+            CACHE_TYPE_FILE_DISTRIBUTIONS: TTL_FILE_DISTRIBUTIONS,
         }
         return ttl_map.get(cache_type, TTL_CHAT_LIST)
 
-    def _upsert_cache(
+    async def _upsert_cache(
         self,
-        conn: sqlite3.Connection,
+        session,
         cache_key: str,
         cache_type: str,
-        chat_id: Optional[str],
+        chat_id: Optional[int],
         data: Any,
         params: Optional[dict] = None,
     ) -> None:
-        """
-        写入或更新缓存条目
-
-        Args:
-            conn: 数据库连接
-            cache_key: 缓存键
-            cache_type: 缓存类型
-            chat_id: 频道 ID
-            data: 要缓存的数据
-            params: 查询参数（可选，用于 cache_params 表）
-        """
-        now = int(time.time())
+        now = datetime.now(timezone.utc)
         ttl = self._get_ttl(cache_type)
-        expires_at = now + ttl
+        expires_at = now + timedelta(seconds=ttl)
         payload = self._serialize(data)
 
-        conn.execute(
-            """INSERT OR REPLACE INTO cache_entries 
-               (cache_key, cache_type, chat_id, payload, expires_at, created_at, updated_at, version)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1)""",
-            (cache_key, cache_type, chat_id, payload, expires_at, now, now),
+        # INSERT OR REPLACE
+        stmt = sqlite_insert(CacheEntryRecord).values(
+            cache_key=cache_key,
+            cache_type=cache_type,
+            chat_id=chat_id,
+            payload=payload,
+            expires_at=expires_at,
+            created_at=now,
+            updated_at=now,
+            version=1,
         )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["cache_key"],
+            set_={
+                "cache_type": stmt.excluded.cache_type,
+                "chat_id": stmt.excluded.chat_id,
+                "payload": stmt.excluded.payload,
+                "expires_at": stmt.excluded.expires_at,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        await session.execute(stmt)
 
-        # 更新参数索引
         if params:
             param_str = json.dumps(params, sort_keys=True, default=str)
             param_hash = hashlib.sha256(param_str.encode()).hexdigest()[:16]
-            conn.execute(
-                """INSERT OR REPLACE INTO cache_params (cache_key, param_hash, param_json)
-                   VALUES (?, ?, ?)""",
-                (cache_key, param_hash, param_str),
+            param_stmt = sqlite_insert(CacheParamRecord).values(
+                cache_key=cache_key,
+                param_hash=param_hash,
+                param_json=param_str,
             )
+            param_stmt = param_stmt.on_conflict_do_update(
+                index_elements=["cache_key"],
+                set_={
+                    "param_hash": param_stmt.excluded.param_hash,
+                    "param_json": param_stmt.excluded.param_json,
+                },
+            )
+            await session.execute(param_stmt)
 
-        # 检查是否需要 LRU 淘汰
-        cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
-        count = cursor.fetchone()[0]
+        await session.commit()
+
+        # LRU 淘汰
+        count_stmt = select(func.count()).select_from(CacheEntryRecord)
+        result = await session.execute(count_stmt)
+        count = result.scalar() or 0
         if count > self.MAX_ENTRIES:
             oversize = count - self.MAX_ENTRIES
-            conn.execute(
-                """DELETE FROM cache_entries 
-                   WHERE cache_key IN (
-                       SELECT cache_key FROM cache_entries 
-                       ORDER BY updated_at ASC 
-                       LIMIT ?
-                   )""",
-                (oversize,),
+            old_stmt = (
+                select(CacheEntryRecord.cache_key)
+                .order_by(CacheEntryRecord.updated_at.asc())
+                .limit(oversize)
             )
-            logger.info(f"LRU 淘汰了 {oversize} 条缓存")
+            old_result = await session.execute(old_stmt)
+            old_keys = [row[0] for row in old_result.all()]
+            if old_keys:
+                del_stmt = delete(CacheEntryRecord).where(
+                    CacheEntryRecord.cache_key.in_(old_keys)
+                )
+                await session.execute(del_stmt)
+                await session.commit()
+                logger.info(f"LRU 淘汰了 {oversize} 条缓存")
 
     # ---------- 频道/聊天列表 ----------
 
@@ -277,16 +196,6 @@ class CacheManager:
         fetcher: Callable,
         force_refresh: bool = False,
     ) -> list[dict]:
-        """
-        获取频道/聊天列表，优先读缓存，未命中或过期时调用 fetcher。
-
-        Args:
-            fetcher: 异步可调用对象，返回 Pyrogram Dialog/Chat 列表。
-            force_refresh: 是否强制刷新缓存。
-
-        Returns:
-            聊天对象列表（已反序列化为可安全使用的 dict）。
-        """
         cache_key = self._make_cache_key(CACHE_TYPE_CHAT_LIST)
         return await self._get_or_fetch(
             cache_key=cache_key,
@@ -298,13 +207,13 @@ class CacheManager:
         )
 
     async def invalidate_chat_list(self) -> int:
-        """删除所有频道/聊天列表缓存，返回删除条数。"""
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM cache_entries WHERE cache_type = ?",
-                (CACHE_TYPE_CHAT_LIST,),
+        async with get_session() as session:
+            stmt = delete(CacheEntryRecord).where(
+                CacheEntryRecord.cache_type == CACHE_TYPE_CHAT_LIST
             )
-            deleted = cursor.rowcount
+            result = await session.execute(stmt)
+            await session.commit()
+            deleted = max(result.rowcount, 0)
             logger.info(f"删除了 {deleted} 条频道列表缓存")
             return deleted
 
@@ -317,43 +226,31 @@ class CacheManager:
         fetcher: Callable,
         force_refresh: bool = False,
     ) -> list[dict]:
-        """
-        获取消息列表缓存。
-
-        Args:
-            chat_id: 频道/聊天 ID。
-            params: 查询参数（范围类型、起止 ID、日期、媒体过滤等）。
-            fetcher: 异步可调用对象，按 params 从 Telegram 获取消息。
-            force_refresh: 是否强制刷新缓存。
-        """
-        chat_id_str = str(chat_id)
-        cache_key = self._make_cache_key("messages", chat_id=chat_id_str, params=params)
+        chat_id_int = int(chat_id)
+        cache_key = self._make_cache_key("messages", chat_id=chat_id_int, params=params)
         return await self._get_or_fetch(
             cache_key=cache_key,
             cache_type=CACHE_TYPE_MESSAGE_LIST,
-            chat_id=chat_id_str,
+            chat_id=chat_id_int,
             fetcher=fetcher,
             force_refresh=force_refresh,
             params=params,
         )
 
-    async def invalidate_message_list(
-        self,
-        chat_id: Optional[int | str] = None,
-    ) -> int:
-        """删除消息列表缓存。若指定 chat_id，仅删除该频道相关缓存。"""
-        with self._get_connection() as conn:
+    async def invalidate_message_list(self, chat_id: Optional[int | str] = None) -> int:
+        async with get_session() as session:
             if chat_id is not None:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_type = ? AND chat_id = ?",
-                    (CACHE_TYPE_MESSAGE_LIST, str(chat_id)),
+                stmt = delete(CacheEntryRecord).where(
+                    CacheEntryRecord.cache_type == CACHE_TYPE_MESSAGE_LIST,
+                    CacheEntryRecord.chat_id == int(chat_id),
                 )
             else:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_type = ?",
-                    (CACHE_TYPE_MESSAGE_LIST,),
+                stmt = delete(CacheEntryRecord).where(
+                    CacheEntryRecord.cache_type == CACHE_TYPE_MESSAGE_LIST
                 )
-            deleted = cursor.rowcount
+            result = await session.execute(stmt)
+            await session.commit()
+            deleted = max(result.rowcount, 0)
             logger.info(f"删除了 {deleted} 条消息列表缓存")
             return deleted
 
@@ -366,54 +263,37 @@ class CacheManager:
         estimator: Callable,
         force_refresh: bool = False,
     ) -> dict:
-        """
-        获取消息统计信息（抽样估算或精确分析）。
-
-        Args:
-            chat_id: 频道/聊天 ID。
-            params: 统计参数（范围类型、媒体过滤等）。
-            estimator: 异步可调用对象，内部决定抽样估算或精确遍历。
-            force_refresh: 是否强制刷新缓存。
-
-        Returns:
-            统计结果字典，至少包含：
-            - total_messages: int
-            - total_size_bytes: int
-            - estimated: bool（是否为估算值）
-            - sample_count: int（抽样消息数）
-        """
-        chat_id_str = str(chat_id)
-        cache_key = self._make_cache_key("estimate", chat_id=chat_id_str, params=params)
+        chat_id_int = int(chat_id)
+        cache_key = self._make_cache_key("estimate", chat_id=chat_id_int, params=params)
         return await self._get_or_fetch(
             cache_key=cache_key,
             cache_type=CACHE_TYPE_MESSAGE_STATS,
-            chat_id=chat_id_str,
+            chat_id=chat_id_int,
             fetcher=estimator,
             force_refresh=force_refresh,
             params=params,
         )
 
     async def invalidate_message_stats(
-        self,
-        chat_id: Optional[int | str] = None,
+        self, chat_id: Optional[int | str] = None
     ) -> int:
-        """删除消息统计缓存。若指定 chat_id，仅删除该频道相关缓存。"""
-        with self._get_connection() as conn:
+        async with get_session() as session:
             if chat_id is not None:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_type = ? AND chat_id = ?",
-                    (CACHE_TYPE_MESSAGE_STATS, str(chat_id)),
+                stmt = delete(CacheEntryRecord).where(
+                    CacheEntryRecord.cache_type == CACHE_TYPE_MESSAGE_STATS,
+                    CacheEntryRecord.chat_id == int(chat_id),
                 )
             else:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_type = ?",
-                    (CACHE_TYPE_MESSAGE_STATS,),
+                stmt = delete(CacheEntryRecord).where(
+                    CacheEntryRecord.cache_type == CACHE_TYPE_MESSAGE_STATS
                 )
-            deleted = cursor.rowcount
+            result = await session.execute(stmt)
+            await session.commit()
+            deleted = max(result.rowcount, 0)
             logger.info(f"删除了 {deleted} 条消息统计缓存")
             return deleted
 
-    # ---------- 仓库模式缓存（新增）----------
+    # ---------- 仓库模式缓存 ----------
 
     async def get_repository_files(
         self,
@@ -422,27 +302,16 @@ class CacheManager:
         fetcher: Callable | None = None,
         force_refresh: bool = False,
     ) -> dict:
-        """获取仓库文件列表缓存。
-
-        设计依据: module-design-cache-layer.md §285-L349
-
-        Args:
-            chat_id: 频道ID
-            params: 查询参数(offset, limit, file_type等)
-            fetcher: 数据获取函数(未缓存时调用)
-            force_refresh: 是否强制刷新
-
-        Returns:
-            包含items和total的字典
-        """
-        cache_type = CACHE_TYPE_REPOSITORY_FILES
-        key_params = {"chat_id": chat_id, **params}
+        cache_key = self._make_cache_key(
+            CACHE_TYPE_REPOSITORY_FILES, chat_id=chat_id, params=params
+        )
         return await self._get_or_fetch(
-            cache_type=cache_type,
-            key_params=key_params,
+            cache_key=cache_key,
+            cache_type=CACHE_TYPE_REPOSITORY_FILES,
+            chat_id=chat_id,
             fetcher=fetcher,
-            ttl=TTL_REPOSITORY_FILES,
             force_refresh=force_refresh,
+            params=params,
         )
 
     async def get_repository_sources(
@@ -452,25 +321,17 @@ class CacheManager:
         fetcher: Callable | None = None,
         force_refresh: bool = False,
     ) -> list[dict]:
-        """获取文件来源映射缓存。
-
-        Args:
-            chat_id: 频道ID
-            file_unique_id: 文件唯一标识
-            fetcher: 数据获取函数(未缓存时调用)
-            force_refresh: 是否强制刷新
-
-        Returns:
-            来源映射列表
-        """
-        cache_type = CACHE_TYPE_REPOSITORY_SOURCESS
-        key_params = {"chat_id": chat_id, "file_unique_id": file_unique_id}
+        params = {"file_unique_id": file_unique_id}
+        cache_key = self._make_cache_key(
+            CACHE_TYPE_REPOSITORY_SOURCESS, chat_id=chat_id, params=params
+        )
         return await self._get_or_fetch(
-            cache_type=cache_type,
-            key_params=key_params,
+            cache_key=cache_key,
+            cache_type=CACHE_TYPE_REPOSITORY_SOURCESS,
+            chat_id=chat_id,
             fetcher=fetcher,
-            ttl=TTL_REPOSITORY_SOURCES,
             force_refresh=force_refresh,
+            params=params,
         )
 
     async def get_file_distributions(
@@ -480,117 +341,92 @@ class CacheManager:
         fetcher: Callable | None = None,
         force_refresh: bool = False,
     ) -> dict:
-        """获取分发记录缓存。
-
-        Args:
-            chat_id: 频道ID
-            params: 查询参数(offset, limit等)
-            fetcher: 数据获取函数(未缓存时调用)
-            force_refresh: 是否强制刷新
-
-        Returns:
-            包含items和total的字典
-        """
-        cache_type = CACHE_TYPE_FILE_DISTRIBUTIONS
-        key_params = {"chat_id": chat_id, **params}
+        cache_key = self._make_cache_key(
+            CACHE_TYPE_FILE_DISTRIBUTIONS, chat_id=chat_id, params=params
+        )
         return await self._get_or_fetch(
-            cache_type=cache_type,
-            key_params=key_params,
+            cache_key=cache_key,
+            cache_type=CACHE_TYPE_FILE_DISTRIBUTIONS,
+            chat_id=chat_id,
             fetcher=fetcher,
-            ttl=TTL_FILE_DISTRIBUTIONS,
             force_refresh=force_refresh,
+            params=params,
         )
 
-    def clear_repository_cache(self, chat_id: int | None = None) -> int:
-        """清除仓库缓存。
-
-        Args:
-            chat_id: 频道ID（可选，不指定则清除所有仓库缓存）
-
-        Returns:
-            删除条数
-        """
-        with self._get_connection() as conn:
+    async def clear_repository_cache(self, chat_id: int | None = None) -> int:
+        repo_types = (
+            CACHE_TYPE_REPOSITORY_FILES,
+            CACHE_TYPE_REPOSITORY_SOURCESS,
+            CACHE_TYPE_FILE_DISTRIBUTIONS,
+        )
+        async with get_session() as session:
             if chat_id is not None:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_type IN (?, ?, ?) AND chat_id = ?",
-                    (
-                        CACHE_TYPE_REPOSITORY_FILES,
-                        CACHE_TYPE_REPOSITORY_SOURCESS,
-                        CACHE_TYPE_FILE_DISTRIBUTIONS,
-                        str(chat_id),
-                    ),
+                stmt = delete(CacheEntryRecord).where(
+                    CacheEntryRecord.cache_type.in_(repo_types),
+                    CacheEntryRecord.chat_id == chat_id,
                 )
             else:
-                cursor = conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_type IN (?, ?, ?)",
-                    (
-                        CACHE_TYPE_REPOSITORY_FILES,
-                        CACHE_TYPE_REPOSITORY_SOURCESS,
-                        CACHE_TYPE_FILE_DISTRIBUTIONS,
-                    ),
+                stmt = delete(CacheEntryRecord).where(
+                    CacheEntryRecord.cache_type.in_(repo_types)
                 )
-            deleted = cursor.rowcount
+            result = await session.execute(stmt)
+            await session.commit()
+            deleted = max(result.rowcount, 0)
             logger.info(f"删除了 {deleted} 条仓库缓存")
             return deleted
 
-    def clear_all_repository_cache(self) -> int:
-        """清除所有仓库缓存。
-
-        Returns:
-            删除条数
-        """
-        return self.clear_repository_cache(chat_id=None)
+    async def clear_all_repository_cache(self) -> int:
+        return await self.clear_repository_cache(chat_id=None)
 
     # ---------- 通用操作 ----------
 
     async def clear_expired(self) -> int:
-        """清理所有过期缓存条目，返回删除条数。"""
-        now = int(time.time())
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                "DELETE FROM cache_entries WHERE expires_at <= ?",
-                (now,),
+        now = datetime.now(timezone.utc)
+        # SQLite 存储的 datetime 不带时区，与 aware `now` 在 SQL 层比较时
+        # 序列化字符串可能不一致，因此比较前统一为 naive UTC。
+        now_naive = now.replace(tzinfo=None)
+        async with get_session() as session:
+            stmt = delete(CacheEntryRecord).where(
+                CacheEntryRecord.expires_at <= now_naive
             )
-            deleted = cursor.rowcount
+            result = await session.execute(stmt)
+            await session.commit()
+            deleted = max(result.rowcount, 0)
             if deleted > 0:
                 logger.info(f"清理了 {deleted} 条过期缓存")
             return deleted
 
     async def clear_all(self) -> int:
-        """清空全部缓存，返回删除条数。"""
-        with self._get_connection() as conn:
-            cursor = conn.execute("DELETE FROM cache_entries")
-            deleted = cursor.rowcount
+        async with get_session() as session:
+            stmt = delete(CacheEntryRecord)
+            result = await session.execute(stmt)
+            await session.commit()
+            deleted = max(result.rowcount, 0)
             logger.info(f"清空了 {deleted} 条缓存")
             return deleted
 
     async def get_cache_info(self) -> dict:
-        """
-        返回缓存统计信息（各类型条目数、总大小、最早/最近过期时间）。
-        """
-        with self._get_connection() as conn:
-            # 总数
-            cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
-            total_entries = cursor.fetchone()[0]
+        async with get_session() as session:
+            count_stmt = select(func.count()).select_from(CacheEntryRecord)
+            total_entries = (await session.execute(count_stmt)).scalar() or 0
 
-            # 各类型计数
-            cursor = conn.execute(
-                "SELECT cache_type, COUNT(*) FROM cache_entries GROUP BY cache_type"
+            type_stmt = select(CacheEntryRecord.cache_type, func.count()).group_by(
+                CacheEntryRecord.cache_type
             )
-            type_counts = dict(cursor.fetchall())
+            type_result = await session.execute(type_stmt)
+            type_counts = dict(type_result.all())
 
-            # 总大小（估算 payload 大小）
-            cursor = conn.execute("SELECT SUM(length(payload)) FROM cache_entries")
-            total_size = cursor.fetchone()[0] or 0
+            size_stmt = select(func.sum(func.length(CacheEntryRecord.payload)))
+            total_size = (await session.execute(size_stmt)).scalar() or 0
 
-            # 最早/最近过期时间
-            cursor = conn.execute(
-                "SELECT MIN(expires_at), MAX(expires_at) FROM cache_entries"
+            expire_stmt = select(
+                func.min(CacheEntryRecord.expires_at),
+                func.max(CacheEntryRecord.expires_at),
             )
-            row = cursor.fetchone()
-            earliest_expire = row[0]
-            latest_expire = row[1]
+            expire_result = await session.execute(expire_stmt)
+            row = expire_result.one_or_none()
+            earliest_expire = row[0].isoformat() if row and row[0] else None
+            latest_expire = row[1].isoformat() if row and row[1] else None
 
             return {
                 "total_entries": total_entries,
@@ -603,9 +439,7 @@ class CacheManager:
             }
 
     async def close(self) -> None:
-        """关闭数据库连接"""
         self._closed = True
-        # 取消所有正在进行的单飞请求
         for future in self._in_flight.values():
             if not future.done():
                 future.cancel()
@@ -618,28 +452,16 @@ class CacheManager:
         self,
         cache_key: str,
         cache_type: str,
-        chat_id: Optional[str],
+        chat_id: Optional[int],
         fetcher: Callable,
         force_refresh: bool = False,
         params: Optional[dict] = None,
     ) -> Any:
-        """
-        通用的缓存获取/刷新逻辑
-
-        流程：
-        1. 检查是否已关闭
-        2. 如果 force_refresh=True，跳过缓存
-        3. 尝试从缓存读取
-        4. 缓存命中且未过期 → 返回
-        5. 缓存未命中/过期 → 使用单飞机制调用 fetcher
-        """
-        # 检查连接是否已关闭
         if self._closed:
             raise CacheError("数据库连接已关闭")
 
-        now = int(time.time())
+        now = datetime.now(timezone.utc)
 
-        # 强制刷新：跳过缓存
         if force_refresh:
             logger.info(f"强制刷新缓存: {cache_key}")
             return await self._execute_and_cache(
@@ -650,7 +472,6 @@ class CacheManager:
                 params=params,
             )
 
-        # 尝试读取缓存
         try:
             data = await self._read_cache(cache_key, now)
             if data is not None:
@@ -658,16 +479,17 @@ class CacheManager:
                 return data
         except Exception as e:
             logger.warning(f"缓存读取失败，回退到 fetcher: {e}")
-            # 删除损坏的条目
             try:
-                with self._get_connection() as conn:
-                    conn.execute(
-                        "DELETE FROM cache_entries WHERE cache_key = ?", (cache_key,)
+                async with get_session() as session:
+                    await session.execute(
+                        delete(CacheEntryRecord).where(
+                            CacheEntryRecord.cache_key == cache_key
+                        )
                     )
+                    await session.commit()
             except Exception:
                 pass
 
-        # 缓存未命中或过期，使用单飞机制
         logger.debug(f"缓存未命中: {cache_key}")
         return await self._execute_and_cache(
             cache_key=cache_key,
@@ -677,42 +499,34 @@ class CacheManager:
             params=params,
         )
 
-    async def _read_cache(self, cache_key: str, now: int) -> Optional[Any]:
-        """
-        从缓存读取数据
-
-        Args:
-            cache_key: 缓存键
-            now: 当前时间戳
-
-        Returns:
-            反序列化后的数据，如果缓存不存在或已过期则返回 None
-        """
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT payload, expires_at FROM cache_entries WHERE cache_key = ?",
-                (cache_key,),
+    async def _read_cache(self, cache_key: str, now: datetime) -> Optional[Any]:
+        async with get_session() as session:
+            stmt = select(CacheEntryRecord).where(
+                CacheEntryRecord.cache_key == cache_key
             )
-            row = cursor.fetchone()
+            result = await session.execute(stmt)
+            record = result.scalars().first()
 
-            if row is None:
+            if record is None:
                 return None
 
-            payload, expires_at = row
-
-            # 检查是否过期
+            # SQLite 不保留 datetime 时区信息，读出为 naive datetime；
+            # 与 aware `now` 比较前需统一为 UTC aware。
+            expires_at = record.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
             if expires_at <= now:
-                # 删除过期条目
-                conn.execute(
-                    "DELETE FROM cache_entries WHERE cache_key = ?",
-                    (cache_key,),
+                await session.execute(
+                    delete(CacheEntryRecord).where(
+                        CacheEntryRecord.cache_key == cache_key
+                    )
                 )
+                await session.commit()
                 logger.debug(f"缓存已过期: {cache_key}")
                 return None
 
-            # 反序列化
             try:
-                return self._deserialize(payload)
+                return self._deserialize(record.payload)
             except Exception as e:
                 raise CacheError(f"反序列化失败: {e}")
 
@@ -720,42 +534,25 @@ class CacheManager:
         self,
         cache_key: str,
         cache_type: str,
-        chat_id: Optional[str],
+        chat_id: Optional[int],
         fetcher: Callable,
         params: Optional[dict] = None,
     ) -> Any:
-        """
-        执行 fetcher 并写入缓存，使用单飞机制避免并发重复调用
-
-        Args:
-            cache_key: 缓存键
-            cache_type: 缓存类型
-            chat_id: 频道 ID
-            fetcher: 异步可调用对象
-            params: 查询参数
-
-        Returns:
-            fetcher 返回的数据
-        """
-        # 单飞机制：检查是否有正在进行的请求
         if cache_key in self._in_flight:
             logger.debug(f"等待正在进行的请求: {cache_key}")
             return await self._in_flight[cache_key]
 
-        # 创建 Future
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         self._in_flight[cache_key] = future
 
         try:
-            # 执行 fetcher
             data = await fetcher()
 
-            # 写入缓存
             try:
-                with self._get_connection() as conn:
-                    self._upsert_cache(
-                        conn=conn,
+                async with get_session() as session:
+                    await self._upsert_cache(
+                        session=session,
                         cache_key=cache_key,
                         cache_type=cache_type,
                         chat_id=chat_id,
@@ -764,20 +561,16 @@ class CacheManager:
                     )
             except Exception as e:
                 logger.warning(f"写入缓存失败: {e}")
-                # 缓存写入失败不影响返回数据
 
-            # 完成 Future
             if not future.done():
                 future.set_result(data)
             return data
 
         except Exception as e:
-            # fetcher 失败，不写入缓存
             logger.error(f"fetcher 执行失败: {e}")
             if not future.done():
                 future.set_exception(e)
             raise
 
         finally:
-            # 清理状态
             self._in_flight.pop(cache_key, None)

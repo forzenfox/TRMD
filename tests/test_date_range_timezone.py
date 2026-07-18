@@ -14,10 +14,12 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 
 # 确保 module.parser.parse_args() 不会消费 pytest 参数
 sys.argv = sys.argv[:1]
 
+from module.core import db
 from module.core.task_executor import TaskExecutor
 from module.core.task_manager import TaskManager, TaskType
 from module.utils.timezone import parse_user_date, SHANGHAI_TZ
@@ -50,10 +52,13 @@ def db_path():
         os.unlink(f.name)
 
 
-@pytest.fixture
-def task_manager(db_path):
+@pytest_asyncio.fixture
+async def task_manager(db_path):
     """创建 TaskManager 实例。"""
-    return TaskManager(db_path=db_path, max_concurrent_tasks=2)
+    await db.init_db(db_path)
+    tm = TaskManager(max_concurrent_tasks=2)
+    yield tm
+    await db.close_db()
 
 
 @pytest.fixture

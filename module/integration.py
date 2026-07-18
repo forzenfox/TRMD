@@ -12,6 +12,7 @@ import os
 import logging
 from typing import Optional
 
+from module.core import db
 from module.core.token_manager import TokenManager
 from module.core.task_manager import TaskManager
 from module.core.cache_manager import CacheManager
@@ -54,18 +55,16 @@ class AppContext:
         )
         os.makedirs(self.data_dir, exist_ok=True)
 
-        # 迁移旧路径的 repository.db 到配置的数据目录
-        _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        from module.utils.path_tool import migrate_repository_db_if_needed
-
-        migrate_repository_db_if_needed(_project_root, self.data_dir)
-
         self.root_user_id = root_user_id
         self.web_host = web_host
         self.web_port = web_port
 
-        # 数据库路径
+        # 数据库路径（单一数据库，所有表统一管理）
         self.db_path = os.path.join(self.data_dir, "trmd.db")
+
+        # 同步初始化数据库引擎（供 TokenManager 等同步代码使用）
+        # 异步引擎将在 init_database() 中初始化
+        db.init_sync_db(self.db_path)
 
         # 初始化核心管理器
         self.token_manager = self._init_token_manager()
@@ -95,8 +94,7 @@ class AppContext:
 
         Token 默认有效期 12 小时（43200 秒），减少前端频繁刷新/重新获取。
         """
-        db_path = os.path.join(self.data_dir, "tokens.db")
-        tm = TokenManager(db_path=db_path, default_ttl=12 * 3600)
+        tm = TokenManager(default_ttl=12 * 3600)
         log.info("TokenManager 已初始化，默认有效期 12 小时")
         return tm
 
@@ -104,7 +102,6 @@ class AppContext:
         """初始化 TaskManager。"""
         rl = self.config_manager.resource_limits
         tm = TaskManager(
-            db_path=self.db_path,
             max_concurrent_tasks=rl.get("max_concurrent_tasks", 1),
             max_retry_count=5,
             task_size_warning_gb=rl.get("task_size_warning_gb", 5),
@@ -117,7 +114,7 @@ class AppContext:
 
     def _init_cache_manager(self) -> CacheManager:
         """初始化 CacheManager。"""
-        cm = CacheManager(db_path=self.db_path)
+        cm = CacheManager()
         log.info("CacheManager 已初始化")
         return cm
 
@@ -145,6 +142,7 @@ class AppContext:
             log.info("ConfigManager 使用 UserConfig 实例")
         except Exception as e:
             import traceback
+
             log.warning(
                 f"无法创建 UserConfig 实例，ConfigManager 将从文件读取配置: {e}\n{traceback.format_exc()}"
             )
@@ -155,9 +153,8 @@ class AppContext:
 
     def _init_repository_db(self) -> RepositoryDB:
         """初始化 RepositoryDB。"""
-        db_path = os.path.join(self.data_dir, "repository.db")
-        repo_db = RepositoryDB(db_path=db_path)
-        log.info(f"RepositoryDB 已初始化，数据库路径: {db_path}")
+        repo_db = RepositoryDB()
+        log.info("RepositoryDB 已初始化")
         return repo_db
 
     def _init_repository_manager(self):
@@ -245,6 +242,17 @@ class AppContext:
             self.client_manager.stop_health_check()
             log.info("ClientManager 健康检查已停止")
 
+    async def init_database(self) -> None:
+        """初始化异步数据库引擎。
+
+        在 AppContext.__init__ 中已通过 init_sync_db() 初始化同步引擎，
+        本方法初始化异步引擎供 TaskManager/CacheManager/RepositoryDB 等使用。
+        必须在使用异步数据库操作前调用。
+        """
+        if not db.is_initialized():
+            await db.init_db(self.db_path)
+            log.info("异步数据库引擎已初始化")
+
     async def init_task_executor(self, client, downloader=None, uploader=None):
         """初始化任务执行器（需在 client 启动后调用）。
 
@@ -253,6 +261,9 @@ class AppContext:
             downloader: 下载器实例（可选，不传则走降级方案）
             uploader: 上传器实例（可选）
         """
+        # 确保异步数据库引擎已初始化
+        await self.init_database()
+
         from module.core.task_executor import TaskExecutor
 
         # 向 FileManager 注入真实的 client、config 和 RepositoryManager（初始化时为占位值）
@@ -285,10 +296,22 @@ class AppContext:
         """清理资源。"""
         self.stop_client_health_check()
         self.stop_repository_sync()
+        # 关闭数据库引擎（同步关闭，异步引擎需在 async cleanup 中处理）
+        db.close_sync_db()
         if hasattr(self, "_initialized"):
             self._initialized = False
             AppContext._instance = None
             log.info("应用上下文已清理")
+
+    async def async_cleanup(self):
+        """异步清理资源（包括异步数据库引擎）。"""
+        self.stop_client_health_check()
+        self.stop_repository_sync()
+        await db.close_db()
+        if hasattr(self, "_initialized"):
+            self._initialized = False
+            AppContext._instance = None
+            log.info("应用上下文已异步清理")
 
 
 def get_context() -> Optional[AppContext]:

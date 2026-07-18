@@ -2,7 +2,7 @@
 """Repository 路由模块。
 
 提供仓库模式API端点，包括文件管理、来源映射、分发记录、同步触发等。
-设计依据: module-design-web-api.md §2.3 路由组织(第165行)
+设计依据: 模块设计-WebAPI.md §2.3 路由组织(第165行)
 """
 
 import logging

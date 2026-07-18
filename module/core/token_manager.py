@@ -2,16 +2,25 @@
 """Token 认证管理模块。
 
 负责 Token 的生成、验证、刷新、撤销、过期清理与持久化。
-详见 `docs/module-design-token-auth.md`。
+详见 `docs/模块设计-Token认证.md`。
+
+持久化通过 SQLModel 同步引擎（`module.core.db`）实现；若数据库未初始化，
+则回退到内存字典（便于测试与无写权限环境）。数据库引擎与表结构由
+`module.core.db.init_sync_db` / `init_db` 统一管理，本类不再持有 db_path。
 """
 
 import hmac
 import logging
 import secrets
-import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+from sqlalchemy import delete, update
+from sqlmodel import select
+
+from module.core import db
+from module.core.models.token import TokenRecordDB
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class TokenRecord:
-    """Token 运行时记录。"""
+    """Token 运行时记录（业务逻辑层）。"""
 
     token: str
     user_id: int
@@ -59,66 +68,29 @@ class TokenRevokedError(TokenAuthError):
 
 
 class TokenManager:
-    """临时 Token 生命周期管理器。"""
+    """临时 Token 生命周期管理器。
 
-    # SQLite 建表语句
-    _CREATE_TABLE_SQL = """
-        CREATE TABLE IF NOT EXISTS tokens (
-            token           TEXT PRIMARY KEY,
-            user_id         INTEGER NOT NULL DEFAULT 0,
-            created_at      REAL    NOT NULL,
-            expires_at      REAL    NOT NULL,
-            last_used_at    REAL,
-            revoked         INTEGER NOT NULL DEFAULT 0,
-            usage_count     INTEGER NOT NULL DEFAULT 0
-        );
+    数据库是否可用在构造时一次性判定（`db.is_initialized()`）。若需持久化，
+    调用方必须在构造 TokenManager 之前完成 `db.init_sync_db()` / `db.init_db()`；
+    否则回退到内存字典模式。
     """
-
-    _INDEX_EXPIRES_AT = (
-        "CREATE INDEX IF NOT EXISTS idx_tokens_expires_at ON tokens(expires_at);"
-    )
-    _INDEX_REVOKED = "CREATE INDEX IF NOT EXISTS idx_tokens_revoked ON tokens(revoked);"
 
     def __init__(
         self,
-        db_path: Optional[str] = None,
         default_ttl: int = 3600,
         token_length: int = 32,
     ) -> None:
         """
-        :param db_path: SQLite 文件路径；若为 None，则回退到内存字典。
         :param default_ttl: Token 默认有效期，单位秒，默认 1 小时。
         :param token_length: secrets.token_urlsafe 长度参数。
         """
         self._default_ttl = default_ttl
         self._token_length = token_length
-        self._use_sqlite = db_path is not None
+        self._use_sqlite = db.is_initialized()
 
-        if self._use_sqlite:
-            self._db_path = db_path
-            self._init_sqlite()
-        else:
+        if not self._use_sqlite:
             # 内存字典：token -> TokenRecord
             self._store: dict[str, TokenRecord] = {}
-
-    # ---- SQLite 初始化 ----
-
-    def _init_sqlite(self) -> None:
-        """初始化 SQLite 数据库并创建表结构。"""
-        conn = self._get_connection()
-        try:
-            conn.execute(self._CREATE_TABLE_SQL)
-            conn.execute(self._INDEX_EXPIRES_AT)
-            conn.execute(self._INDEX_REVOKED)
-            conn.commit()
-        finally:
-            conn.close()
-
-    def _get_connection(self) -> sqlite3.Connection:
-        """获取 SQLite 连接（线程安全模式）。"""
-        conn = sqlite3.connect(self._db_path, timeout=10)
-        conn.execute("PRAGMA journal_mode=WAL;")
-        return conn
 
     # ---- 内部辅助方法 ----
 
@@ -126,102 +98,96 @@ class TokenManager:
         """获取当前 UTC 时间。"""
         return datetime.now(timezone.utc)
 
-    def _now_ts(self) -> float:
-        """获取当前 UTC Unix 时间戳（秒）。"""
-        return self._now().timestamp()
+    @staticmethod
+    def _ensure_aware(dt: datetime) -> datetime:
+        """将 naive datetime 视为 UTC 并补充时区信息。
 
-    def _to_datetime(self, ts: float) -> datetime:
-        """将 Unix 时间戳转换为 UTC datetime。"""
-        return datetime.fromtimestamp(ts, tz=timezone.utc)
+        SQLite 不保留 datetime 时区信息，从数据库读出的 naive datetime
+        与 aware `_now()` 比较前需统一为 aware UTC。
+        """
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt
 
-    def _record_to_row(self, record: TokenRecord) -> tuple:
-        """将 TokenRecord 转换为 SQLite 行元组。"""
-        return (
-            record.token,
-            record.user_id,
-            record.created_at.timestamp(),
-            record.expires_at.timestamp(),
-            record.last_used_at.timestamp() if record.last_used_at else None,
-            1 if record.revoked else 0,
-            record.usage_count,
+    def _record_to_db(self, record: TokenRecord) -> TokenRecordDB:
+        """TokenRecord -> TokenRecordDB（持久化模型）。
+
+        时间字段（datetime）由 SQLAlchemy 自动序列化为 ISO 8601 字符串存储，
+        无需手动转换为 Unix 时间戳。
+        """
+        return TokenRecordDB(
+            token=record.token,
+            user_id=record.user_id,
+            created_at=record.created_at,
+            expires_at=record.expires_at,
+            last_used_at=record.last_used_at,
+            revoked=1 if record.revoked else 0,
+            usage_count=record.usage_count,
         )
 
-    def _row_to_record(self, row: tuple) -> TokenRecord:
-        """将 SQLite 行元组转换为 TokenRecord。"""
+    def _db_to_record(self, row: TokenRecordDB) -> TokenRecord:
+        """TokenRecordDB -> TokenRecord（业务模型）。
+
+        SQLModel datetime 字段读取时自动返回 datetime 对象，无需手动转换。
+        """
         return TokenRecord(
-            token=row[0],
-            user_id=row[1],
-            created_at=self._to_datetime(row[2]),
-            expires_at=self._to_datetime(row[3]),
-            last_used_at=self._to_datetime(row[4]) if row[4] is not None else None,
-            revoked=bool(row[5]),
-            usage_count=row[6],
+            token=row.token,
+            user_id=row.user_id,
+            created_at=row.created_at,
+            expires_at=row.expires_at,
+            last_used_at=row.last_used_at,
+            revoked=bool(row.revoked),
+            usage_count=row.usage_count,
         )
 
     def _find_record(self, token: str) -> Optional[TokenRecord]:
         """根据 Token 查找记录。"""
         if self._use_sqlite:
-            return self._find_record_sqlite(token)
+            return self._find_record_db(token)
         return self._store.get(token)
 
-    def _find_record_sqlite(self, token: str) -> Optional[TokenRecord]:
-        """从 SQLite 查找记录，使用常量时间比较。"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.execute("SELECT * FROM tokens WHERE token = ?", (token,))
-            row = cursor.fetchone()
-        finally:
-            conn.close()
+    def _find_record_db(self, token: str) -> Optional[TokenRecord]:
+        """从数据库查找记录，使用常量时间比较。"""
+        with db.get_sync_session() as session:
+            statement = select(TokenRecordDB).where(TokenRecordDB.token == token)
+            row = session.execute(statement).scalars().first()
         if row is None:
             return None
-        # 使用 hmac.compare_digest 做常量时间比较
-        stored_token = row[0]
-        if not hmac.compare_digest(token, stored_token):
+        # 使用 hmac.compare_digest 做常量时间比较（防御性）
+        if not hmac.compare_digest(token, row.token):
             return None
-        return self._row_to_record(row)
+        return self._db_to_record(row)
 
     def _save_record(self, record: TokenRecord) -> None:
         """保存/更新记录。"""
         if self._use_sqlite:
-            self._save_record_sqlite(record)
+            self._save_record_db(record)
         else:
             self._store[record.token] = record
 
-    def _save_record_sqlite(self, record: TokenRecord) -> None:
-        """将记录写入 SQLite（INSERT OR REPLACE）。"""
-        conn = self._get_connection()
-        try:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO tokens
-                    (token, user_id, created_at, expires_at, last_used_at, revoked, usage_count)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                self._record_to_row(record),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+    def _save_record_db(self, record: TokenRecord) -> None:
+        """将记录写入数据库（upsert，等价于 INSERT OR REPLACE）。"""
+        with db.get_sync_session() as session:
+            session.merge(self._record_to_db(record))
+            session.commit()
 
     def _delete_record(self, token: str) -> None:
         """从存储中删除记录（仅用于清理过期）。"""
         if self._use_sqlite:
-            self._delete_record_sqlite(token)
+            self._delete_record_db(token)
         else:
             self._store.pop(token, None)
 
-    def _delete_record_sqlite(self, token: str) -> None:
-        """从 SQLite 删除记录。"""
-        conn = self._get_connection()
-        try:
-            conn.execute("DELETE FROM tokens WHERE token = ?", (token,))
-            conn.commit()
-        finally:
-            conn.close()
+    def _delete_record_db(self, token: str) -> None:
+        """从数据库删除记录。"""
+        with db.get_sync_session() as session:
+            statement = delete(TokenRecordDB).where(TokenRecordDB.token == token)
+            session.execute(statement)
+            session.commit()
 
     def _is_expired(self, record: TokenRecord) -> bool:
         """判断记录是否过期。"""
-        return self._now() >= record.expires_at
+        return self._now() >= self._ensure_aware(record.expires_at)
 
     # ---- 公共接口 ----
 
@@ -304,7 +270,7 @@ class TokenManager:
         """
         count = 0
         if self._use_sqlite:
-            count = self._revoke_all_sqlite(user_id)
+            count = self._revoke_all_db(user_id)
         else:
             for token, record in list(self._store.items()):
                 if user_id is not None and record.user_id != user_id:
@@ -316,31 +282,24 @@ class TokenManager:
         logger.info("全量撤销完成: 撤销 %d 个 Token, user_id=%s", count, user_id)
         return count
 
-    def _revoke_all_sqlite(self, user_id: Optional[int] = None) -> int:
-        """SQLite 模式的全量撤销。"""
-        now_ts = self._now_ts()
-        conn = self._get_connection()
-        try:
+    def _revoke_all_db(self, user_id: Optional[int] = None) -> int:
+        """数据库模式的全量撤销。"""
+        now = self._now()
+        with db.get_sync_session() as session:
+            statement = (
+                update(TokenRecordDB)
+                .where(
+                    TokenRecordDB.revoked == 0,
+                    TokenRecordDB.expires_at > now,
+                )
+                .values(revoked=1)
+            )
             if user_id is not None:
-                cursor = conn.execute(
-                    """
-                    UPDATE tokens SET revoked = 1
-                    WHERE user_id = ? AND revoked = 0 AND expires_at > ?
-                    """,
-                    (user_id, now_ts),
-                )
-            else:
-                cursor = conn.execute(
-                    """
-                    UPDATE tokens SET revoked = 1
-                    WHERE revoked = 0 AND expires_at > ?
-                    """,
-                    (now_ts,),
-                )
-            conn.commit()
-            return cursor.rowcount
-        finally:
-            conn.close()
+                statement = statement.where(TokenRecordDB.user_id == user_id)
+            result = session.execute(statement)
+            session.commit()
+            # SQLite 的 UPDATE rowcount 为实际命中数（>=0）；防御 -1/None
+            return max(result.rowcount or 0, 0)
 
     def is_valid(self, token: str) -> bool:
         """仅做布尔判定，不更新使用次数。"""
@@ -360,13 +319,13 @@ class TokenManager:
         """
         count = 0
         now = self._now()
-        cutoff_ts = (now - timedelta(hours=max_age_hours)).timestamp()
+        cutoff = now - timedelta(hours=max_age_hours)
 
         if self._use_sqlite:
-            count = self._cleanup_expired_sqlite(cutoff_ts)
+            count = self._cleanup_expired_db(cutoff)
         else:
             for token, record in list(self._store.items()):
-                if record.expires_at.timestamp() < cutoff_ts:
+                if self._ensure_aware(record.expires_at) < cutoff:
                     self._store.pop(token, None)
                     count += 1
 
@@ -375,14 +334,10 @@ class TokenManager:
         )
         return count
 
-    def _cleanup_expired_sqlite(self, cutoff_ts: float) -> int:
-        """SQLite 模式的过期清理。"""
-        conn = self._get_connection()
-        try:
-            cursor = conn.execute(
-                "DELETE FROM tokens WHERE expires_at < ?", (cutoff_ts,)
-            )
-            conn.commit()
-            return cursor.rowcount
-        finally:
-            conn.close()
+    def _cleanup_expired_db(self, cutoff: datetime) -> int:
+        """数据库模式的过期清理。"""
+        with db.get_sync_session() as session:
+            statement = delete(TokenRecordDB).where(TokenRecordDB.expires_at < cutoff)
+            result = session.execute(statement)
+            session.commit()
+            return max(result.rowcount, 0)

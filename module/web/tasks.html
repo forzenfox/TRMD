@@ -498,7 +498,76 @@
                 </div>
                 <div>
                   <p class="text-sm text-slate-400">类型过滤</p>
-                  <p class="text-white mt-1" x-text="taskManager.formatFilterTypes(selectedTask.params?.filter_types)"></p>
+                  <p class="text-white mt-1" data-testid="detail-type-filter" x-text="taskManager.formatFilterTypes(selectedTask.params?.filter_types || selectedTask.params?.media_types)"></p>
+                </div>
+              </div>
+
+              <!-- 任务配置 -->
+              <div class="bg-slate-900/50 rounded-lg p-4 space-y-3">
+                <p class="text-xs text-slate-500 uppercase tracking-wider font-medium">任务配置</p>
+
+                <!-- 源频道（非上传任务） -->
+                <div x-show="selectedTask.task_type !== 'upload'">
+                  <p class="text-sm text-slate-400">源频道</p>
+                  <p class="text-white mt-1 text-sm break-all" data-testid="detail-source-identifier" x-text="selectedTask.params?.source_identifier || selectedTask.params?.chat_id || '-'"></p>
+                </div>
+
+                <!-- 目标频道 -->
+                <div x-show="['forward', 'upload', 'listen_forward'].includes(selectedTask.task_type)">
+                  <p class="text-sm text-slate-400">目标频道</p>
+                  <p class="text-white mt-1 text-sm break-all" data-testid="detail-target-identifier" x-text="selectedTask.params?.forward_target || selectedTask.params?.target_identifier || selectedTask.params?.chat_id || '-'"></p>
+                </div>
+
+                <!-- 范围详情 -->
+                <div x-show="selectedTask.params?.range_mode && selectedTask.task_type !== 'upload' && !selectedTask.task_type?.startsWith('listen_')">
+                  <p class="text-sm text-slate-400">范围详情</p>
+                  <p class="text-white mt-1 text-sm break-all" data-testid="detail-range-detail">
+                    <template x-if="selectedTask.params.range_mode === 'id_range'">
+                      <span x-text="`${selectedTask.params.min_id || '-'} — ${selectedTask.params.max_id || '-'}`"></span>
+                    </template>
+                    <template x-if="selectedTask.params.range_mode === 'date_range'">
+                      <span x-text="`${selectedTask.params.start_date || '-'} 至 ${selectedTask.params.end_date || '-'}`"></span>
+                    </template>
+                    <template x-if="selectedTask.params.range_mode === 'multiple_ids'">
+                      <span x-text="taskManager.formatIdList(selectedTask.params.message_list)"></span>
+                    </template>
+                    <template x-if="selectedTask.params.range_mode === 'recent'">
+                      <span x-text="`最近 ${selectedTask.params.recent_count || '-'} 条消息`"></span>
+                    </template>
+                    <template x-if="selectedTask.params.range_mode === 'all'">
+                      <span>处理频道全部历史消息</span>
+                    </template>
+                  </p>
+                </div>
+
+                <!-- 文件大小过滤 -->
+                <div x-show="selectedTask.params?.min_size || selectedTask.params?.max_size">
+                  <p class="text-sm text-slate-400">文件大小过滤</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-size-filter" x-text="taskManager.formatSizeFilter(selectedTask.params?.min_size, selectedTask.params?.max_size)"></p>
+                </div>
+
+                <!-- 预估大小 -->
+                <div x-show="selectedTask.params?.estimated_size || selectedTask.params?.size_human">
+                  <p class="text-sm text-slate-400">预估大小</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-estimated-size" x-text="`${selectedTask.params.size_human || taskManager.formatFileSize(selectedTask.params.estimated_size)} (${taskManager.formatFileSize(selectedTask.params.estimated_size)})`"></p>
+                </div>
+
+                <!-- 上传任务：文件数量 -->
+                <div x-show="selectedTask.task_type === 'upload'">
+                  <p class="text-sm text-slate-400">已选文件数量</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-file-count" x-text="`${(selectedTask.params?.file_paths || []).length} 个`"></p>
+                </div>
+
+                <!-- 上传任务：上传后删除本地文件 -->
+                <div x-show="selectedTask.task_type === 'upload'">
+                  <p class="text-sm text-slate-400">上传后删除本地文件</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-delete-after-upload" x-text="taskManager.formatBoolean(selectedTask.params?.delete_after_upload)"></p>
+                </div>
+
+                <!-- 监听任务：媒体类型 -->
+                <div x-show="selectedTask.task_type?.startsWith('listen_')">
+                  <p class="text-sm text-slate-400">监听媒体类型</p>
+                  <p class="text-white mt-1 text-sm" data-testid="detail-media-types" x-text="taskManager.formatFilterTypes(selectedTask.params?.media_types)"></p>
                 </div>
               </div>
 

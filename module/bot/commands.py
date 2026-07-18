@@ -16,6 +16,7 @@ import re
 from typing import Optional
 
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
+from pyrogram.types.bots_and_keyboards import InlineKeyboardButton, InlineKeyboardMarkup
 
 from module.bot.keyboard_manager import KeyboardManager
 from module.core.config_manager import ConfigManager
@@ -143,20 +144,25 @@ class BotCommands:
         # 生成 Token
         token = self._token_manager.generate(user_id=user_id)
         url = self.get_webui_link(token)
+        ttl_hours = self._token_manager._default_ttl // 3600
 
         # 构建回复文本
         text = (
             "🌐 WebUI 访问链接已生成\n\n"
-            f"🔗 链接：`{url}`\n\n"
-            "⏰ 链接有效期：1 小时\n"
+            "🔗 点击下方按钮即可打开 WebUI\n\n"
+            f"⏰ 链接有效期：{ttl_hours} 小时\n"
             "⚠️ 请勿将此链接分享给他人\n\n"
             f"{self.get_webui_guidance_text()}"
         )
 
-        # 发送消息
+        # 发送消息并附带可点击的打开 WebUI 按钮
         await client.send_message(
             chat_id=user_id,
             text=text,
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🌐 打开 WebUI", url=url)]]
+            ),
+            disable_web_page_preview=True,
         )
 
         logger.info("/web 命令已执行: user_id=%s", user_id)

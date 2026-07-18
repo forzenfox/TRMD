@@ -930,6 +930,47 @@ class TaskManager {
   }
 
   /**
+   * 格式化 ID 列表，支持截断显示
+   * @param {Array<number|string>} ids - ID 列表
+   * @param {number} maxCount - 最多直接展示的 ID 数量
+   */
+  formatIdList(ids, maxCount = 5) {
+    if (!ids || ids.length === 0) return "-";
+    const visible = ids.slice(0, maxCount);
+    let result = visible.join(", ");
+    if (ids.length > maxCount) {
+      result += ` ... 等 ${ids.length} 条`;
+    }
+    return result;
+  }
+
+  /**
+   * 格式化文件大小过滤
+   * @param {number|null} minSize - 最小字节数
+   * @param {number|null} maxSize - 最大字节数
+   */
+  formatSizeFilter(minSize, maxSize) {
+    const hasMin = minSize !== null && minSize !== undefined && minSize > 0;
+    const hasMax = maxSize !== null && maxSize !== undefined && maxSize > 0;
+    if (!hasMin && !hasMax) return null;
+    if (hasMin && hasMax) {
+      return `${this.formatFileSize(minSize)} — ${this.formatFileSize(maxSize)}`;
+    }
+    if (hasMin) {
+      return `最小 ${this.formatFileSize(minSize)}`;
+    }
+    return `最大 ${this.formatFileSize(maxSize)}`;
+  }
+
+  /**
+   * 格式化布尔值为中文文本
+   * @param {boolean} value - 布尔值
+   */
+  formatBoolean(value) {
+    return value ? "是" : "否";
+  }
+
+  /**
    * 格式化文件大小
    * @param {number} bytes - 字节数
    */

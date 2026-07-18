@@ -1,6 +1,7 @@
 # coding=UTF-8
 """任务相关 Pydantic 数据模型。"""
 
+from datetime import datetime
 from typing import Literal, Optional, Union
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
@@ -68,8 +69,8 @@ class TaskOut(BaseModel):
     task_type: TaskType
     status: TaskStatus
     progress: float = 0.0
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     message: Optional[str] = None
     success_count: int = 0
     failed_count: int = 0

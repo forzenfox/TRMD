@@ -7,7 +7,7 @@
 - date_range: 小范围精确遍历，大范围头尾抽样
 - all: 头尾各10条抽样估算
 
-设计文档参考: docs/module-design-cache-layer.md 第7节
+设计文档参考: docs/模块设计-缓存层.md 第7节
 """
 
 import logging

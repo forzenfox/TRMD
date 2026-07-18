@@ -8,6 +8,7 @@ import os
 import asyncio
 import logging
 import concurrent.futures
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, Any, Callable
 
@@ -375,7 +376,7 @@ class TaskExecutor:
         # 去重检查
         source_id = message.id
         for item in task.items:
-            if item.source_id == source_id:
+            if item.source_message_id == source_id:
                 return  # 已处理过
 
         # 创建 TaskItem 并持久化
@@ -498,7 +499,7 @@ class TaskExecutor:
         # 去重检查
         source_id = message.id
         for item in task.items:
-            if item.source_id == source_id:
+            if item.source_message_id == source_id:
                 return  # 已处理过
 
         # 创建 TaskItem 并持久化
@@ -538,7 +539,7 @@ class TaskExecutor:
                                 task_id,
                                 item_id,
                                 ItemStatus.SUCCESS,
-                                target_id=target_chat_id,
+                                target_chat_id=target_chat_id,
                                 uploaded_message_id=target_msg_id,
                             )
                             return
@@ -572,7 +573,7 @@ class TaskExecutor:
                             task_id,
                             item_id,
                             ItemStatus.SUCCESS,
-                            target_id=target_chat_id,
+                            target_chat_id=target_chat_id,
                             uploaded_message_id=target_msg_id,
                         )
                         return
@@ -588,7 +589,7 @@ class TaskExecutor:
                 task_id,
                 item_id,
                 ItemStatus.SUCCESS,
-                target_id=target_chat_id,
+                target_chat_id=target_chat_id,
                 uploaded_message_id=result_message.id,
             )
         except Exception as e:
@@ -647,8 +648,6 @@ class TaskExecutor:
 
         使用 client.get_chat_history() 遍历指定日期范围内的消息，收集其 ID。
         """
-        from datetime import timezone
-
         chat_id = task.chat_id
         start_date_str = task.params.get("start_date")
         end_date_str = task.params.get("end_date")
@@ -910,9 +909,19 @@ class TaskExecutor:
                     )
                     try:
                         message = await self._client.get_messages(
-                            chat_id, int(item.source_id)
+                            chat_id, item.source_message_id
                         )
                         if message and message.media:
+                            # 提取 media_group_id（相册模式分组所需）
+                            media_group_id = getattr(message, "media_group_id", None)
+                            if media_group_id:
+                                await self._task_manager.update_item_status(
+                                    task.task_id,
+                                    item.id,
+                                    item.status,
+                                    media_group_id=media_group_id,
+                                )
+
                             if filter_types:
                                 media_type = self._get_media_type(message)
                                 if media_type and media_type not in filter_types:
@@ -929,7 +938,7 @@ class TaskExecutor:
                             if self._should_use_repository() and file_unique_id:
                                 dedup = self._repository_manager.check_dedup(
                                     source_chat_id=chat_id,
-                                    source_message_id=item.source_id,
+                                    source_message_id=item.source_message_id,
                                     file_unique_id=file_unique_id,
                                 )
                                 if dedup:
@@ -1005,7 +1014,7 @@ class TaskExecutor:
 
         fixed_count = 0
         for item in pending_items:
-            msg_id = int(item.source_id) if item.source_id is not None else None
+            msg_id = item.source_message_id
             if msg_id not in processing_results:
                 # 这个消息ID没有被处理，标记为失败
                 await self._task_manager.update_item_status(
@@ -1084,18 +1093,39 @@ class TaskExecutor:
         delete_after = upload_config.get("delete", False)
         save_root = self._get_save_root()
 
-        # 按 source_message_id 分组（同组 = 源频道同一条消息）
-        groups: dict[int, list[TaskItem]] = {}
+        # 按 media_group_id 分组（相册）+ 按 source_id 分组（单文件消息）
+        groups: dict[str, list[TaskItem]] = {}
         for item in task.items:
             if item.status != ItemStatus.SUCCESS or not item.file_path:
                 continue
-            source_id = int(item.source_id) if item.source_id else 0
-            if source_id not in groups:
-                groups[source_id] = []
-            groups[source_id].append(item)
+
+            mg_id = item.media_group_id
+            # 空字符串视为 None
+            if mg_id is not None and mg_id.strip() == "":
+                mg_id = None
+
+            if mg_id:
+                # 有 media_group_id：按 media_group_id 分组（相册）
+                group_key = f"mg:{mg_id}"
+            else:
+                # 无 media_group_id：按 source_id 分组（单文件消息）
+                source_id = item.source_message_id or 0
+                group_key = f"sg:{source_id}"
+
+            if group_key not in groups:
+                groups[group_key] = []
+            groups[group_key].append(item)
 
         # 逐组处理
-        for source_message_id, items in groups.items():
+        for group_key, items in groups.items():
+            # 从 group_key 提取 media_group_id 和 source_message_id
+            if group_key.startswith("mg:"):
+                mg_id = group_key[3:]
+                source_message_id = items[0].source_message_id or 0
+            else:
+                mg_id = None
+                source_message_id = int(group_key[3:]) if len(group_key) > 3 else 0
+
             await self._ingest_downloaded_group(
                 task=task,
                 items=items,
@@ -1104,6 +1134,7 @@ class TaskExecutor:
                 source_message_id=source_message_id,
                 delete_after=delete_after,
                 save_root=save_root,
+                media_group_id=mg_id,
             )
 
     async def _ingest_downloaded_group(
@@ -1115,8 +1146,9 @@ class TaskExecutor:
         source_message_id: int,
         delete_after: bool,
         save_root: str,
+        media_group_id: Optional[str] = None,
     ) -> None:
-        """处理同一 source_message_id 的一组文件入库。
+        """处理同一组文件入库（相册按 media_group_id 分组，单文件按 source_id 分组）。
 
         流程：
         1. 计算每个文件的 SHA256，执行 L3 去重
@@ -1157,7 +1189,9 @@ class TaskExecutor:
             item_map[abs_file_path] = (item, file_sha256)
 
         if not file_infos:
-            log.info(f"下载入库: 组 source_message_id={source_message_id} 全部去重命中，跳过上传")
+            log.info(
+                f"下载入库: 组 source_message_id={source_message_id} 全部去重命中，跳过上传"
+            )
             return
 
         # 步骤2: 拆分为 album 组和 single 组
@@ -1177,6 +1211,7 @@ class TaskExecutor:
                     repo_chat_id=repo_chat_id,
                     source_message_id=source_message_id,
                     delete_after=delete_after,
+                    media_group_id=media_group_id,
                 )
             else:
                 # 单文件上传
@@ -1188,6 +1223,7 @@ class TaskExecutor:
                     repo_chat_id=repo_chat_id,
                     source_message_id=source_message_id,
                     delete_after=delete_after,
+                    media_group_id=media_group_id,
                 )
 
     async def _upload_album_group(
@@ -1199,11 +1235,12 @@ class TaskExecutor:
         repo_chat_id: str,
         source_message_id: int,
         delete_after: bool,
+        media_group_id: Optional[str] = None,
     ) -> None:
         """相册模式上传一组文件到仓库频道。"""
         log.info(
             f"下载入库: 相册模式上传 {len(file_infos)} 个文件 "
-            f"source_message_id={source_message_id}"
+            f"media_group_id={media_group_id} source_message_id={source_message_id}"
         )
 
         try:
@@ -1216,6 +1253,7 @@ class TaskExecutor:
             # 收集成功的消息和哈希
             success_messages = []
             success_hashes = []
+            success_source_ids = []
             for res in results:
                 if res.success and res.message:
                     item, sha256 = item_map.get(res.file_path, (None, None))
@@ -1230,8 +1268,12 @@ class TaskExecutor:
                         log.info(f"下载入库: 相册上传成功 file_path={res.file_path}")
                         success_messages.append(res.message)
                         success_hashes.append(sha256)
+                        # 相册中每个文件记录其独立的 source_message_id
+                        success_source_ids.append(item.source_message_id or 0)
                     else:
-                        log.warning(f"下载入库: 相册上传成功但找不到对应 item file_path={res.file_path}")
+                        log.warning(
+                            f"下载入库: 相册上传成功但找不到对应 item file_path={res.file_path}"
+                        )
                 else:
                     # 找到对应的 item 标记失败
                     item, _ = item_map.get(res.file_path, (None, None))
@@ -1250,7 +1292,7 @@ class TaskExecutor:
                 await self._repository_manager.on_upload_success_batch(
                     messages=success_messages,
                     source_chat_id=chat_id,
-                    source_message_id=source_message_id,
+                    source_message_ids=success_source_ids,
                     content_hashes=success_hashes,
                 )
 
@@ -1277,6 +1319,7 @@ class TaskExecutor:
         repo_chat_id: str,
         source_message_id: int,
         delete_after: bool,
+        media_group_id: Optional[str] = None,
     ) -> None:
         """单文件模式上传文件到仓库频道。"""
         for fi in file_infos:
@@ -1290,7 +1333,9 @@ class TaskExecutor:
                     file_path=fi.path,
                     chat_id=int(repo_chat_id),
                     source_chat_id=chat_id,
-                    source_message_id=source_message_id,
+                    source_message_id=item.source_message_id
+                    if item.source_message_id
+                    else source_message_id,
                     content_hash=sha256,
                     delete_after=delete_after,
                 )
@@ -1342,7 +1387,7 @@ class TaskExecutor:
         file_sha256 = self._repository_manager.compute_content_hash(abs_file_path)
         dedup = self._repository_manager.check_dedup(
             source_chat_id=chat_id,
-            source_message_id=item.source_id,
+            source_message_id=item.source_message_id,
             content_hash=file_sha256,
         )
 
@@ -1360,7 +1405,7 @@ class TaskExecutor:
                 file_path=abs_file_path,
                 chat_id=int(repo_chat_id),
                 source_chat_id=chat_id,
-                source_message_id=item.source_id,
+                source_message_id=item.source_message_id,
                 content_hash=file_sha256,
                 delete_after=delete_after,
             )
@@ -1421,7 +1466,7 @@ class TaskExecutor:
                     message = None
                     if filter_types:
                         message = await self._client.get_messages(
-                            chat_id, int(item.source_id)
+                            chat_id, item.source_message_id
                         )
                         if message and message.media:
                             media_type = self._get_media_type(message)
@@ -1443,13 +1488,13 @@ class TaskExecutor:
                         # 获取消息以提取 file_unique_id
                         if not message:
                             message = await self._client.get_messages(
-                                chat_id, int(item.source_id)
+                                chat_id, item.source_message_id
                             )
                         if message:
                             file_unique_id = self._extract_file_unique_id(message)
                             log.info(
                                 f"转发仓库中转: item={item.id}, "
-                                f"message_id={item.source_id}, "
+                                f"message_id={item.source_message_id}, "
                                 f"file_unique_id={file_unique_id}, "
                                 f"has_media={message.media is not None}, "
                                 f"media_type={type(message.media).__name__ if message.media else None}"
@@ -1457,14 +1502,14 @@ class TaskExecutor:
                         else:
                             log.warning(
                                 f"转发仓库中转: item={item.id}, "
-                                f"无法获取消息 message_id={item.source_id}"
+                                f"无法获取消息 message_id={item.source_message_id}"
                             )
 
                         if file_unique_id:
                             # L2 去重检查
                             dedup = self._repository_manager.check_dedup(
                                 source_chat_id=chat_id,
-                                source_message_id=item.source_id,
+                                source_message_id=item.source_message_id,
                                 file_unique_id=file_unique_id,
                             )
                             if dedup:
@@ -1481,7 +1526,7 @@ class TaskExecutor:
                                         task.task_id,
                                         item.id,
                                         ItemStatus.SUCCESS,
-                                        target_id=target_chat_id,
+                                        target_chat_id=target_chat_id,
                                         uploaded_message_id=target_msg_id,
                                     )
                                     return
@@ -1491,13 +1536,13 @@ class TaskExecutor:
                             repo_msg = await self._client.copy_message(
                                 chat_id=int(repo_chat_id),
                                 from_chat_id=chat_id,
-                                message_id=int(item.source_id),
+                                message_id=item.source_message_id,
                             )
                             # 写入仓库记录
                             await self._repository_manager.on_upload_success(
                                 message=repo_msg,
                                 source_chat_id=chat_id,
-                                source_message_id=item.source_id,
+                                source_message_id=item.source_message_id,
                             )
                             # 从仓库分发到目标频道
                             target_msg_id = (
@@ -1512,7 +1557,7 @@ class TaskExecutor:
                                     task.task_id,
                                     item.id,
                                     ItemStatus.SUCCESS,
-                                    target_id=target_chat_id,
+                                    target_chat_id=target_chat_id,
                                     uploaded_message_id=target_msg_id,
                                 )
                             else:
@@ -1520,13 +1565,13 @@ class TaskExecutor:
                                 result_message = await self._client.copy_message(
                                     chat_id=target_chat_id,
                                     from_chat_id=chat_id,
-                                    message_id=int(item.source_id),
+                                    message_id=item.source_message_id,
                                 )
                                 await self._task_manager.update_item_status(
                                     task.task_id,
                                     item.id,
                                     ItemStatus.SUCCESS,
-                                    target_id=target_chat_id,
+                                    target_chat_id=target_chat_id,
                                     uploaded_message_id=result_message.id,
                                 )
                             return
@@ -1535,19 +1580,19 @@ class TaskExecutor:
                     result_message = await self._client.copy_message(
                         chat_id=target_chat_id,
                         from_chat_id=chat_id,
-                        message_id=int(item.source_id),
+                        message_id=item.source_message_id,
                     )
                     await self._task_manager.update_item_status(
                         task.task_id,
                         item.id,
                         ItemStatus.SUCCESS,
-                        target_id=target_chat_id,
+                        target_chat_id=target_chat_id,
                         uploaded_message_id=result_message.id,
                     )
                 except Exception as e:
                     log.warning(
                         f"转发子任务失败: item={item.id}, "
-                        f"source_id={item.source_id}, error={e}"
+                        f"source_message_id={item.source_message_id}, error={e}"
                     )
                     await self._task_manager.update_item_status(
                         task.task_id,
@@ -1637,9 +1682,7 @@ class TaskExecutor:
                         file_infos=files,
                         chat_id=chat_id,
                         progress_callback=self._on_progress,
-                        delete_after=task.params.get(
-                            "delete_after_upload", True
-                        ),
+                        delete_after=task.params.get("delete_after_upload", True),
                     )
                     for i, res in enumerate(results):
                         item_id = f"{task.task_id}_file_{group_start_index + i}"
@@ -1701,7 +1744,7 @@ class TaskExecutor:
                                     task.task_id,
                                     item_id,
                                     ItemStatus.SUCCESS,
-                                    target_id=chat_id,
+                                    target_chat_id=chat_id,
                                     uploaded_message_id=target_msg_id,
                                     file_sha256=file_sha256,
                                 )
@@ -1718,7 +1761,7 @@ class TaskExecutor:
                             task.task_id,
                             item_id,
                             ItemStatus.SUCCESS,
-                            target_id=chat_id,
+                            target_chat_id=chat_id,
                         )
                     else:
                         await self._task_manager.update_item_status(
@@ -1782,16 +1825,17 @@ class TaskExecutor:
         item_id: str,
         message_id: Optional[int] = None,
         file_path: Optional[str] = None,
+        media_group_id: Optional[str] = None,
     ) -> TaskItem:
         """创建子任务项。"""
-        from datetime import datetime
-
-        now = datetime.now().isoformat()
+        now = datetime.now(timezone.utc)
         return TaskItem(
             id=item_id,
             task_id=task.task_id,
-            source_id=message_id or file_path,
+            source_message_id=message_id,
+            source_file_path=file_path,
             file_path=file_path,
+            media_group_id=media_group_id,
             created_at=now,
             updated_at=now,
         )

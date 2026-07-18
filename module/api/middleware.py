@@ -133,7 +133,7 @@ class SecurityHeadersMiddleware:
 class TrustedHostMiddleware:
     """限制Host头，防止Host头攻击。
 
-    设计依据: module-design-web-api.md §2.4 中间件栈(第174行)
+    设计依据: 模块设计-WebAPI.md §2.4 中间件栈(第174行)
 
     单用户场景下默认允许localhost和本地IP，可通过配置扩展Host列表。
     """

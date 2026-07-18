@@ -11,6 +11,10 @@ RepositorySync 模块 - 仓库频道定时同步器
 import asyncio
 import logging
 
+from sqlalchemy import func, select
+
+from module.core import db
+from module.core.models.repository import RepositoryFileRecord
 from module.core.repository_db import (
     RepositoryDB,
     RepositoryFile,
@@ -98,7 +102,7 @@ class RepositorySync:
             return 0
 
         # 获取上次同步的最大 message_id
-        last_message_id = self._get_last_synced_message_id()
+        last_message_id = await self._get_last_synced_message_id()
 
         new_count = 0
 
@@ -109,11 +113,11 @@ class RepositorySync:
                 reverse=False,
             ):
                 # 检查是否已存在
-                if self._exists_in_db(message):
+                if await self._exists_in_db(message):
                     continue
 
                 # 写入数据表
-                if self._insert_file_record(message):
+                if await self._insert_file_record(message):
                     new_count += 1
 
         except Exception as e:
@@ -126,20 +130,18 @@ class RepositorySync:
 
         return new_count
 
-    def _get_last_synced_message_id(self) -> int | None:
+    async def _get_last_synced_message_id(self) -> int | None:
         """获取上次同步的最大 repository_message_id。"""
         try:
-            with self._db._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT MAX(repository_message_id) FROM repository_files"
-                )
-                row = cursor.fetchone()
-                return row[0] if row and row[0] else None
+            async with db.get_session() as session:
+                stmt = select(func.max(RepositoryFileRecord.repository_message_id))
+                result = await session.execute(stmt)
+                return result.scalar()
         except Exception as e:
             logger.error(f"获取上次同步位置失败: {e}")
             return None
 
-    def _exists_in_db(self, message) -> bool:
+    async def _exists_in_db(self, message) -> bool:
         """
         检查消息是否已存在于数据库。
 
@@ -152,17 +154,17 @@ class RepositorySync:
             是否已存在
         """
         try:
-            with self._db._get_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT 1 FROM repository_files "
-                    "WHERE repository_chat_id = ? AND repository_message_id = ?",
-                    (message.chat.id, message.id),
+            async with db.get_session() as session:
+                stmt = select(RepositoryFileRecord).where(
+                    RepositoryFileRecord.repository_chat_id == message.chat.id,
+                    RepositoryFileRecord.repository_message_id == message.id,
                 )
-                return cursor.fetchone() is not None
+                result = await session.execute(stmt)
+                return result.scalars().first() is not None
         except Exception:
             return False
 
-    def _insert_file_record(self, message) -> bool:
+    async def _insert_file_record(self, message) -> bool:
         """
         从消息中提取文件信息并写入数据库。
 
@@ -212,7 +214,7 @@ class RepositorySync:
                 updated_at=None,
                 status="active",
             )
-            self._db.insert_file_record(file_record)
+            await self._db.insert_file_record(file_record)
             return True
         except Exception as e:
             logger.error(f"同步写入记录失败: {e}")

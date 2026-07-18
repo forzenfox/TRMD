@@ -17,6 +17,7 @@ import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import pytest_asyncio
 
 from module.core.task_executor import TaskExecutor
 from module.core.task_manager import (
@@ -38,10 +39,15 @@ def db_path():
         os.unlink(f.name)
 
 
-@pytest.fixture
-def task_manager(db_path):
+@pytest_asyncio.fixture
+async def task_manager(db_path):
     """创建 TaskManager 实例。"""
-    return TaskManager(db_path=db_path, max_concurrent_tasks=2)
+    from module.core import db
+
+    await db.init_db(db_path)
+    tm = TaskManager(max_concurrent_tasks=2)
+    yield tm
+    await db.close_db()
 
 
 @pytest.fixture

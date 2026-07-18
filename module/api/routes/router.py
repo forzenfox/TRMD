@@ -2,7 +2,7 @@
 """FastAPI 路由注册。
 
 将所有路由模块组合为统一的 APIRouter。
-设计依据: module-design-web-api.md §2.3 路由组织
+设计依据: 模块设计-WebAPI.md §2.3 路由组织
 """
 
 from fastapi import APIRouter

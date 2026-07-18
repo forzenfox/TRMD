@@ -20,9 +20,13 @@ from module.core.repository_sync import RepositorySync
 @pytest.fixture
 def repo_db(tmp_path):
     """提供使用临时数据库的 RepositoryDB 实例。"""
+    from module.core import db as db_module
+
     db_path = str(tmp_path / "test_sync.db")
-    db = RepositoryDB(db_path=db_path)
+    db_module.init_sync_db(db_path)
+    db = RepositoryDB()
     yield db
+    db_module.close_sync_db()
 
 
 @pytest.fixture

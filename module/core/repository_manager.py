@@ -196,7 +196,6 @@ class RepositoryManager:
             file_unique_id=media.file_unique_id,
             source_chat_id=source_chat_id,
             source_message_id=source_message_id,
-            source_link=None,
             created_at=None,
         )
 
@@ -215,7 +214,8 @@ class RepositoryManager:
         self,
         messages: list,
         source_chat_id: int,
-        source_message_id: int,
+        source_message_ids: list[int] | None = None,
+        source_message_id: int | None = None,
         content_hashes: list[str] | None = None,
     ) -> None:
         """批量写入仓库记录（媒体组场景）。
@@ -226,17 +226,27 @@ class RepositoryManager:
         Args:
             messages: Pyrogram Message 列表（媒体组返回的消息列表）
             source_chat_id: 源频道 ID
-            source_message_id: 源消息 ID（同组文件共享）
+            source_message_ids: 每条消息对应的源消息 ID 列表（与 messages 一一对应）
+            source_message_id: 源消息 ID（同组文件共享，向后兼容，优先级低于 source_message_ids）
             content_hashes: 可选，与 messages 一一对应的内容哈希列表
         """
         for i, message in enumerate(messages):
             hash_val = (
-                content_hashes[i] if content_hashes and i < len(content_hashes) else None
+                content_hashes[i]
+                if content_hashes and i < len(content_hashes)
+                else None
             )
+            # 优先使用 source_message_ids（每个文件独立的来源），否则回退到 source_message_id
+            if source_message_ids and i < len(source_message_ids):
+                msg_id = source_message_ids[i]
+            elif source_message_id is not None:
+                msg_id = source_message_id
+            else:
+                msg_id = 0
             await self.on_upload_success(
                 message=message,
                 source_chat_id=source_chat_id,
-                source_message_id=source_message_id,
+                source_message_id=msg_id,
                 content_hash=hash_val,
             )
 

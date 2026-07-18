@@ -34,9 +34,13 @@ from module.core.repository_manager import RepositoryManager
 @pytest.fixture
 def repo_db(tmp_path):
     """提供使用临时数据库的 RepositoryDB 实例。"""
+    from module.core import db as db_module
+
     db_path = str(tmp_path / "test_repo_upload.db")
-    db = RepositoryDB(db_path=db_path)
+    db_module.init_sync_db(db_path)
+    db = RepositoryDB()
     yield db
+    db_module.close_sync_db()
 
 
 @pytest.fixture
@@ -305,7 +309,10 @@ class TestFileManagerRepositoryIntegration:
             "auto_sync_enabled": False,
         }
         repo_db_path = str(tmp_path / "test_degradation.db")
-        repo_db = RepositoryDB(db_path=repo_db_path)
+        from module.core import db as db_module
+
+        db_module.init_sync_db(repo_db_path)
+        repo_db = RepositoryDB()
         repo_mgr = RepositoryManager(repository_db=repo_db, config_manager=bad_cm)
         file_manager.repository_manager = repo_mgr
         test_file = tmp_path / "test.jpg"

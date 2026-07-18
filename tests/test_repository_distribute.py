@@ -81,9 +81,13 @@ class MockMessage:
 @pytest.fixture
 def repo_db(tmp_path):
     """Provide RepositoryDB with temporary database."""
+    from module.core import db as db_module
+
     db_path = str(tmp_path / "test_distribute.db")
-    db = RepositoryDB(db_path=db_path)
+    db_module.init_sync_db(db_path)
+    db = RepositoryDB()
     yield db
+    db_module.close_sync_db()
 
 
 @pytest.fixture
@@ -162,7 +166,6 @@ def _seed_repository(
         file_unique_id=file_unique_id,
         source_chat_id=source_chat_id,
         source_message_id=source_message_id,
-        source_link=None,
         created_at=None,
     )
     repo_db.insert_source_mapping(source)

@@ -4,12 +4,15 @@
 import asyncio
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
 
+from module.core import db
 from module.core.cache_manager import CacheManager, CacheError
+from sqlalchemy import select, text
 
 
 # ---------------------------------------------------------------------------
@@ -58,10 +61,14 @@ def _mock_message_stats():
 @pytest_asyncio.fixture
 async def cache():
     """每次测试使用独立的临时数据库"""
+    from module.core import db
+
     db_path = _make_temp_db()
-    mgr = CacheManager(db_path=db_path)
+    await db.init_db(db_path)
+    mgr = CacheManager()
     yield mgr
     await mgr.close()
+    await db.close_db()
     # 清理临时文件
     if os.path.exists(db_path):
         os.unlink(db_path)
@@ -116,13 +123,13 @@ async def test_get_chat_list_expired_calls_fetcher(cache: CacheManager):
     await cache.get_chat_list(fetcher=fetcher1)
 
     # 手动将过期时间设置为过去
-    now = int(asyncio.get_event_loop().time())
-    with cache._get_connection() as conn:
-        conn.execute(
-            "UPDATE cache_entries SET expires_at = ?",
-            (now - 1,),
+    now = datetime.now(timezone.utc)
+    async with db.get_session() as session:
+        await session.execute(
+            text("UPDATE cache_entries SET expires_at = :exp"),
+            {"exp": now - timedelta(seconds=1)},
         )
-        conn.commit()
+        await session.commit()
 
     # 过期后再次获取，应调用 fetcher
     new_data = [{"id": -1003333, "title": "Channel C", "type": "channel"}]
@@ -243,13 +250,13 @@ async def test_clear_expired(cache: CacheManager):
     await cache.get_chat_list(fetcher=fetcher)
 
     # 手动设置过期
-    now = int(asyncio.get_event_loop().time())
-    with cache._get_connection() as conn:
-        conn.execute(
-            "UPDATE cache_entries SET expires_at = ?",
-            (now - 1,),
+    now = datetime.now(timezone.utc)
+    async with db.get_session() as session:
+        await session.execute(
+            text("UPDATE cache_entries SET expires_at = :exp"),
+            {"exp": now - timedelta(seconds=1)},
         )
-        conn.commit()
+        await session.commit()
 
     deleted = await cache.clear_expired()
     assert deleted >= 1
@@ -271,9 +278,11 @@ async def test_db_corruption_fallback(cache: CacheManager):
     await cache.get_chat_list(fetcher=fetcher1)
 
     # 损坏 payload 数据
-    with cache._get_connection() as conn:
-        conn.execute("UPDATE cache_entries SET payload = ?", (b"corrupted_data",))
-        conn.commit()
+    async with db.get_session() as session:
+        await session.execute(
+            text("UPDATE cache_entries SET payload = CAST('broken' AS BLOB)")
+        )
+        await session.commit()
 
     # 再次获取应回退到 fetcher
     fetcher2 = AsyncMock(return_value=[{"id": -1009999, "title": "Recovered"}])
@@ -299,9 +308,12 @@ async def test_fetcher_exception_no_cache_write(cache: CacheManager):
         await cache.get_chat_list(fetcher=fetcher)
 
     # 缓存中不应有条目
-    with cache._get_connection() as conn:
-        cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
-        count = cursor.fetchone()[0]
+    async with db.get_session() as session:
+        from sqlalchemy import func
+
+        from module.core.models.cache import CacheEntryRecord
+
+        count = await session.scalar(select(func.count()).select_from(CacheEntryRecord))
     assert count == 0
 
 
@@ -369,9 +381,12 @@ async def test_lru_eviction_on_max_entries(cache: CacheManager):
         fetcher = AsyncMock(return_value=[{"id": chat_id}])
         await cache.get_chat_list(fetcher=fetcher)
 
-    with cache._get_connection() as conn:
-        cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
-        count = cursor.fetchone()[0]
+    async with db.get_session() as session:
+        from sqlalchemy import func
+
+        from module.core.models.cache import CacheEntryRecord
+
+        count = await session.scalar(select(func.count()).select_from(CacheEntryRecord))
 
     assert count <= cache.MAX_ENTRIES
 
@@ -450,9 +465,12 @@ async def test_clear_all(cache: CacheManager):
     deleted = await cache.clear_all()
     assert deleted >= 1
 
-    with cache._get_connection() as conn:
-        cursor = conn.execute("SELECT COUNT(*) FROM cache_entries")
-        count = cursor.fetchone()[0]
+    async with db.get_session() as session:
+        from sqlalchemy import func
+
+        from module.core.models.cache import CacheEntryRecord
+
+        count = await session.scalar(select(func.count()).select_from(CacheEntryRecord))
     assert count == 0
 
 
@@ -472,15 +490,21 @@ async def test_message_stats_ttl(cache: CacheManager):
         estimator=estimator,
     )
 
-    int(asyncio.get_event_loop().time())
-    with cache._get_connection() as conn:
-        cursor = conn.execute(
-            "SELECT expires_at - created_at FROM cache_entries WHERE cache_type = 'message_stats'"
+    async with db.get_session() as session:
+        from module.core.models.cache import CacheEntryRecord
+
+        # SQLite 不支持 datetime 列直接相减；改为分别读取后在 Python 中相减。
+        result = await session.execute(
+            select(CacheEntryRecord.expires_at, CacheEntryRecord.created_at).where(
+                CacheEntryRecord.cache_type == "message_stats"
+            )
         )
-        row = cursor.fetchone()
+        row = result.first()
 
     assert row is not None
-    assert row[0] == 600  # 10 分钟 = 600 秒
+    expires_at, created_at = row
+    delta = expires_at - created_at
+    assert delta.total_seconds() == 600  # 10 分钟 = 600 秒
 
 
 # ---------------------------------------------------------------------------
@@ -499,15 +523,21 @@ async def test_message_list_ttl(cache: CacheManager):
         fetcher=fetcher,
     )
 
-    int(asyncio.get_event_loop().time())
-    with cache._get_connection() as conn:
-        cursor = conn.execute(
-            "SELECT expires_at - created_at FROM cache_entries WHERE cache_type = 'message_list'"
+    async with db.get_session() as session:
+        from module.core.models.cache import CacheEntryRecord
+
+        # SQLite 不支持 datetime 列直接相减；改为分别读取后在 Python 中相减。
+        result = await session.execute(
+            select(CacheEntryRecord.expires_at, CacheEntryRecord.created_at).where(
+                CacheEntryRecord.cache_type == "message_list"
+            )
         )
-        row = cursor.fetchone()
+        row = result.first()
 
     assert row is not None
-    assert row[0] == 1800  # 30 分钟 = 1800 秒
+    expires_at, created_at = row
+    delta = expires_at - created_at
+    assert delta.total_seconds() == 1800  # 30 分钟 = 1800 秒
 
 
 # ---------------------------------------------------------------------------
@@ -522,14 +552,21 @@ async def test_chat_list_ttl(cache: CacheManager):
 
     await cache.get_chat_list(fetcher=fetcher)
 
-    with cache._get_connection() as conn:
-        cursor = conn.execute(
-            "SELECT expires_at - created_at FROM cache_entries WHERE cache_type = 'chat_list'"
+    async with db.get_session() as session:
+        from module.core.models.cache import CacheEntryRecord
+
+        # SQLite 不支持 datetime 列直接相减；改为分别读取后在 Python 中相减。
+        result = await session.execute(
+            select(CacheEntryRecord.expires_at, CacheEntryRecord.created_at).where(
+                CacheEntryRecord.cache_type == "chat_list"
+            )
         )
-        row = cursor.fetchone()
+        row = result.first()
 
     assert row is not None
-    assert row[0] == 3600  # 1 小时 = 3600 秒
+    expires_at, created_at = row
+    delta = expires_at - created_at
+    assert delta.total_seconds() == 3600  # 1 小时 = 3600 秒
 
 
 # ---------------------------------------------------------------------------

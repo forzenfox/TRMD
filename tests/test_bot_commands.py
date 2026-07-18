@@ -44,8 +44,8 @@ def mock_message():
 
 @pytest.fixture
 def token_manager():
-    """提供内存模式的 TokenManager。"""
-    return TokenManager(db_path=None, default_ttl=3600)
+    """提供内存模式的 TokenManager，默认 TTL 与生产环境一致为 12 小时。"""
+    return TokenManager(default_ttl=12 * 3600)
 
 
 @pytest.fixture
@@ -182,7 +182,7 @@ class TestCmdWeb:
 
     @pytest.mark.asyncio
     async def test_web_sends_message(self, bot_commands, mock_client, mock_message):
-        """cmd_web 应向用户发送包含链接的消息。"""
+        """cmd_web 应向用户发送包含链接的消息，且有效期文案与 TTL 一致。"""
         mock_message.text = "/web"
         await bot_commands.cmd_web(mock_client, mock_message)
 
@@ -191,6 +191,28 @@ class TestCmdWeb:
         assert "chat_id" in call_kwargs
         assert "text" in call_kwargs
         assert "http://localhost:8000" in call_kwargs["text"]
+
+        # 验证有效期文案与 TokenManager 的 default_ttl 一致
+        ttl_hours = bot_commands._token_manager._default_ttl // 3600
+        assert f"{ttl_hours} 小时" in call_kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_web_sends_clickable_button(
+        self, bot_commands, mock_client, mock_message
+    ):
+        """cmd_web 应发送可点击的内联按钮，URL 带 Token。"""
+        mock_message.text = "/web"
+        result = await bot_commands.cmd_web(mock_client, mock_message)
+
+        call_kwargs = mock_client.send_message.call_args[1]
+        reply_markup = call_kwargs.get("reply_markup")
+        assert reply_markup is not None, "应包含 reply_markup"
+
+        # 提取第一行第一个按钮
+        button = reply_markup.inline_keyboard[0][0]
+        assert button.text == "🌐 打开 WebUI"
+        assert button.url == result["url"]
+        assert "token=" in button.url
 
     @pytest.mark.asyncio
     async def test_web_token_is_valid(self, bot_commands, mock_client, mock_message):

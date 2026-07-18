@@ -1860,7 +1860,6 @@ class TelegramRestrictedMediaDownloader(Bot):
                     file_unique_id=existing.file_unique_id,
                     source_chat_id=source_chat_id,
                     source_message_id=source_message_id,
-                    source_link=None,
                     created_at=None,
                 )
                 try:
@@ -1908,7 +1907,6 @@ class TelegramRestrictedMediaDownloader(Bot):
                         file_unique_id=existing.file_unique_id,
                         source_chat_id=source_chat_id,
                         source_message_id=source_message_id,
-                        source_link=None,
                         created_at=None,
                     )
                     try:
@@ -2160,7 +2158,13 @@ class TelegramRestrictedMediaDownloader(Bot):
 
                 # 通知开始下载
                 if progress_callback:
-                    await progress_callback(task_id, item_id, ItemStatus.RUNNING)
+                    media_group_id = getattr(message, "media_group_id", None)
+                    await progress_callback(
+                        task_id,
+                        item_id,
+                        ItemStatus.RUNNING,
+                        media_group_id=media_group_id,
+                    )
 
                 # 获取保存路径
                 temp_file_path = self.app.get_temp_file_path(message, valid_dtype)
@@ -2214,7 +2218,11 @@ class TelegramRestrictedMediaDownloader(Bot):
 
                 if progress_callback:
                     await progress_callback(
-                        task_id, item_id, ItemStatus.SUCCESS, file_path=final_path
+                        task_id,
+                        item_id,
+                        ItemStatus.SUCCESS,
+                        file_path=final_path,
+                        media_group_id=getattr(message, "media_group_id", None),
                     )
 
             except Exception as e:
@@ -2629,9 +2637,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                 },
             }
         except BotMethodInvalid as e:
-            res: bool = safe_delete(
-                file_p_d=self.app.work_directory
-            )
+            res: bool = safe_delete(file_p_d=self.app.work_directory)
             error_msg: str = (
                 "已删除旧会话文件" if res else "请手动删除软件目录下的sessions文件夹"
             )
@@ -2862,9 +2868,7 @@ class TelegramRestrictedMediaDownloader(Bot):
             log.exception(f'运行出错,{_t(KeyWord.REASON)}:"{e}"')
         except (SessionRevoked, AuthKeyUnregistered, SessionExpired, Unauthorized) as e:
             log.error(f'登录时遇到错误,{_t(KeyWord.REASON)}:"{e}"')
-            res: bool = safe_delete(
-                file_p_d=self.app.work_directory
-            )
+            res: bool = safe_delete(file_p_d=self.app.work_directory)
             record_error: bool = True
             if res:
                 log.warning("账号已失效,已删除旧会话文件,请重启软件。")

@@ -49,7 +49,7 @@ def mock_message():
 @pytest.fixture
 def token_manager():
     """提供内存模式的 TokenManager。"""
-    return TokenManager(db_path=None, default_ttl=3600)
+    return TokenManager(default_ttl=3600)
 
 
 @pytest.fixture

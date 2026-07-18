@@ -188,7 +188,7 @@ async def estimate_messages(
 
         try:
             result = await cache_manager.get_message_stats(
-                chat_id=str(chat_id),
+                chat_id=chat_id,
                 params=params,
                 estimator=fetch_estimate,
             )
