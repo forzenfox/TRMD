@@ -6,7 +6,7 @@
 > **更新日期**: 2026-07-03  
 > **作者**: AI Assistant  
 > **状态**: 已发布  
-> **对应主文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)
+> **对应主文档**: [交互增强设计.md](./交互增强设计.md)
 
 ---
 
@@ -1252,8 +1252,8 @@ module/api/app.py
 
 ### 11.2 参考文档
 
-- [private-chat-download-by-username-prd.md](./private-chat-download-by-username-prd.md)
-- [interaction-enhancement-design.md](./interaction-enhancement-design.md)
+- [私聊按用户名下载-PRD.md](./私聊按用户名下载-PRD.md)
+- [交互增强设计.md](./交互增强设计.md)
 - [FastAPI 官方文档](https://fastapi.tiangolo.com/)
 - [Pydantic 官方文档](https://docs.pydantic.dev/)
 

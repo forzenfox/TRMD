@@ -935,9 +935,9 @@ repository:
 | 文档 | 路径 | 关联说明 |
 |------|------|---------|
 | 私聊对话文件下载能力分析 | `.trae/documents/私聊对话文件下载能力分析.md` | 技术可行性前置研究 |
-| 任务管理器模块设计 | `docs/module-design-task-manager.md` | TaskManager/Task架构参考 |
-| 交互增强设计 | `docs/interaction-enhancement-design.md` | Bot/WebUI交互体系参考 |
-| 文件管理器模块设计 | `docs/module-design-file-manager.md` | 上传/转发降级链参考 |
+| 任务管理器模块设计 | `docs/模块设计-任务管理器.md` | TaskManager/Task架构参考 |
+| 交互增强设计 | `docs/交互增强设计.md` | Bot/WebUI交互体系参考 |
+| 文件管理器模块设计 | `docs/模块设计-文件管理器.md` | 上传/转发降级链参考 |
 | 仓库管理器实现 | `module/core/repository_manager.py` | 三级去重/分发降级实现 |
 | 现有API路由 | `module/api/routes/router.py` | 路由注册参考 |
 | WebUI前端 | `module/web/` | 前端代码参考 |

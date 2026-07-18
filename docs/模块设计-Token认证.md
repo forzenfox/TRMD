@@ -1,8 +1,8 @@
 # Telegram_Restricted_Media_Downloader 模块设计文档 — Token 认证子系统
 
-> **文档名称**: module-design-token-auth  
+> **文档名称**: 模块设计-Token认证
 > **所属项目**: Telegram_Restricted_Media_Downloader  
-> **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)  
+> **关联文档**: [交互增强设计.md](./交互增强设计.md)  
 > **版本**: v1.0  
 > **创建日期**: 2026-06-18  
 > **作者**: AI Assistant  

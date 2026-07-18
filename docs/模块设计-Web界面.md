@@ -6,7 +6,7 @@
 > **更新日期**: 2026-07-03
 > **作者**: SOLO
 > **状态**: 已更新
-> **关联文档**: [interaction-enhancement-design.md](./interaction-enhancement-design.md)、[private-chat-download-by-username-prd.md](./private-chat-download-by-username-prd.md)
+> **关联文档**: [交互增强设计.md](./交互增强设计.md)、[私聊按用户名下载-PRD.md](./私聊按用户名下载-PRD.md)
 
 ---
 
@@ -14,7 +14,7 @@
 
 | 版本 | 日期 | 变更内容 | 状态 |
 |------|------|----------|------|
-| v1.3 | 2026-07-03 | 同步 interaction-enhancement-design v7.0: Monitor 页面合并至 Dashboard，移除独立 Monitor 页面设计；移除 /monitor 路由；移除 monitor.js 页面脚本；清理相关 x-data、轮询配置、API 封装与测试项 | 已更新 |
+| v1.3 | 2026-07-03 | 同步 交互增强设计 v7.0: Monitor 页面合并至 Dashboard，移除独立 Monitor 页面设计；移除 /monitor 路由；移除 monitor.js 页面脚本；清理相关 x-data、轮询配置、API 封装与测试项 | 已更新 |
 | v1.2 | 2026-07-03 | 同步 PRD v2.3: 支持 username/chat_id/t.me 解析;新增解析按钮与对话信息卡片;消息范围增加最近N条;新增媒体类型+文件大小过滤;新增监听任务创建表单;新增仓库备份开关;全面采用 REST 轮询替代 WebSocket;更新 x-data 字段与测试策略 | 已更新 |
 | v1.1 | 2026-06-21 | 初始 WebUI 模块设计 | 已归档 |
 
@@ -328,7 +328,7 @@ class Poller {
 | **系统监控** | `GET /api/monitor/stats` | `{cpu, memory, disk, network_speed}` | 更新 `$store.app.system` 与 Dashboard 图表（Monitor 页面已合并至 Dashboard） | 5 秒 |
 | **日志流** | `GET /api/logs?since=...` | `[{level, timestamp, source, message}]` | 追加到 `$store.app.logs`，按级别过滤后渲染 | 2 秒 |
 
-> **注意**：根据 interaction-enhancement-design v7.0 设计变更，日志查看功能已移除。`GET /api/logs` 端点尚未实现（⏳ 待实现），如需恢复该功能需在后续版本中重新设计。当前任务相关日志仅在 Tasks 页面的任务详情抽屉中查看。
+> **注意**：根据 交互增强设计 v7.0 设计变更，日志查看功能已移除。`GET /api/logs` 端点尚未实现（⏳ 待实现），如需恢复该功能需在后续版本中重新设计。当前任务相关日志仅在 Tasks 页面的任务详情抽屉中查看。
 
 **轮询控制原则**：
 
@@ -573,7 +573,7 @@ class Poller {
 
 ### 5.6 Monitor 页面（已废弃）
 
-> **设计变更说明**：Monitor 页面已合并至 Dashboard（见 [interaction-enhancement-design.md](./interaction-enhancement-design.md) v7.0 设计变更），不再保留独立页面。原 Monitor 页面的路由 `/monitor` 已废弃，监控统计数据通过 Dashboard 页面的 REST 轮询获取（`GET /api/monitor/stats`，默认每 5 秒拉取一次），在 Dashboard 的"实时速度"区域以折线图展示。日志查看功能已移除，任务相关日志在 Tasks 页面的任务详情抽屉中查看。
+> **设计变更说明**：Monitor 页面已合并至 Dashboard（见 [交互增强设计.md](./交互增强设计.md) v7.0 设计变更），不再保留独立页面。原 Monitor 页面的路由 `/monitor` 已废弃，监控统计数据通过 Dashboard 页面的 REST 轮询获取（`GET /api/monitor/stats`，默认每 5 秒拉取一次），在 Dashboard 的"实时速度"区域以折线图展示。日志查看功能已移除，任务相关日志在 Tasks 页面的任务详情抽屉中查看。
 
 ---
 

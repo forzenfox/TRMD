@@ -6,7 +6,7 @@
 > **创建日期**: 2026-06-18  
 > **更新日期**: 2026-07-03  
 > **状态**: 已更新（待实施）  
-> **关联文档**: `docs/interaction-enhancement-design.md`、`docs/private-chat-download-by-username-prd.md`
+> **关联文档**: `docs/交互增强设计.md`、`docs/私聊按用户名下载-PRD.md`
 
 ---
 
