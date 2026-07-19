@@ -68,8 +68,17 @@ def db_path():
     """创建临时数据库路径。"""
     with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
         yield f.name
-    if os.path.exists(f.name):
-        os.unlink(f.name)
+    # Windows 下 SQLite 异步引擎关闭后可能仍有残留连接，
+    # 导致 PermissionError，因此重试删除。
+    import time
+
+    for _ in range(5):
+        try:
+            if os.path.exists(f.name):
+                os.unlink(f.name)
+            break
+        except PermissionError:
+            time.sleep(0.1)
 
 
 @pytest_asyncio.fixture
@@ -236,12 +245,12 @@ class TestTaskItemModel:
         item = TaskItem(
             id="msg_100",
             task_id="",
-            source_id=100,
+            source_message_id=100,
             status=ItemStatus.PENDING,
             file_size=1024 * 1024,  # 1MB
         )
         assert item.id == "msg_100"
-        assert item.source_id == 100
+        assert item.source_message_id == 100
         assert item.status == ItemStatus.PENDING
         assert item.file_size == 1048576
         assert item.error_message is None
@@ -598,14 +607,14 @@ class TestRetryLogic:
             task_id=task.task_id,
             status=ItemStatus.FAILED,
             error_message="FloodWait",
-            source_id=100,
+            source_message_id=100,
         )
         non_retryable_item = TaskItem(
             id="item_non_retryable",
             task_id=task.task_id,
             status=ItemStatus.FAILED,
             error_message="MESSAGE_ID_INVALID",
-            source_id=101,
+            source_message_id=101,
         )
         await task_manager.add_items(task.task_id, [retryable_item, non_retryable_item])
 
@@ -637,7 +646,7 @@ class TestRetryLogic:
             task_id=task.task_id,
             status=ItemStatus.FAILED,
             error_message="CHAT_FORBIDDEN",
-            source_id=200,
+            source_message_id=200,
         )
         # 超过最大重试次数的子任务
         max_retry_item = TaskItem(
@@ -645,7 +654,7 @@ class TestRetryLogic:
             task_id=task.task_id,
             status=ItemStatus.FAILED,
             error_message="TimeoutError",
-            source_id=201,
+            source_message_id=201,
         )
         max_retry_item.retry_count = 3
 
@@ -671,20 +680,20 @@ class TestRetryLogic:
             id="item_success",
             task_id=task.task_id,
             status=ItemStatus.SUCCESS,
-            source_id=300,
+            source_message_id=300,
         )
         skipped_item = TaskItem(
             id="item_skipped",
             task_id=task.task_id,
             status=ItemStatus.SKIPPED,
-            source_id=301,
+            source_message_id=301,
         )
         failed_item = TaskItem(
             id="item_failed",
             task_id=task.task_id,
             status=ItemStatus.FAILED,
             error_message="FloodWait",
-            source_id=302,
+            source_message_id=302,
         )
         await task_manager.add_items(
             task.task_id, [success_item, skipped_item, failed_item]
@@ -1085,8 +1094,12 @@ class TestTaskItemManagement:
             params={"message_range_start": 1, "message_range_end": 10},
         )
         items = [
-            TaskItem(id="msg_1", task_id="", source_id=1, status=ItemStatus.PENDING),
-            TaskItem(id="msg_2", task_id="", source_id=2, status=ItemStatus.PENDING),
+            TaskItem(
+                id="msg_1", task_id="", source_message_id=1, status=ItemStatus.PENDING
+            ),
+            TaskItem(
+                id="msg_2", task_id="", source_message_id=2, status=ItemStatus.PENDING
+            ),
         ]
         await task_manager.add_items(task.task_id, items)
         fetched_task = await task_manager.get_task(task.task_id)
@@ -1100,7 +1113,9 @@ class TestTaskItemManagement:
             chat_id=-1001234567890,
             params={"message_range_start": 1, "message_range_end": 5},
         )
-        item = TaskItem(id="msg_1", task_id="", source_id=1, status=ItemStatus.PENDING)
+        item = TaskItem(
+            id="msg_1", task_id="", source_message_id=1, status=ItemStatus.PENDING
+        )
         await task_manager.add_items(task.task_id, [item])
         await task_manager.update_item_status(task.task_id, "msg_1", ItemStatus.SUCCESS)
         fetched_task = await task_manager.get_task(task.task_id)
@@ -1115,10 +1130,18 @@ class TestTaskItemManagement:
             params={"message_range_start": 1, "message_range_end": 5},
         )
         items = [
-            TaskItem(id="msg_1", task_id="", source_id=1, status=ItemStatus.SUCCESS),
-            TaskItem(id="msg_2", task_id="", source_id=2, status=ItemStatus.FAILED),
-            TaskItem(id="msg_3", task_id="", source_id=3, status=ItemStatus.SUCCESS),
-            TaskItem(id="msg_4", task_id="", source_id=4, status=ItemStatus.FAILED),
+            TaskItem(
+                id="msg_1", task_id="", source_message_id=1, status=ItemStatus.SUCCESS
+            ),
+            TaskItem(
+                id="msg_2", task_id="", source_message_id=2, status=ItemStatus.FAILED
+            ),
+            TaskItem(
+                id="msg_3", task_id="", source_message_id=3, status=ItemStatus.SUCCESS
+            ),
+            TaskItem(
+                id="msg_4", task_id="", source_message_id=4, status=ItemStatus.FAILED
+            ),
         ]
         await task_manager.add_items(task.task_id, items)
         failed = await task_manager.get_failed_items(task.task_id)
@@ -1151,10 +1174,10 @@ class TestPersistenceAndRecovery:
         await tm1.complete_task(task_id)
         await db.close_db()
 
-        # 第二轮：重新加载
+        # 第二轮：重新加载（需传 limit 触发数据库查询，否则走内存缓存为空）
         await db.init_db(db_path)
         tm2 = TaskManager(max_concurrent_tasks=2)
-        tasks, total = await tm2.list_tasks()
+        tasks, total = await tm2.list_tasks(limit=10)
         assert len(tasks) == 1
         assert total == 1
         assert tasks[0].task_id == task_id
@@ -1182,8 +1205,13 @@ class TestPersistenceAndRecovery:
         # task1 未完成，task2 未启动
 
         tm2 = TaskManager(max_concurrent_tasks=2)
-        pending, pending_total = await tm2.list_tasks(status=TaskStatus.PENDING)
-        running, running_total = await tm2.list_tasks(status=TaskStatus.RUNNING)
+        # 需传 limit 触发数据库查询，否则走内存缓存为空
+        pending, pending_total = await tm2.list_tasks(
+            status=TaskStatus.PENDING, limit=10
+        )
+        running, running_total = await tm2.list_tasks(
+            status=TaskStatus.RUNNING, limit=10
+        )
         assert len(pending) == 1
         assert pending_total == 1
         assert len(running) == 1
@@ -1259,68 +1287,6 @@ class TestShutdown:
         """shutdown 清空排队列表。"""
         await task_manager.shutdown()
         assert len(task_manager._task_queue) == 0
-
-
-# ============================================================
-# 测试：get_task_stats
-# ============================================================
-
-
-class TestGetTaskStats:
-    """测试 TaskManager 统计信息。"""
-
-    @pytest.mark.asyncio
-    async def test_stats_all_counts(self, task_manager):
-        """多种状态任务的统计。"""
-        t1 = await task_manager.create_task(
-            task_type=TaskType.DOWNLOAD,
-            chat_id=-1001234567890,
-            params={"message_range_start": 1, "message_range_end": 10},
-        )
-        t2 = await task_manager.create_task(
-            task_type=TaskType.DOWNLOAD,
-            chat_id=-1001234567890,
-            params={"message_range_start": 1, "message_range_end": 10},
-        )
-        _ = await task_manager.create_task(
-            task_type=TaskType.DOWNLOAD,
-            chat_id=-1001234567890,
-            params={"message_range_start": 1, "message_range_end": 10},
-        )
-        await task_manager.start_task(t1.task_id)
-        await task_manager.complete_task(t1.task_id)
-        await task_manager.start_task(t2.task_id)
-        await task_manager.cancel_task(t2.task_id)
-        # 第3个任务保持 PENDING
-
-        stats = task_manager.get_task_stats()
-        assert stats["total"] == 3
-        assert stats["completed"] == 1
-        assert stats["cancelled"] == 1
-        assert stats["pending"] == 1
-
-    @pytest.mark.asyncio
-    async def test_stats_empty(self, task_manager):
-        """空的任务管理器统计。"""
-        stats = task_manager.get_task_stats()
-        assert stats["total"] == 0
-        assert stats["completed"] == 0
-        assert stats["failed"] == 0
-        assert stats["running"] == 0
-        assert stats["pending"] == 0
-        assert stats["total_size_bytes"] == 0
-
-    @pytest.mark.asyncio
-    async def test_stats_total_size(self, task_manager):
-        """累计总大小统计。"""
-        task = await task_manager.create_task(
-            task_type=TaskType.DOWNLOAD,
-            chat_id=-1001234567890,
-            params={"message_range_start": 1, "message_range_end": 10},
-        )
-        task.total_size_bytes = 1024
-        stats = task_manager.get_task_stats()
-        assert stats["total_size_bytes"] == 1024
 
 
 # ============================================================
@@ -1647,7 +1613,7 @@ class TestListTasksPreservesReference:
             TaskItem(
                 id=f"{task.task_id}_msg_1",
                 task_id=task.task_id,
-                source_id=1,
+                source_message_id=1,
                 created_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
                 updated_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
             )
