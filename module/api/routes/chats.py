@@ -123,7 +123,7 @@ async def resolve_chat(
             media_count=resolved.media_count,
             has_access=resolved.has_access,
             is_private=resolved.is_private,
-        ).model_dump()
+        ).model_dump(mode="json")
     )
 
 

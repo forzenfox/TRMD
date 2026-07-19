@@ -6,6 +6,7 @@
 
 import os
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
@@ -15,6 +16,26 @@ from module.api.middleware import setup_middleware
 from module.api.exceptions import setup_exception_handlers
 
 logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """应用生命周期管理：启动时初始化异步数据库，关闭时清理资源。"""
+    from module.core import db
+
+    ctx = app.state.app_context
+    # is_initialized() 对同步引擎也返回 True，但 API 路由需要异步引擎；
+    # 因此使用 is_async_initialized() 精确检查。
+    if ctx is not None and not db.is_async_initialized():
+        await db.init_db(ctx.db_path)
+        logger.info("异步数据库引擎已初始化（lifespan）")
+
+    yield  # 应用运行中
+
+    # 关闭异步数据库连接
+    if db.is_async_initialized():
+        await db.close_db()
+        logger.info("异步数据库引擎已关闭（lifespan）")
 
 
 def create_app(
@@ -36,19 +57,9 @@ def create_app(
     # 根据环境变量决定是否启用 Swagger UI
     is_prod = os.getenv("TRMD_ENV") == "production"
 
-    app = FastAPI(
-        title="TRMD Web API",
-        version="1.0.0",
-        description="Telegram Restricted Media Downloader Web API",
-        docs_url=None if is_prod else "/docs",
-        redoc_url=None if is_prod else "/redoc",
-        openapi_url=None if is_prod else "/openapi.json",
-    )
-
-    # 挂载核心管理器到应用状态
+    # 通过 AppContext 获取共享的管理器实例（与 BOT 共享同一 TokenManager）
     from module.core.monitor import Monitor
 
-    # 通过 AppContext 获取共享的管理器实例（与 BOT 共享同一 TokenManager）
     ctx = None
     if token_manager is None:
         from module.integration import init_context
@@ -56,6 +67,20 @@ def create_app(
         ctx = init_context()
         token_manager = ctx.token_manager
 
+    app = FastAPI(
+        title="TRMD Web API",
+        version="1.0.0",
+        description="Telegram Restricted Media Downloader Web API",
+        lifespan=_lifespan,
+        docs_url=None if is_prod else "/docs",
+        redoc_url=None if is_prod else "/redoc",
+        openapi_url=None if is_prod else "/openapi.json",
+    )
+
+    # 保存 AppContext 供 lifespan 使用（初始化异步 DB 需要 db_path）
+    app.state.app_context = ctx
+
+    # 挂载核心管理器到应用状态
     app.state.token_manager = token_manager
     app.state.task_manager = task_manager or (ctx.task_manager if ctx else None)
     app.state.file_manager = file_manager or (ctx.file_manager if ctx else None)

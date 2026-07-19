@@ -89,7 +89,7 @@ async def list_files(
             # 按类型和名称排序
             items.sort(key=lambda x: (x.type == "file", x.name.lower()))
             return json_response(
-                data={"path": target_path, "items": [i.model_dump() for i in items]}
+                data={"path": target_path, "items": [i.model_dump(mode="json") for i in items]}
             )
         except (PermissionError, FileNotFoundError, NotADirectoryError) as e:
             return json_response(
@@ -136,7 +136,7 @@ async def list_files(
     items.sort(key=lambda x: (x.type == "file", x.name.lower()))
 
     return json_response(
-        data={"path": target_path, "items": [i.model_dump() for i in items]}
+        data={"path": target_path, "items": [i.model_dump(mode="json") for i in items]}
     )
 
 

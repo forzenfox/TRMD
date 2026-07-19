@@ -42,13 +42,8 @@ async def get_token_status(
         # 如果 verify 抛异常（如已使用），仍然标记为有效
         data = TokenInfo(valid=True)
 
-    # 将 datetime 转为 ISO 字符串以便 JSON 序列化
-    result = data.model_dump()
-    for key in ["expires_at", "created_at"]:
-        if key in result and result[key] is not None:
-            val = result[key]
-            if hasattr(val, "isoformat"):
-                result[key] = val.isoformat()
+    # Pydantic model_dump(mode="json") 自动将 datetime 转为 ISO 字符串
+    result = data.model_dump(mode="json")
     return json_response(data=result)
 
 

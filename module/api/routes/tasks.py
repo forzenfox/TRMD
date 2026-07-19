@@ -105,7 +105,7 @@ async def list_tasks(
     )
 
     data = {
-        "items": [_task_to_out(t).model_dump() for t in filtered_items],
+        "items": [_task_to_out(t).model_dump(mode="json") for t in filtered_items],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -124,7 +124,7 @@ async def get_task(
     task = await task_manager.get_task(task_id)
     if not task:
         raise TaskNotFoundError(task_id)
-    return json_response(data=_task_to_out(task).model_dump())
+    return json_response(data=_task_to_out(task).model_dump(mode="json"))
 
 
 @router.post("")
@@ -250,7 +250,7 @@ async def create_task(
     except CoreTaskConflictError as e:
         raise TaskConflictError("LISTEN_ALREADY_EXISTS") from e
 
-    return json_response(data=_task_to_out(task).model_dump(), status_code=201)
+    return json_response(data=_task_to_out(task).model_dump(mode="json"), status_code=201)
 
 
 @router.post("/{task_id}/start")
@@ -275,7 +275,7 @@ async def start_task(
             executor.submit_task(task)
 
         return json_response(
-            data=_task_to_out(task).model_dump(),
+            data=_task_to_out(task).model_dump(mode="json"),
             message="任务已开始" if started else "任务已加入队列",
         )
     except TaskNotFoundError:
@@ -303,7 +303,7 @@ async def cancel_task(
         task = await task_manager.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        return json_response(data=_task_to_out(task).model_dump(), message="任务已取消")
+        return json_response(data=_task_to_out(task).model_dump(mode="json"), message="任务已取消")
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)
     except TaskStateError:
@@ -335,7 +335,7 @@ async def retry_task(
             executor.submit_task(task)
 
         return json_response(
-            data=_task_to_out(task).model_dump(),
+            data=_task_to_out(task).model_dump(mode="json"),
             message="任务已重试并开始执行" if started else "任务已重试并加入队列",
         )
     except TaskNotFoundError:

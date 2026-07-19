@@ -17,6 +17,7 @@ from typing import Optional
 
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 from pyrogram.types.bots_and_keyboards import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types.messages_and_media.link_preview_options import LinkPreviewOptions
 
 from module.bot.keyboard_manager import KeyboardManager
 from module.core.config_manager import ConfigManager
@@ -149,21 +150,29 @@ class BotCommands:
         # 构建回复文本
         text = (
             "🌐 WebUI 访问链接已生成\n\n"
-            "🔗 点击下方按钮即可打开 WebUI\n\n"
             f"⏰ 链接有效期：{ttl_hours} 小时\n"
             "⚠️ 请勿将此链接分享给他人\n\n"
+            f"🔗 访问链接：{url}\n\n"
             f"{self.get_webui_guidance_text()}"
         )
 
-        # 发送消息并附带可点击的打开 WebUI 按钮
-        await client.send_message(
-            chat_id=user_id,
-            text=text,
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🌐 打开 WebUI", url=url)]]
-            ),
-            disable_web_page_preview=True,
-        )
+        # 仅当 URL 为有效 HTTPS 公网地址时才使用内联按钮；
+        # Telegram 拒绝 http://localhost 等非公网 URL，抛出 BUTTON_URL_INVALID。
+        if url.startswith("https://"):
+            await client.send_message(
+                chat_id=user_id,
+                text=text,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton("🌐 打开 WebUI", url=url)]]
+                ),
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
+        else:
+            await client.send_message(
+                chat_id=user_id,
+                text=text,
+                link_preview_options=LinkPreviewOptions(is_disabled=True),
+            )
 
         logger.info("/web 命令已执行: user_id=%s", user_id)
         return {"token": token, "url": url}

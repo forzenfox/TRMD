@@ -78,7 +78,7 @@ async def get_config(
             temp_directory=config.get("temp_directory", "temp"),
         )
 
-        return json_response(data=result.model_dump())
+        return json_response(data=result.model_dump(mode="json"))
     except Exception as e:
         logger.error(f"读取配置失败: {e}")
         return error_json_response("读取配置失败", str(e))

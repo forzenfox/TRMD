@@ -255,3 +255,8 @@ def is_initialized() -> bool:
 def is_sync_initialized() -> bool:
     """检查同步数据库引擎是否已初始化。"""
     return _sync_engine is not None and _sync_session_maker is not None
+
+
+def is_async_initialized() -> bool:
+    """检查异步数据库引擎是否已初始化。"""
+    return _engine is not None and _session_maker is not None
