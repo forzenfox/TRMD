@@ -50,10 +50,15 @@ async def get_config(
         )
 
         # 构建代理配置模型
+        # 注意：config.yaml 中 enable_proxy 可能为 null（YAML 的 ~），
+        # dict.get() 在 key 存在但值为 None 时返回 None 而非默认值。
+        # 使用 `or False` 确保 None → False，满足 Pydantic bool 类型约束。
         proxy_data = config.get("proxy", {})
+        enable_proxy = proxy_data.get("enable", False) or proxy_data.get(
+            "enable_proxy", False
+        )
         proxy_config = ProxyConfig(
-            enable_proxy=proxy_data.get("enable", False)
-            or proxy_data.get("enable_proxy", False),
+            enable_proxy=enable_proxy if enable_proxy is not None else False,
             scheme=proxy_data.get("scheme"),
             hostname=proxy_data.get("hostname"),
             port=proxy_data.get("port"),

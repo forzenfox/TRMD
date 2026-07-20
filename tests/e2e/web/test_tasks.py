@@ -197,15 +197,18 @@ class TestCreateDownloadTask:
         download_radio = tasks_page.get_by_testid(TasksPage.INPUT_TASK_TYPE_DOWNLOAD)
         assert download_radio.is_checked()
 
-    def test_create_download_task_sends_source_identifier(
+    def test_create_download_task_sends_chat_id_after_resolve(
         self, tasks_page: TasksPage, test_token: str, live_server: str
     ):
         """
-        T004-6: 创建下载任务时 source_identifier 参数正确传递
+        T004-6: 创建下载任务时前端自动解析源频道后发送 chat_id
+
+        前端 handleCreateTask 自动调用 api.resolveChat() 将字符串标识符
+        解析为数字 chat_id，然后 buildCreatePayload() 走 chat_id 路径。
 
         验证点：
         1. 通过 UI 创建下载任务
-        2. 拦截 API 请求，验证 params 中包含 source_identifier 而非 chat_id
+        2. 拦截 API 请求，验证 params 中包含 chat_id（由 resolveChat 解析得到）
         3. 任务创建成功
         """
         tasks_page.navigate(live_server)
@@ -247,11 +250,10 @@ class TestCreateDownloadTask:
         post_data = json.loads(api_requests[0]["post_data"])
         assert post_data["task_type"] == "download"
         assert "params" in post_data
-        assert "source_identifier" in post_data["params"], (
-            "params 中缺少 source_identifier 字段"
+        # 前端 handleCreateTask 自动解析字符串为数字 chat_id
+        assert "chat_id" in post_data["params"], (
+            "params 中应包含 chat_id（前端 resolveChat 解析后发送）"
         )
-        assert "chat_id" not in post_data["params"], "params 中不应包含 chat_id 字段"
-        assert post_data["params"]["source_identifier"] == test_source_chat
 
         # 取消路由拦截
         tasks_page.page.unroute("**/api/tasks")

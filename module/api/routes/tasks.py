@@ -225,7 +225,7 @@ async def create_task(
         "end_date": params.get("end_date"),
         "message_list": params.get("message_list", []),
         "source_identifier": source_identifier,
-        "target_identifier": params.get("target_identifier"),
+        "target_identifier": target_input or params.get("target_identifier"),
         "recent_count": params.get("recent_count"),
         "media_types": params.get("media_types"),
         "min_size": params.get("min_size"),
@@ -250,7 +250,9 @@ async def create_task(
     except CoreTaskConflictError as e:
         raise TaskConflictError("LISTEN_ALREADY_EXISTS") from e
 
-    return json_response(data=_task_to_out(task).model_dump(mode="json"), status_code=201)
+    return json_response(
+        data=_task_to_out(task).model_dump(mode="json"), status_code=201
+    )
 
 
 @router.post("/{task_id}/start")
@@ -303,7 +305,9 @@ async def cancel_task(
         task = await task_manager.get_task(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        return json_response(data=_task_to_out(task).model_dump(mode="json"), message="任务已取消")
+        return json_response(
+            data=_task_to_out(task).model_dump(mode="json"), message="任务已取消"
+        )
     except TaskNotFoundError:
         raise TaskNotFoundError(task_id)
     except TaskStateError:
