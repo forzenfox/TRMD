@@ -27,7 +27,7 @@ class TestCLIInteractiveRemoved:
 
     def test_legacy_config_no_interactive_input(self):
         """验证 legacy_config.py 不包含交互式 input() 逻辑。"""
-        from module.config.legacy_config import __file__ as legacy_file
+        from module.core.legacy_config import __file__ as legacy_file
 
         with open(legacy_file, "r", encoding="utf-8") as f:
             content = f.read()
@@ -138,7 +138,7 @@ class TestConfigPathConvention:
 
     def test_default_config_path_format(self):
         """验证默认配置路径格式。"""
-        from module.config.legacy_config import UserConfig
+        from module.core.legacy_config import UserConfig
 
         # UserConfig.PATH 应该是相对于工作目录的 config.yaml
         assert UserConfig.FILE_NAME == "config.yaml", "配置文件名应为 config.yaml"

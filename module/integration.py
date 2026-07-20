@@ -136,7 +136,7 @@ class AppContext:
         user_config = None
         try:
             # 尝试创建 UserConfig 实例以读取配置文件
-            from module.config.legacy_config import UserConfig
+            from module.core.legacy_config import UserConfig
 
             user_config = UserConfig()
             log.info("ConfigManager 使用 UserConfig 实例")

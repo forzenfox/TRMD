@@ -5,6 +5,6 @@
 """
 
 from module.core.config_manager import ConfigManager  # noqa: F401
-from module.config.legacy_config import UserConfig, BaseConfig
+from module.core.legacy_config import UserConfig, BaseConfig
 
 __all__ = ["ConfigManager", "UserConfig", "BaseConfig"]

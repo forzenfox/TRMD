@@ -357,7 +357,7 @@ class TestUploadCommand:
         mock_message.text = "/upload /empty_folder https://t.me/target"
         with (
             patch("os.path.isdir", return_value=True),
-            patch("module.path_tool.safe_scan_directory_file", return_value=[]),
+            patch("module.utils.path_tool.safe_scan_directory_file", return_value=[]),
         ):
             result = await router.get_upload_link_from_bot(mock_client, mock_message)
         assert result is None
