@@ -14,7 +14,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from module.bot.state_manager import StateManager
-from module.enums import DownloadType
+from module.core.enums import DownloadType
 
 
 # ==================== Fixtures ====================

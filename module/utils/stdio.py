@@ -29,9 +29,9 @@ from enum import Enum
 from pyrogram import __version__ as pyrogram_version
 
 from module import log, console, README, __version__, __copyright__, __license__
-from module.language import _t
+from module.core.language import _t
 from module.utils.helpers import get_terminal_width, is_docker
-from module.enums import (
+from module.core.enums import (
     DownloadType,
     UploadStatus,
     KeyWord,

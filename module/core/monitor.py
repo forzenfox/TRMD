@@ -220,7 +220,7 @@ class Monitor:
     def _get_client_status(self) -> dict:
         """检查 Telegram Client 的连接状态。"""
         try:
-            from module.integration import get_context
+            from module.core.integration import get_context
 
             ctx = get_context()
             if ctx is None or ctx.client is None:

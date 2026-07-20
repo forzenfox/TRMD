@@ -34,7 +34,7 @@ async def list_repository_files(
     :return: 文件列表及总数
     """
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if not ctx or not hasattr(ctx, "repository_db"):
@@ -67,7 +67,7 @@ async def get_file_detail(
     :return: 文件详情
     """
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if not ctx or not hasattr(ctx, "repository_db"):
@@ -97,7 +97,7 @@ async def list_repository_sources(
     :return: 来源映射列表
     """
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if not ctx or not hasattr(ctx, "repository_db"):
@@ -128,7 +128,7 @@ async def list_file_distributions(
     :return: 分发记录列表及总数
     """
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if not ctx or not hasattr(ctx, "repository_db"):
@@ -166,7 +166,7 @@ async def trigger_repository_sync(
     :return: 同步触发结果
     """
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if not ctx or not hasattr(ctx, "repository_sync"):
@@ -199,7 +199,7 @@ async def get_repository_status(
     :return: 同步状态信息
     """
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if not ctx or not hasattr(ctx, "repository_sync"):

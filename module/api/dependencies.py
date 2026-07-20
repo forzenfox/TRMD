@@ -103,7 +103,7 @@ def get_task_executor(request: Request):
     executor = getattr(request.app.state, "task_executor", None)
     if executor is not None:
         return executor
-    from module.integration import get_context
+    from module.core.integration import get_context
 
     ctx = get_context()
     return ctx.task_executor if ctx else None
@@ -116,7 +116,7 @@ def get_identifier_service(request: Request):
     仍返回 IdentifierService 实例，由 resolve() 在实际解析时抛出 503，
     避免依赖注入在 Pydantic body 校验前提前失败。
     """
-    from module.integration import get_context
+    from module.core.integration import get_context
     from module.core.identifier_service import IdentifierService
 
     ctx = get_context()
@@ -126,7 +126,7 @@ def get_identifier_service(request: Request):
 
 def get_cache_manager():
     """获取 CacheManager 实例（从 AppContext 单例读取）。"""
-    from module.integration import get_context
+    from module.core.integration import get_context
 
     ctx = get_context()
     return ctx.cache_manager if ctx else None

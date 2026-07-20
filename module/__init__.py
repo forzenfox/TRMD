@@ -7,14 +7,14 @@
 模块初始化文件。
 
 作为 re-export 层，保持向后兼容性。
-实际实现已拆分到以下模块：
-- constants.py: 全局常量
-- logging_config.py: 日志配置
-- config_template.py: 配置模板
+实际实现已迁移到以下模块：
+- module.core.constants: 全局常量
+- module.core.logging_config: 日志配置
+- module.core.config_template: 配置模板
 """
 
 # Re-export 所有公开接口以保持向后兼容
-from module.constants import (
+from module.core.constants import (
     AUTHOR,
     SOFTWARE_FULL_NAME,
     SOFTWARE_SHORT_NAME,
@@ -35,7 +35,7 @@ from module.constants import (
     __copyright__,
 )
 
-from module.logging_config import (
+from module.core.logging_config import (
     console,
     log,
     file_handler,
@@ -46,7 +46,7 @@ from module.logging_config import (
     via_log_level,
 )
 
-from module.config_template import README
+from module.core.config_template import README
 
 __all__ = [
     # 常量

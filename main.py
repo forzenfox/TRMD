@@ -7,8 +7,8 @@ import sys
 import threading
 
 from module.utils.helpers import check_environ
-from module.parser import PARSE_ARGS
-from module.downloader import TelegramRestrictedMediaDownloader
+from module.core.parser import PARSE_ARGS
+from module.core.downloader import TelegramRestrictedMediaDownloader
 
 
 def _run_web_api(port: int = 8000):

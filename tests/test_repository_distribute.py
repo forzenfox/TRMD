@@ -177,7 +177,7 @@ def _create_downloader(repo_manager_instance) -> object:
     Uses object.__new__ to bypass __init__ and manually sets only
     the attributes needed by the forward() method.
     """
-    from module.downloader import TelegramRestrictedMediaDownloader
+    from module.core.downloader import TelegramRestrictedMediaDownloader
 
     dl = object.__new__(TelegramRestrictedMediaDownloader)
     dl.app = MagicMock()

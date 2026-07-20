@@ -11,7 +11,7 @@
 - collect 方法兼容新步骤
 """
 
-from module.interaction_manager import (
+from module.core.interaction_manager import (
     BatchStep,
     InteractionManager,
     InteractionState,

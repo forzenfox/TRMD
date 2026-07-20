@@ -12,7 +12,7 @@ import tempfile
 
 import pytest
 
-from module.yaml_utils import load_yaml, dump_yaml, deep_merge
+from module.utils.yaml_utils import load_yaml, dump_yaml, deep_merge
 
 
 # ==================== 辅助工具 ====================

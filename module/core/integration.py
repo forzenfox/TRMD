@@ -21,7 +21,7 @@ from module.core.repository_db import RepositoryDB
 from module.core.repository_sync import RepositorySync
 from module.core.config_manager import ConfigManager
 from module.core.client_manager import ClientManager
-from module.interaction_manager import InteractionManager
+from module.core.interaction_manager import InteractionManager
 
 log = logging.getLogger("rich")
 

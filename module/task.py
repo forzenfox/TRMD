@@ -15,14 +15,14 @@ from typing import Union, Optional, Callable
 import pyrogram
 
 from module import console, log
-from module.language import _t
+from module.core.language import _t
 from module.utils.stdio import MetaData
-from module.parser import PARSE_ARGS
+from module.core.parser import PARSE_ARGS
 from module.utils.path_tool import (
     safe_delete,
     calc_sha256,
 )
-from module.enums import DownloadStatus, UploadStatus, KeyWord
+from module.core.enums import DownloadStatus, UploadStatus, KeyWord
 
 
 class DownloadTask:

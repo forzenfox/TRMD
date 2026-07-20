@@ -465,7 +465,7 @@ class TestAppContextTokenTTL:
 
     def test_app_context_token_manager_ttl_is_12_hours(self, tmp_path):
         """AppContext 创建的 TokenManager 默认 TTL 应为 12 小时（43200 秒）。"""
-        from module.integration import AppContext
+        from module.core.integration import AppContext
 
         # 重置单例，避免影响其他测试
         AppContext._instance = None

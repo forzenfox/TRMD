@@ -15,7 +15,7 @@ from pyrogram.types.bots_and_keyboards import InlineKeyboardMarkup
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 
 from module.bot.keyboard_manager import KeyboardManager, KeyboardButtonHandler
-from module.enums import CalenderKeyboard, DownloadType, BotCallbackText, BotButton
+from module.core.enums import CalenderKeyboard, DownloadType, BotCallbackText, BotButton
 
 
 # ==================== KeyboardManager 测试 ====================

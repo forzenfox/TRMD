@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 
-from module.yaml_utils import (
+from module.utils.yaml_utils import (
     get_yaml,
     load_yaml,
     dump_yaml,

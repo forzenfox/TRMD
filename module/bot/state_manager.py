@@ -12,7 +12,7 @@ from typing import Union, Optional
 
 from pyrogram.handlers import MessageHandler
 
-from module.enums import DownloadType
+from module.core.enums import DownloadType
 
 
 class StateManager:

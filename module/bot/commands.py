@@ -29,7 +29,7 @@ from module.core.task_manager import (
 )
 from module.core.task_executor import TaskExecutor
 from module.core.token_manager import TokenManager
-from module.interaction_manager import InteractionManager, BatchStep
+from module.core.interaction_manager import InteractionManager, BatchStep
 
 logger = logging.getLogger(__name__)
 

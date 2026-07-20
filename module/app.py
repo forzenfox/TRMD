@@ -14,12 +14,12 @@ from typing import Union
 import pyrogram
 
 from module import SLEEP_THRESHOLD, console, log, SOFTWARE_FULL_NAME
-from module.language import _t
-from module.config import UserConfig
+from module.core.language import _t
+from module.core.legacy_config import UserConfig
 from module.utils.stdio import StatisticalTable
-from module.client import TelegramRestrictedMediaDownloaderClient
+from module.core.client import TelegramRestrictedMediaDownloaderClient
 
-from module.enums import DownloadType, DownloadStatus, KeyWord
+from module.core.enums import DownloadType, DownloadStatus, KeyWord
 from module.utils.path_tool import (
     validate_title,
     truncate_filename,

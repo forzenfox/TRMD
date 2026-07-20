@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 def _get_client(request: Request):
     """获取 Telegram Client 实例（从 AppContext 单例读取）。"""
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         return ctx.client if ctx else None
@@ -149,7 +149,7 @@ async def create_task(
 
     # 磁盘空间 - 在 API 层提前检查以提供人类可读的错误码
     # （强制级检查也在 TaskManager.create_task 中作为兜底）
-    from module.integration import get_context
+    from module.core.integration import get_context
 
     ctx = get_context()
     download_dir = ctx.config_manager.save_directory if ctx else None

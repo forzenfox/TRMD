@@ -18,8 +18,8 @@ from pyrogram.types.bots_and_keyboards import (
 from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 
 from module import log
-from module.language import _t
-from module.enums import (
+from module.core.language import _t
+from module.core.enums import (
     CalenderKeyboard,
     DownloadType,
     BotCallbackText,

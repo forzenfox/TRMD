@@ -35,8 +35,8 @@ from pyrogram.file_id import FileId, FileType, ThumbnailSource
 from pyrogram.types import User
 
 from module import console, SOFTWARE_SHORT_NAME, log, __version__
-from module.enums import KeyWord
-from module.language import _t
+from module.core.enums import KeyWord
+from module.core.language import _t
 
 
 class TelegramRestrictedMediaDownloaderClient(pyrogram.Client):

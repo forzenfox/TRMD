@@ -135,7 +135,7 @@ def config_manager():
 
     # save_config 执行真实验证逻辑
     def _save_config(config_data):
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         cm = ConfigManager()
         is_valid, errors = cm.validate_config(config_data)

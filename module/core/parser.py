@@ -8,7 +8,7 @@ from argparse import ArgumentParser, SUPPRESS
 from pyrogram import __version__ as pyrogram_version
 
 from module import __version__, console
-from module.enums import Banner, MODE, GradientColor
+from module.core.enums import Banner, MODE, GradientColor
 
 
 class TelegramRestrictedMediaDownloaderArgumentParser(ArgumentParser):

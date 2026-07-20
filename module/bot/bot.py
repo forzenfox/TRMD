@@ -23,8 +23,8 @@ from module import (
     log,
     LINK_PREVIEW_OPTIONS,
 )
-from module.language import _t
-from module.enums import (
+from module.core.language import _t
+from module.core.enums import (
     CalenderKeyboard,
     BotCommandText,
     BotCallbackText,
@@ -315,7 +315,7 @@ class Bot:
 
         # 初始化 BotCommands 实例（通过 AppContext 共享管理器）
         if self.bot_commands is None:
-            from module.integration import init_context
+            from module.core.integration import init_context
 
             ctx = init_context()
             self.bot_commands = BotCommands(

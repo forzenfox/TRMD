@@ -14,7 +14,7 @@ import tempfile
 
 import yaml
 
-from module.config import UserConfig
+from module.core.legacy_config import UserConfig
 
 
 # ==================== TEMPLATE 合并完整性测试 ====================
@@ -274,7 +274,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_get_repository_config(self):
         """get_repository_config 应返回 repository 分组字典。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         # 创建 mock user_config
         mock_user_config = type(
@@ -301,7 +301,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_get_repository_config_returns_empty_when_missing(self):
         """当配置中无 repository 分组时，应返回空字典。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",
@@ -318,7 +318,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_set_repository_chat_id(self):
         """set_repository_chat_id 应设置 repository.chat_id 并保存。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         saved_configs = []
 
@@ -346,7 +346,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_set_repository_chat_id_creates_repository_if_missing(self):
         """当 repository 分组不存在时，set_repository_chat_id 应创建它。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         saved_configs = []
 
@@ -366,7 +366,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_validate_repository_config_valid(self):
         """validate_repository_config 对有效配置应返回 (True, '')。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",
@@ -391,7 +391,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_validate_repository_config_empty_chat_id(self):
         """validate_repository_config 对空 chat_id 应返回验证失败。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",
@@ -416,7 +416,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_validate_repository_config_invalid_chat_id_format(self):
         """validate_repository_config 对无效 chat_id 格式应返回验证失败。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",
@@ -440,7 +440,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_validate_repository_config_disabled_is_valid(self):
         """repository 未启用时，即使 chat_id 为空也应验证通过。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",
@@ -464,7 +464,7 @@ class TestConfigManagerRepositoryMethods:
 
     def test_validate_repository_config_invalid_interval(self):
         """validate_repository_config 对无效的 auto_sync_interval_minutes 应返回验证失败。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",
@@ -495,7 +495,7 @@ class TestConfigManagerNoGlobalConfig:
 
     def test_config_manager_init_without_global_config(self):
         """ConfigManager 不传 global_config 参数应正常工作。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",
@@ -511,7 +511,7 @@ class TestConfigManagerNoGlobalConfig:
 
     def test_config_manager_load_config_without_global(self):
         """load_config 不依赖 _global_config。"""
-        from module.config.config_manager import ConfigManager
+        from module.core.config_manager import ConfigManager
 
         mock_user_config = type(
             "MockUserConfig",

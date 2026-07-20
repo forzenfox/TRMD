@@ -14,7 +14,7 @@ import yaml
 from rich.console import Console
 from rich.logging import RichHandler
 
-from module.constants import (
+from module.core.constants import (
     LOG_PATH,
     MAX_LOG_SIZE,
     BACKUP_COUNT,

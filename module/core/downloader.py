@@ -48,7 +48,7 @@ from module import console, log, LINK_PREVIEW_OPTIONS, SLEEP_THRESHOLD
 from module.utils.filter import Filter
 from module.app import Application
 from module.bot import Bot, KeyboardButton, CallbackData
-from module.enums import (
+from module.core.enums import (
     DownloadStatus,
     LinkType,
     KeyWord,
@@ -59,7 +59,7 @@ from module.enums import (
     CalenderKeyboard,
     SaveDirectoryPrefix,
 )
-from module.language import _t
+from module.core.language import _t
 from module.utils.path_tool import (
     is_file_duplicate,
     safe_delete,
@@ -72,7 +72,7 @@ from module.utils.path_tool import (
 )
 from module.task import DownloadTask, UploadTask
 from module.utils.stdio import ProgressBar, MetaData
-from module.uploader import TelegramUploader
+from module.core.uploader import TelegramUploader
 from module.utils.helpers import (
     is_docker,
     parse_link,
@@ -2699,7 +2699,7 @@ class TelegramRestrictedMediaDownloader(Bot):
 
             # 优先从 AppContext 获取已初始化的 repository_manager
             try:
-                from module.integration import get_context
+                from module.core.integration import get_context
 
                 _ctx = get_context()
                 if _ctx and _ctx.repository_manager is not None:
@@ -2736,7 +2736,7 @@ class TelegramRestrictedMediaDownloader(Bot):
 
         # 统一注入 User Client 到 AppContext（供 Web API 立即可用）
         try:
-            from module.integration import get_context
+            from module.core.integration import get_context
 
             _ctx = get_context()
             if _ctx:
@@ -2746,7 +2746,7 @@ class TelegramRestrictedMediaDownloader(Bot):
 
         # 启动仓库自动同步（延迟初始化，client 已就绪）
         try:
-            from module.integration import get_context
+            from module.core.integration import get_context
 
             _ctx = get_context()
             if _ctx and hasattr(_ctx, "repository_db") and _ctx.repository_sync is None:
@@ -2756,7 +2756,7 @@ class TelegramRestrictedMediaDownloader(Bot):
 
         # 向 TaskManager 注入 IdentifierService（延迟注入，client 已就绪）
         try:
-            from module.integration import get_context
+            from module.core.integration import get_context
 
             _ctx = get_context()
             if _ctx:
@@ -2766,7 +2766,7 @@ class TelegramRestrictedMediaDownloader(Bot):
 
         # 启动 ClientManager 健康检查（后台自动重连）
         try:
-            from module.integration import get_context
+            from module.core.integration import get_context
 
             _ctx = get_context()
             if _ctx:
@@ -2797,7 +2797,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                 if self.repository_manager is not None:
                     self.uploader.repository_manager = self.repository_manager
                 # 初始化 TaskExecutor（桥接 Web API 任务执行）
-                from module.integration import get_context
+                from module.core.integration import get_context
 
                 _ctx = get_context()
                 if _ctx:

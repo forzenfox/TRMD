@@ -18,7 +18,7 @@ from pyrogram.errors.exceptions.bad_request_400 import MessageNotModified
 from pyrogram.types.bots_and_keyboards import InlineKeyboardMarkup
 
 from module import console, LINK_PREVIEW_OPTIONS
-from module.enums import BotMessage
+from module.core.enums import BotMessage
 
 
 class MessageHelper:

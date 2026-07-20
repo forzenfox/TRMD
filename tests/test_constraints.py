@@ -47,19 +47,19 @@ class TestCLIInteractiveRemoved:
 
     def test_enums_no_validator_class(self):
         """验证 enums.py 不包含 Validator 类。"""
-        from module import enums
+        from module.core import enums
 
         assert not hasattr(enums, "Validator"), "enums.py 不应包含 Validator 类"
 
     def test_enums_no_process_config_class(self):
         """验证 enums.py 不包含 ProcessConfig 类。"""
-        from module import enums
+        from module.core import enums
 
         assert not hasattr(enums, "ProcessConfig"), "enums.py 不应包含 ProcessConfig 类"
 
     def test_enums_no_get_stdio_params_class(self):
         """验证 enums.py 不包含 GetStdioParams 类。"""
-        from module import enums
+        from module.core import enums
 
         assert not hasattr(enums, "GetStdioParams"), (
             "enums.py 不应包含 GetStdioParams 类"
@@ -146,7 +146,7 @@ class TestConfigPathConvention:
 
     def test_parser_has_config_argument(self):
         """验证 parser 包含 --config 参数。"""
-        from module.parser import TelegramRestrictedMediaDownloaderArgumentParser
+        from module.core.parser import TelegramRestrictedMediaDownloaderArgumentParser
 
         # 检查是否有 --config 参数
         parser = TelegramRestrictedMediaDownloaderArgumentParser(add_help=False)

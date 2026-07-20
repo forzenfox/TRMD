@@ -28,14 +28,14 @@ from pyrogram.errors.exceptions.not_acceptable_406 import (
 from pymediainfo import MediaInfo
 
 from module import console, log
-from module.language import _t
+from module.core.language import _t
 
 from module.task import UploadTask
 from module.utils.path_tool import get_mime_from_extension
 
 from module.utils.stdio import MetaData, ProgressBar
 from module.utils.path_tool import split_path, safe_delete
-from module.enums import KeyWord, UploadStatus
+from module.core.enums import KeyWord, UploadStatus
 from module.utils.helpers import (
     parse_link,
     truncate_display_filename,

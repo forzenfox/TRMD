@@ -13,7 +13,7 @@ import logging
 import re
 from typing import Any, Optional
 
-from module.yaml_utils import deep_merge
+from module.utils.yaml_utils import deep_merge
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ class ConfigManager:
 
             import yaml
 
-            from module.parser import PARSE_ARGS
+            from module.core.parser import PARSE_ARGS
 
             config_path = PARSE_ARGS.config
             if not config_path.endswith(".yaml"):
@@ -132,7 +132,7 @@ class ConfigManager:
 
             import yaml
 
-            from module.parser import PARSE_ARGS
+            from module.core.parser import PARSE_ARGS
 
             config_path = PARSE_ARGS.config
             if not config_path.endswith(".yaml"):

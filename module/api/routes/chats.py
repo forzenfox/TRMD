@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def _get_client(request: Request):
     """获取 Telegram Client 实例（从 AppContext 单例读取）。"""
     try:
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         return ctx.client if ctx else None

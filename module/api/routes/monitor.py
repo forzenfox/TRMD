@@ -75,7 +75,7 @@ async def manual_reconnect_client(
 
     当自动重连失败或连接断开时,用户可通过此端点手动触发重连。
     """
-    from module.integration import get_context
+    from module.core.integration import get_context
 
     try:
         ctx = get_context()

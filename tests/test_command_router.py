@@ -28,7 +28,7 @@ from module.core.identifier_service import (
     AccessDeniedError,
     RateLimitedError,
 )
-from module.enums import BotCallbackText
+from module.core.enums import BotCallbackText
 
 
 # ==================== Fixtures ====================

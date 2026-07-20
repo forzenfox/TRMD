@@ -16,8 +16,8 @@ from urllib.parse import parse_qs, urlparse
 from rich.text import Text
 
 from module import log
-from module.parser import PARSE_ARGS
-from module.enums import Link, LinkType, DownloadType, ENVIRON
+from module.core.parser import PARSE_ARGS
+from module.core.enums import Link, LinkType, DownloadType, ENVIRON
 
 
 def safe_index(lst: list, index: int, default=None):

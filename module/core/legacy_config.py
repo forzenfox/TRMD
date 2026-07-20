@@ -19,11 +19,11 @@ from module import (
     console,
     PLATFORM,
 )
-from module.language import _t
-from module.parser import PARSE_ARGS
+from module.core.language import _t
+from module.core.parser import PARSE_ARGS
 from module.utils.path_tool import gen_backup_config, safe_scan_directory_file
-from module.enums import KeyWord
-from module.yaml_utils import (
+from module.core.enums import KeyWord
+from module.utils.yaml_utils import (
     load_yaml,
     dump_yaml,
     deep_merge,

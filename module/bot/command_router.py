@@ -31,7 +31,7 @@ from module import (
     SOFTWARE_FULL_NAME,
     LINK_PREVIEW_OPTIONS,
 )
-from module.language import _t
+from module.core.language import _t
 from module.task import UploadTask
 from module.utils.path_tool import safe_scan_directory_file
 from module.utils.helpers import (
@@ -39,7 +39,7 @@ from module.utils.helpers import (
     is_allow_upload,
     get_valid_chat_id,
 )
-from module.enums import (
+from module.core.enums import (
     UploadStatus,
     DownloadType,
     BotCommandText,
@@ -94,7 +94,7 @@ class CommandRouter:
         """获取 TaskManager 实例（延迟加载）。"""
         if self._task_manager_cache is not None:
             return self._task_manager_cache
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if ctx:
@@ -106,7 +106,7 @@ class CommandRouter:
         """获取 TaskExecutor 实例（延迟加载）。"""
         if self._task_executor_cache is not None:
             return self._task_executor_cache
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if ctx:
@@ -121,7 +121,7 @@ class CommandRouter:
         """
         if self._identifier_service_cache is not None:
             return self._identifier_service_cache
-        from module.integration import get_context
+        from module.core.integration import get_context
 
         ctx = get_context()
         if ctx and getattr(ctx, "client", None):
