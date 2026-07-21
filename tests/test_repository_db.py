@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 
 from module.core.db import close_db, init_db
-from module.core.repository_db import (
+from module.core.repository.db import (
     FileDistribution,
     RepositoryDB,
     RepositoryDBError,

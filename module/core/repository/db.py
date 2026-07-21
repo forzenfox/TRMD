@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 
 from module.core.db import get_session
-from module.core.models.repository import (
+from module.core.repository.models import (
     FileDistributionRecord,
     RepositoryFileRecord,
     RepositorySourceRecord,

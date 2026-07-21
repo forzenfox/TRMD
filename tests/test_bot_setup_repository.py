@@ -18,7 +18,7 @@ import pytest
 
 from module.bot.commands import BotCommands
 from module.core.interaction_manager import InteractionManager
-from module.core.token_manager import TokenManager
+from module.core.auth.token_manager import TokenManager
 from module.core.config_manager import ConfigManager
 
 

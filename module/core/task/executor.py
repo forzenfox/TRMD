@@ -17,7 +17,7 @@ from pyrogram.handlers import MessageHandler
 
 from module.core.config_manager import ConfigManager
 
-from module.core.task_manager import (
+from module.core.task.manager import (
     TaskManager,
     Task,
     TaskItem,
@@ -26,7 +26,7 @@ from module.core.task_manager import (
     ItemStatus,
     ExecutorError,
 )
-from module.core.file_manager import FileManager, UploadProgress, FileInfo
+from module.core.download.file_manager import FileManager, UploadProgress, FileInfo
 from module.utils.path_tool import (
     safe_scan_directory_file,
     to_portable_path,

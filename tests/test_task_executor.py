@@ -19,8 +19,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import pytest_asyncio
 
-from module.core.task_executor import TaskExecutor
-from module.core.task_manager import (
+from module.core.task.executor import TaskExecutor
+from module.core.task.manager import (
     TaskManager,
     TaskItem,
     TaskType,
@@ -407,7 +407,7 @@ class TestUpdateFilePaths:
     @pytest.mark.asyncio
     async def test_update_file_paths_nonexistent_task(self, task_manager):
         """测试更新不存在的任务文件路径抛出异常。"""
-        from module.core.task_manager import TaskNotFoundError
+        from module.core.task.manager import TaskNotFoundError
 
         with pytest.raises(TaskNotFoundError):
             await task_manager.update_file_paths("nonexistent", ["/file.mp4"])
@@ -464,7 +464,7 @@ class TestSubmitTask:
             task.task_id = "task_1"
 
             with patch(
-                "module.core.task_executor.asyncio.run_coroutine_threadsafe"
+                "module.core.task.executor.asyncio.run_coroutine_threadsafe"
             ) as mock_run:
                 expected_future = MagicMock()
                 mock_run.return_value = expected_future
@@ -2963,7 +2963,7 @@ class TestUploadAllItemsFailedMarksTaskFailed:
         self, task_manager, mock_client, mock_file_manager
     ):
         """上传任务所有文件上传失败时，任务应标记为 FAILED。"""
-        from module.core.file_manager import UploadResult
+        from module.core.download.file_manager import UploadResult
 
         # 模拟所有上传失败
         mock_file_manager.get_file_info = AsyncMock(

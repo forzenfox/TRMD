@@ -99,7 +99,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
         )
 
     # 处理核心模块 TaskNotFoundError
-    from module.core.task_manager import TaskNotFoundError as CoreTaskNotFoundError
+    from module.core.task.manager import TaskNotFoundError as CoreTaskNotFoundError
 
     @app.exception_handler(CoreTaskNotFoundError)
     async def core_task_not_found_handler(
@@ -112,7 +112,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
         )
 
     # 处理核心模块 ResourceLimitError（强制级资源限制）
-    from module.core.task_manager import (
+    from module.core.task.manager import (
         ResourceLimitError as CoreResourceLimitError,
     )
 
@@ -127,7 +127,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
         )
 
     # 处理核心模块 TaskStateError（状态不允许当前操作）
-    from module.core.task_manager import TaskStateError as CoreTaskStateError
+    from module.core.task.manager import TaskStateError as CoreTaskStateError
 
     @app.exception_handler(CoreTaskStateError)
     async def core_task_state_handler(
@@ -140,7 +140,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
         )
 
     # 处理核心模块 ValidationError（参数校验失败）
-    from module.core.task_manager import ValidationError as CoreValidationError
+    from module.core.task.manager import ValidationError as CoreValidationError
 
     @app.exception_handler(CoreValidationError)
     async def core_validation_handler(
@@ -153,7 +153,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
         )
 
     # 处理核心模块 ExecutorError（执行器内部错误）
-    from module.core.task_manager import ExecutorError as CoreExecutorError
+    from module.core.task.manager import ExecutorError as CoreExecutorError
 
     @app.exception_handler(CoreExecutorError)
     async def core_executor_handler(
@@ -166,7 +166,7 @@ def setup_exception_handlers(app: FastAPI) -> None:
         )
 
     # 处理核心模块 TaskManagerError 基类（兜底）
-    from module.core.task_manager import TaskManagerError as CoreTaskManagerError
+    from module.core.task.manager import TaskManagerError as CoreTaskManagerError
 
     @app.exception_handler(CoreTaskManagerError)
     async def core_task_manager_error_handler(

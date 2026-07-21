@@ -16,7 +16,7 @@ import pytest
 
 from module.bot.commands import BotCommands
 from module.core.interaction_manager import InteractionManager
-from module.core.token_manager import TokenManager
+from module.core.auth.token_manager import TokenManager
 
 
 # ==================== Fixtures ====================
@@ -57,7 +57,7 @@ def interaction_manager():
 @pytest.fixture
 def mock_task_manager():
     """模拟 TaskManager。"""
-    from module.core.task_manager import TaskManager
+    from module.core.task.manager import TaskManager
 
     tm = MagicMock(spec=TaskManager)
     tm.create_task = AsyncMock()
@@ -69,7 +69,7 @@ def mock_task_manager():
 @pytest.fixture
 def mock_task_executor():
     """模拟 TaskExecutor。"""
-    from module.core.task_executor import TaskExecutor
+    from module.core.task.executor import TaskExecutor
 
     te = MagicMock(spec=TaskExecutor)
     return te
@@ -996,7 +996,7 @@ class TestHandleBatchComplete:
             return {"task_type": "download", "chat_id": 123, "params": {}}
 
         bot_commands._collected_to_task_params = mock_to_params
-        from module.core.task_manager import ValidationError
+        from module.core.task.manager import ValidationError
 
         bot_commands._task_manager.create_task = AsyncMock(
             side_effect=ValidationError("参数无效")
@@ -1017,7 +1017,7 @@ class TestHandleBatchComplete:
             return {"task_type": "download", "chat_id": 123, "params": {}}
 
         bot_commands._collected_to_task_params = mock_to_params
-        from module.core.task_manager import ResourceLimitError
+        from module.core.task.manager import ResourceLimitError
 
         bot_commands._task_manager.create_task = AsyncMock(
             side_effect=ResourceLimitError("资源不足")

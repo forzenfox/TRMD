@@ -18,14 +18,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from module.core.file_manager import (
+from module.core.download.file_manager import (
     UploadResult,
     FileManager,
 )
-from module.core.repository_db import (
+from module.core.repository.db import (
     RepositoryDB,
 )
-from module.core.repository_manager import RepositoryManager
+from module.core.repository.manager import RepositoryManager
 
 
 # ==================== Fixture ====================

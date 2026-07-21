@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from module.api.dependencies import require_token, get_token_manager
 from module.api.responses import json_response
 from module.api.models.auth import TokenInfo
-from module.core.token_manager import TokenManager
+from module.core.auth.token_manager import TokenManager
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 

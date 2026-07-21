@@ -23,7 +23,7 @@ from module.api.exceptions import (
     InsufficientDiskSpace,
     TaskConflictError,
 )
-from module.core.task_manager import (
+from module.core.task.manager import (
     TaskManager,
     Task,
     TaskType,

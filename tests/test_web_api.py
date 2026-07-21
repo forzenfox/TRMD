@@ -15,8 +15,8 @@ from httpx import AsyncClient, ASGITransport
 
 from module.api.app import create_app
 from module.api.dependencies import get_identifier_service
-from module.core.token_manager import TokenManager
-from module.core.task_manager import TaskManager, TaskType
+from module.core.auth.token_manager import TokenManager
+from module.core.task.manager import TaskManager, TaskType
 from module.core.config_manager import ConfigManager
 from module.core.identifier_service import (
     IdentifierService,

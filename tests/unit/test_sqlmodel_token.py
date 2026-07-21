@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlmodel import SQLModel
 
-from module.core.models.token import TokenRecordDB
+from module.core.auth.models import TokenRecordDB
 
 
 # ==================== Fixture ====================

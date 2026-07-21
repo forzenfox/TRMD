@@ -21,7 +21,7 @@ from unittest.mock import patch, MagicMock, AsyncMock
 import pytest
 import pytest_asyncio
 
-from module.core.task_manager import (
+from module.core.task.manager import (
     TaskManager,
     Task,
     TaskItem,
@@ -772,7 +772,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_disk_space_oserror_raises(self, task_manager):
         """测试磁盘空间检查 OSError 时抛出 ResourceLimitError。"""
-        from module.core.task_manager import ResourceLimitError
+        from module.core.task.manager import ResourceLimitError
 
         with patch("shutil.disk_usage", side_effect=OSError("disk error")):
             with pytest.raises(ResourceLimitError, match="无法获取磁盘使用信息"):
@@ -791,7 +791,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_create_task_exceeds_max_size_forbidden(self, task_manager):
         """测试 create_task 中 estimated_size > 10GB 抛出 ResourceLimitError。"""
-        from module.core.task_manager import ResourceLimitError
+        from module.core.task.manager import ResourceLimitError
 
         with pytest.raises(ResourceLimitError, match="上限"):
             await task_manager.create_task(
@@ -807,7 +807,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_create_task_insufficient_disk_space(self, task_manager):
         """测试 create_task 中磁盘不足抛出 ResourceLimitError。"""
-        from module.core.task_manager import ResourceLimitError
+        from module.core.task.manager import ResourceLimitError
 
         with patch("shutil.disk_usage") as mock_disk_usage:
             mock_disk_usage.return_value = MagicMock(
@@ -867,7 +867,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_invalid_task_type_raises_validation_error(self, task_manager):
         """测试 create_task 传入非法 task_type 抛出 ValidationError。"""
-        from module.core.task_manager import ValidationError
+        from module.core.task.manager import ValidationError
 
         with pytest.raises(ValidationError, match="无效的任务类型"):
             await task_manager.create_task(
@@ -878,7 +878,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_missing_chat_id_raises_validation_error(self, task_manager):
         """测试 create_task 传入 chat_id=0 抛出 ValidationError。"""
-        from module.core.task_manager import ValidationError
+        from module.core.task.manager import ValidationError
 
         with pytest.raises(ValidationError, match="chat_id"):
             await task_manager.create_task(
@@ -903,7 +903,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_backward_compat_aliases(self):
         """验证向后兼容别名仍可用。"""
-        from module.core.task_manager import (
+        from module.core.task.manager import (
             InvalidStateTransition,
             TaskStateError,
         )
@@ -913,7 +913,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_create_task_invalid_range_mode(self, task_manager):
         """测试 create_task 传入非法 range_mode 抛出 ValidationError。"""
-        from module.core.task_manager import ValidationError
+        from module.core.task.manager import ValidationError
 
         with pytest.raises(ValidationError, match="无效的 range_mode"):
             await task_manager.create_task(
@@ -925,7 +925,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_create_task_date_range_missing_start_date(self, task_manager):
         """测试 date_range 缺少 start_date 抛出 ValidationError。"""
-        from module.core.task_manager import ValidationError
+        from module.core.task.manager import ValidationError
 
         with pytest.raises(ValidationError, match="date_range 模式需要提供 start_date"):
             await task_manager.create_task(
@@ -937,7 +937,7 @@ class TestResourceProtection:
     @pytest.mark.asyncio
     async def test_create_task_multiple_ids_missing_message_list(self, task_manager):
         """测试 multiple_ids 缺少 message_list 抛出 ValidationError。"""
-        from module.core.task_manager import ValidationError
+        from module.core.task.manager import ValidationError
 
         with pytest.raises(
             ValidationError, match="multiple_ids 模式需要提供 message_list"
@@ -1594,7 +1594,7 @@ class TestListTasksPreservesReference:
     @pytest.mark.asyncio
     async def test_list_tasks_preserves_items_after_add_items(self, task_manager):
         """list_tasks 后 add_items 添加的子任务仍然可以通过原引用访问。"""
-        from module.core.task_manager import TaskItem
+        from module.core.task.manager import TaskItem
 
         task = await task_manager.create_task(
             task_type=TaskType.DOWNLOAD,

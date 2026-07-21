@@ -20,7 +20,7 @@ from sqlalchemy import delete, update
 from sqlmodel import select
 
 from module.core import db
-from module.core.models.token import TokenRecordDB
+from module.core.auth.models import TokenRecordDB
 
 logger = logging.getLogger(__name__)
 

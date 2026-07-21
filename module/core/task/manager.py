@@ -26,7 +26,7 @@ from sqlalchemy import delete, func
 from sqlmodel import select
 
 from module.core.db import get_session
-from module.core.models.task import TaskItemRecord, TaskRecord
+from module.core.task.models import TaskItemRecord, TaskRecord
 
 if TYPE_CHECKING:
     from module.core.identifier_service import IdentifierService, ResolvedChat

@@ -18,7 +18,7 @@ import asyncio
 import hashlib
 import logging
 
-from module.core.repository_db import (
+from module.core.repository.db import (
     RepositoryDB,
     RepositoryFile,
     RepositorySource,

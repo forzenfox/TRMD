@@ -17,12 +17,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from module.core.repository_db import (
+from module.core.repository.db import (
     RepositoryDB,
     RepositoryFile,
     RepositorySource,
 )
-from module.core.repository_manager import RepositoryManager
+from module.core.repository.manager import RepositoryManager
 
 
 # ==================== Fixture ====================
@@ -540,7 +540,7 @@ class TestDownloaderDedupIntegration:
 
     def test_extract_file_unique_id_from_video_message(self):
         """DL-DEDUP-01: _extract_file_unique_id 应从 video 消息提取 file_unique_id。"""
-        from module.core.downloader import TelegramRestrictedMediaDownloader
+        from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
         message = _make_mock_message(
             file_unique_id="uid_video_ext", chat_id=-100, message_id=1
@@ -550,7 +550,7 @@ class TestDownloaderDedupIntegration:
 
     def test_extract_file_unique_id_from_photo_message(self):
         """DL-DEDUP-02: _extract_file_unique_id 应从 photo 消息提取 file_unique_id。"""
-        from module.core.downloader import TelegramRestrictedMediaDownloader
+        from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
         message = MagicMock()
         message.video = None
@@ -567,7 +567,7 @@ class TestDownloaderDedupIntegration:
 
     def test_extract_file_unique_id_from_no_media(self):
         """DL-DEDUP-03: 无媒体消息应返回 None。"""
-        from module.core.downloader import TelegramRestrictedMediaDownloader
+        from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
         message = MagicMock()
         message.video = None
@@ -582,7 +582,7 @@ class TestDownloaderDedupIntegration:
 
     def test_extract_file_unique_id_priority_order(self):
         """DL-DEDUP-04: _extract_file_unique_id 按优先级提取（video > photo > document）。"""
-        from module.core.downloader import TelegramRestrictedMediaDownloader
+        from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
         # video 优先
         message = MagicMock()

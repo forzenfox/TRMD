@@ -17,7 +17,7 @@ from module import SLEEP_THRESHOLD, console, log, SOFTWARE_FULL_NAME
 from module.core.language import _t
 from module.core.legacy_config import UserConfig
 from module.utils.stdio import StatisticalTable
-from module.core.client import TelegramRestrictedMediaDownloaderClient
+from module.core.download.client import TelegramRestrictedMediaDownloaderClient
 
 from module.core.enums import DownloadType, DownloadStatus, KeyWord
 from module.utils.path_tool import (

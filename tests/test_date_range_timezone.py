@@ -20,8 +20,8 @@ import pytest_asyncio
 sys.argv = sys.argv[:1]
 
 from module.core import db
-from module.core.task_executor import TaskExecutor
-from module.core.task_manager import TaskManager, TaskType
+from module.core.task.executor import TaskExecutor
+from module.core.task.manager import TaskManager, TaskType
 from module.utils.timezone import parse_user_date, SHANGHAI_TZ
 
 

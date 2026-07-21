@@ -90,7 +90,7 @@ class TestTaskEventRecordRemoved:
     def test_task_event_record_import_fails(self):
         """直接从 task 模块导入 TaskEventRecord 应失败。"""
         with pytest.raises(ImportError):
-            from module.core.models.task import TaskEventRecord  # noqa: F401
+            from module.core.task.models import TaskEventRecord  # noqa: F401
 
 
 # ==================== Task dataclass property ====================
@@ -101,7 +101,7 @@ class TestTaskDataclassProperties:
 
     def test_task_total_items_property(self):
         """Task.total_items property 返回 len(items)。"""
-        from module.core.task_manager import Task, TaskItem, TaskType
+        from module.core.task.manager import Task, TaskItem, TaskType
 
         task = Task(
             task_id="test_task",
@@ -115,7 +115,7 @@ class TestTaskDataclassProperties:
 
     def test_task_success_count_pure_realtime(self):
         """success_count 纯实时计算。"""
-        from module.core.task_manager import (
+        from module.core.task.manager import (
             ItemStatus,
             Task,
             TaskItem,
@@ -138,7 +138,7 @@ class TestTaskDataclassProperties:
 
     def test_task_skipped_count_property(self):
         """skipped_count property 返回跳过的子任务数。"""
-        from module.core.task_manager import (
+        from module.core.task.manager import (
             ItemStatus,
             Task,
             TaskItem,
@@ -157,7 +157,7 @@ class TestTaskDataclassProperties:
 
     def test_task_no_summary_attributes(self):
         """Task dataclass 不应含已移除的汇总字段（但允许 property）。"""
-        from module.core.task_manager import Task, TaskType
+        from module.core.task.manager import Task, TaskType
 
         task = Task(
             task_id="test_task",
@@ -258,7 +258,7 @@ class TestTimeFieldsUnified:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
 
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         engine = create_engine("sqlite:///:memory:")
         CacheEntryRecord.metadata.create_all(engine)
@@ -311,7 +311,7 @@ class TestTimeFieldsUnified:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import Session
 
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         engine = create_engine("sqlite:///:memory:")
         CacheEntryRecord.metadata.create_all(engine)
@@ -339,7 +339,7 @@ class TestTimeFieldsUnified:
         """Task.items 类型注解应为 list[TaskItem]。"""
         from typing import get_type_hints
 
-        from module.core.task_manager import Task, TaskItem
+        from module.core.task.manager import Task, TaskItem
 
         hints = get_type_hints(Task)
         items_hint = hints.get("items")

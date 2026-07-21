@@ -7,7 +7,7 @@
 from fastapi import Header, Query, HTTPException, status, Request
 from typing import Optional
 
-from module.core.token_manager import TokenManager
+from module.core.auth.token_manager import TokenManager
 
 
 # ==================== 认证依赖 ====================

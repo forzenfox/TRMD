@@ -85,7 +85,7 @@ async def _estimate_id_range(client, chat_id, params, type_filters, precise):
 
 async def _estimate_multiple_ids(client, chat_id, params, type_filters, precise):
     """消息列表估算：直接遍历指定消息（通常数量较少）。"""
-    from module.core.task_executor import TaskExecutor
+    from module.core.task.executor import TaskExecutor
 
     message_list = params.get("message_list") or []
     if not message_list:

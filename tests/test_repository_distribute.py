@@ -15,12 +15,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from module.core.repository_db import (
+from module.core.repository.db import (
     RepositoryDB,
     RepositoryFile,
     RepositorySource,
 )
-from module.core.repository_manager import RepositoryManager
+from module.core.repository.manager import RepositoryManager
 
 
 # ==================== Mock Pyrogram Objects ====================
@@ -177,7 +177,7 @@ def _create_downloader(repo_manager_instance) -> object:
     Uses object.__new__ to bypass __init__ and manually sets only
     the attributes needed by the forward() method.
     """
-    from module.core.downloader import TelegramRestrictedMediaDownloader
+    from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
     dl = object.__new__(TelegramRestrictedMediaDownloader)
     dl.app = MagicMock()

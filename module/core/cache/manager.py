@@ -22,7 +22,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from module.core.db import get_session
-from module.core.models.cache import CacheEntryRecord, CacheParamRecord
+from module.core.cache.models import CacheEntryRecord, CacheParamRecord
 
 logger = logging.getLogger(__name__)
 

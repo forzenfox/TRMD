@@ -14,7 +14,7 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 
 from module.core import db
-from module.core.models.repository import (
+from module.core.repository.models import (
     FileDistributionRecord,
     RepositoryFileRecord,
     RepositorySourceRecord,

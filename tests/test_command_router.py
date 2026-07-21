@@ -397,7 +397,7 @@ class TestListenCommands:
         self, router, mock_client, mock_message, mock_task_manager
     ):
         """/listen_download 有效链接应调用 TaskManager.create_task。"""
-        from module.core.task_manager import Task, TaskType, TaskStatus
+        from module.core.task.manager import Task, TaskType, TaskStatus
 
         mock_task = Task(
             task_id="test_task_id_12345678",
@@ -440,7 +440,7 @@ class TestListenCommands:
         mock_identifier_service,
     ):
         """/listen_forward 有效参数应调用 TaskManager.create_task。"""
-        from module.core.task_manager import Task, TaskType, TaskStatus
+        from module.core.task.manager import Task, TaskType, TaskStatus
 
         mock_task = Task(
             task_id="test_task_id_87654321",
@@ -504,7 +504,7 @@ class TestListenCommands:
         self, router, mock_client, mock_message, mock_task_manager
     ):
         """有监听任务时应从 TaskManager 查询并显示。"""
-        from module.core.task_manager import Task, TaskType, TaskStatus
+        from module.core.task.manager import Task, TaskType, TaskStatus
 
         mock_download_task = Task(
             task_id="dl_task_id_12345678",
@@ -525,7 +525,7 @@ class TestListenCommands:
         self, router, mock_client, mock_message, mock_task_manager
     ):
         """有监听转发任务时应从 TaskManager 查询并显示。"""
-        from module.core.task_manager import Task, TaskType, TaskStatus
+        from module.core.task.manager import Task, TaskType, TaskStatus
 
         mock_forward_task = Task(
             task_id="fw_task_id_87654321",

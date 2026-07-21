@@ -10,8 +10,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from module.core.repository_db import RepositoryDB, RepositoryFile
-from module.core.repository_sync import RepositorySync
+from module.core.repository.db import RepositoryDB, RepositoryFile
+from module.core.repository.sync import RepositorySync
 
 
 # ==================== Fixture ====================

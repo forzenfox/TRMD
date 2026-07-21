@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 from freezegun import freeze_time
 
-from module.core.token_manager import (
+from module.core.auth.token_manager import (
     TokenManager,
     TokenRecord,
     TokenAuthError,
@@ -407,7 +407,7 @@ class TestPersistence:
     def test_sqlite_table_creation(self, tmp_db_path):
         """初始化后数据库应包含 tokens 表（通过 SQLModel 验证）。"""
         from module.core import db
-        from module.core.models.token import TokenRecordDB
+        from module.core.auth.models import TokenRecordDB
         db.init_sync_db(tmp_db_path)
         TokenManager()
         # 验证 SQLModel 模型对应的表已创建
@@ -500,6 +500,6 @@ class TestExceptionHierarchy:
 
     def test_token_missing_error_is_auth_error(self):
         """TokenMissingError 应继承 TokenAuthError。"""
-        from module.core.token_manager import TokenMissingError
+        from module.core.auth.token_manager import TokenMissingError
 
         assert issubclass(TokenMissingError, TokenAuthError)

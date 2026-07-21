@@ -13,7 +13,7 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 
 from module.core import db
-from module.core.models.task import TaskItemRecord, TaskRecord
+from module.core.task.models import TaskItemRecord, TaskRecord
 
 
 # ==================== Fixture ====================

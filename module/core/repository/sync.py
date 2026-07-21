@@ -14,8 +14,8 @@ import logging
 from sqlalchemy import func, select
 
 from module.core import db
-from module.core.models.repository import RepositoryFileRecord
-from module.core.repository_db import (
+from module.core.repository.models import RepositoryFileRecord
+from module.core.repository.db import (
     RepositoryDB,
     RepositoryFile,
 )

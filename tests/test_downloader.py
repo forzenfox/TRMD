@@ -35,10 +35,10 @@ class TestCheckType:
     @pytest.fixture
     def downloader(self):
         """构造轻量级 Downloader 实例。"""
-        with patch("module.core.downloader.Bot.__init__", return_value=None):
-            with patch("module.core.downloader.Application"):
+        with patch("module.core.download.downloader.Bot.__init__", return_value=None):
+            with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl.app = MagicMock()
@@ -94,10 +94,10 @@ class TestContentProtectionFallback:
     @pytest.fixture
     def downloader(self):
         """构造带 Mock 依赖的 Downloader 实例。"""
-        with patch("module.core.downloader.Bot.__init__", return_value=None):
-            with patch("module.core.downloader.Application"):
+        with patch("module.core.download.downloader.Bot.__init__", return_value=None):
+            with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl._commands = MagicMock()
@@ -147,20 +147,20 @@ class TestContentProtectionFallback:
         client_mock.me = MagicMock(id=999)
 
         with patch(
-            "module.core.downloader.parse_link",
+            "module.core.download.downloader.parse_link",
             side_effect=[
                 {"chat_id": -100111},
                 {"chat_id": -100222},
             ],
         ):
             with patch(
-                "module.core.downloader.get_chat_with_notify",
+                "module.core.download.downloader.get_chat_with_notify",
                 side_effect=[
                     MagicMock(id=-100111, username="origin"),
                     MagicMock(id=-100222, username="target"),
                 ],
             ):
-                with patch("module.core.downloader.get_my_id", return_value=123):
+                with patch("module.core.download.downloader.get_my_id", return_value=123):
                     await downloader.get_forward_link_from_bot(
                         client=client_mock,
                         message=MagicMock(
@@ -201,20 +201,20 @@ class TestContentProtectionFallback:
         client_mock.me = MagicMock(id=999)
 
         with patch(
-            "module.core.downloader.parse_link",
+            "module.core.download.downloader.parse_link",
             side_effect=[
                 {"chat_id": -100111},
                 {"chat_id": -100222},
             ],
         ):
             with patch(
-                "module.core.downloader.get_chat_with_notify",
+                "module.core.download.downloader.get_chat_with_notify",
                 side_effect=[
                     MagicMock(id=-100111, username="origin"),
                     MagicMock(id=-100222, username="target"),
                 ],
             ):
-                with patch("module.core.downloader.get_my_id", return_value=123):
+                with patch("module.core.download.downloader.get_my_id", return_value=123):
                     await downloader.get_forward_link_from_bot(
                         client=client_mock,
                         message=MagicMock(
@@ -251,20 +251,20 @@ class TestContentProtectionFallback:
         client_mock.me = MagicMock(id=999)
 
         with patch(
-            "module.core.downloader.parse_link",
+            "module.core.download.downloader.parse_link",
             side_effect=[
                 {"chat_id": -100111},
                 {"chat_id": -100222},
             ],
         ):
             with patch(
-                "module.core.downloader.get_chat_with_notify",
+                "module.core.download.downloader.get_chat_with_notify",
                 side_effect=[
                     MagicMock(id=-100111, username="origin"),
                     MagicMock(id=-100222, username="target"),
                 ],
             ):
-                with patch("module.core.downloader.get_my_id", return_value=123):
+                with patch("module.core.download.downloader.get_my_id", return_value=123):
                     await downloader.get_forward_link_from_bot(
                         client=client_mock,
                         message=MagicMock(
@@ -291,11 +291,11 @@ class TestDownloadRangeDtype:
     @pytest.fixture
     def downloader(self):
         """构造带真实 get_temp_file_path 的 Downloader 实例。"""
-        with patch("module.core.downloader.Bot.__init__", return_value=None):
-            with patch("module.core.downloader.Application"):
+        with patch("module.core.download.downloader.Bot.__init__", return_value=None):
+            with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
                     from module.app import Application
-                    from module.core.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
                     dl = TelegramRestrictedMediaDownloader()
                     real_app = Application.__new__(Application)
@@ -343,7 +343,7 @@ class TestDownloadRangeDtype:
         )
 
         with patch("module.app.get_extension", return_value="mp4"):
-            with patch("module.core.downloader.is_file_duplicate", return_value=False):
+            with patch("module.core.download.downloader.is_file_duplicate", return_value=False):
                 await downloader.download_range(
                     chat_id=-100123,
                     start_id=96396,
@@ -371,7 +371,7 @@ class TestDownloadRangeDtype:
         )
 
         with patch("module.app.get_extension", return_value="jpg"):
-            with patch("module.core.downloader.is_file_duplicate", return_value=False):
+            with patch("module.core.download.downloader.is_file_duplicate", return_value=False):
                 await downloader.download_range(
                     chat_id=-100123,
                     start_id=96396,
@@ -409,7 +409,7 @@ class TestDownloadRangeDtype:
             return str(path).endswith(".temp")
 
         with patch("module.app.get_extension", return_value="mp4"):
-            with patch("module.core.downloader.is_file_duplicate", return_value=False):
+            with patch("module.core.download.downloader.is_file_duplicate", return_value=False):
                 with patch("os.path.exists", side_effect=_fake_exists):
                     await downloader.download_range(
                         chat_id=-100123,
@@ -435,10 +435,10 @@ class TestResumeDownloadProgress:
     @pytest.fixture
     def downloader(self):
         """构造最小化的 Downloader 实例。"""
-        with patch("module.core.downloader.Bot.__init__", return_value=None):
-            with patch("module.core.downloader.Application"):
+        with patch("module.core.download.downloader.Bot.__init__", return_value=None):
+            with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl.app = MagicMock()
@@ -457,7 +457,7 @@ class TestResumeDownloadProgress:
 
         downloader.app.client.stream_media = _stream
 
-        with patch("module.core.downloader.safe_replace") as mock_safe_replace:
+        with patch("module.core.download.downloader.safe_replace") as mock_safe_replace:
             mock_safe_replace.return_value = {"e_code": None}
             result = await downloader.resume_download(
                 message=MagicMock(),
@@ -474,10 +474,10 @@ class TestInitRepositoryManager:
     @pytest.fixture
     def downloader(self):
         """构造轻量级 Downloader 实例。"""
-        with patch("module.core.downloader.Bot.__init__", return_value=None):
-            with patch("module.core.downloader.Application"):
+        with patch("module.core.download.downloader.Bot.__init__", return_value=None):
+            with patch("module.core.download.downloader.Application"):
                 with patch("asyncio.get_event_loop"):
-                    from module.core.downloader import TelegramRestrictedMediaDownloader
+                    from module.core.download.downloader import TelegramRestrictedMediaDownloader
 
                     dl = TelegramRestrictedMediaDownloader()
                     dl.app = MagicMock()
@@ -506,8 +506,8 @@ class TestInitRepositoryManager:
         downloader.app.resolved_data_directory = str(tmp_path / ".trmd")
 
         with patch("module.core.integration.get_context", return_value=None):
-            with patch("module.core.repository_db.RepositoryDB") as MockRepoDB:
-                with patch("module.core.repository_manager.RepositoryManager") as MockRepoMgr:
+            with patch("module.core.repository.db.RepositoryDB") as MockRepoDB:
+                with patch("module.core.repository.manager.RepositoryManager") as MockRepoMgr:
                     downloader._init_repository_manager()
 
         # 验证 db_path 使用了 resolved_data_directory

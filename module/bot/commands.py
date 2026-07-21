@@ -21,14 +21,14 @@ from pyrogram.types.messages_and_media.link_preview_options import LinkPreviewOp
 
 from module.bot.keyboard_manager import KeyboardManager
 from module.core.config_manager import ConfigManager
-from module.core.task_manager import (
+from module.core.task.manager import (
     TaskManager,
     TaskType,
     ValidationError,
     ResourceLimitError,
 )
-from module.core.task_executor import TaskExecutor
-from module.core.token_manager import TokenManager
+from module.core.task.executor import TaskExecutor
+from module.core.auth.token_manager import TokenManager
 from module.core.interaction_manager import InteractionManager, BatchStep
 
 logger = logging.getLogger(__name__)

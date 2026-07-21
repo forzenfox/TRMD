@@ -32,7 +32,7 @@ from module import (
     LINK_PREVIEW_OPTIONS,
 )
 from module.core.language import _t
-from module.task import UploadTask
+from module.core.task.legacy import UploadTask
 from module.utils.path_tool import safe_scan_directory_file
 from module.utils.helpers import (
     safe_index,
@@ -51,7 +51,7 @@ from module.bot.utils import MessageHelper, TextFormatter, ValidationHelper
 from module.bot.keyboard_manager import KeyboardManager
 from module.bot.state_manager import StateManager
 
-from module.core.task_manager import TaskType, TaskStatus
+from module.core.task.manager import TaskType, TaskStatus
 
 if TYPE_CHECKING:
     from module.core.identifier_service import IdentifierService, IdentifierServiceError
@@ -786,7 +786,7 @@ class CommandRouter:
                     )
                     created_tasks.append(task.task_id)
                 except Exception as exc:
-                    from module.core.task_manager import TaskConflictError
+                    from module.core.task.manager import TaskConflictError
 
                     if isinstance(exc, TaskConflictError):
                         failed_links.append((link, "该频道已有监听任务"))
@@ -905,7 +905,7 @@ class CommandRouter:
                     ),
                 )
             except Exception as exc:
-                from module.core.task_manager import TaskConflictError
+                from module.core.task.manager import TaskConflictError
                 from module.core.identifier_service import IdentifierServiceError
 
                 if isinstance(exc, TaskConflictError):

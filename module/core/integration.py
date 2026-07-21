@@ -13,14 +13,14 @@ import logging
 from typing import Optional
 
 from module.core import db
-from module.core.token_manager import TokenManager
-from module.core.task_manager import TaskManager
-from module.core.cache_manager import CacheManager
-from module.core.file_manager import FileManager
-from module.core.repository_db import RepositoryDB
-from module.core.repository_sync import RepositorySync
+from module.core.auth.token_manager import TokenManager
+from module.core.task.manager import TaskManager
+from module.core.cache.manager import CacheManager
+from module.core.download.file_manager import FileManager
+from module.core.repository.db import RepositoryDB
+from module.core.repository.sync import RepositorySync
 from module.core.config_manager import ConfigManager
-from module.core.client_manager import ClientManager
+from module.core.download.client_manager import ClientManager
 from module.core.interaction_manager import InteractionManager
 
 log = logging.getLogger("rich")
@@ -159,7 +159,7 @@ class AppContext:
 
     def _init_repository_manager(self):
         """初始化 RepositoryManager。"""
-        from module.core.repository_manager import RepositoryManager
+        from module.core.repository.manager import RepositoryManager
 
         rm = RepositoryManager(
             repository_db=self.repository_db,
@@ -264,7 +264,7 @@ class AppContext:
         # 确保异步数据库引擎已初始化
         await self.init_database()
 
-        from module.core.task_executor import TaskExecutor
+        from module.core.task.executor import TaskExecutor
 
         # 向 FileManager 注入真实的 client、config 和 RepositoryManager（初始化时为占位值）
         self.file_manager._client = client

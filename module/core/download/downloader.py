@@ -70,9 +70,9 @@ from module.utils.path_tool import (
     safe_replace,
     validate_title,
 )
-from module.task import DownloadTask, UploadTask
+from module.core.task.legacy import DownloadTask, UploadTask
 from module.utils.stdio import ProgressBar, MetaData
-from module.core.uploader import TelegramUploader
+from module.core.download.uploader import TelegramUploader
 from module.utils.helpers import (
     is_docker,
     parse_link,
@@ -1853,7 +1853,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                     f"已有仓库记录，跳过上传。"
                 )
                 # L2 命中：添加 source mapping
-                from module.core.repository_db import RepositorySource
+                from module.core.repository.db import RepositorySource
 
                 source_record = RepositorySource(
                     id=None,
@@ -1900,7 +1900,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                     # L3 命中：删除本地文件
                     safe_delete(file_path)
                     # L3 命中：添加 source mapping
-                    from module.core.repository_db import RepositorySource
+                    from module.core.repository.db import RepositorySource
 
                     source_record = RepositorySource(
                         id=None,
@@ -2092,7 +2092,7 @@ class TelegramRestrictedMediaDownloader(Bot):
             tuple: (成功下载的文件路径列表, 消息ID到处理结果的映射字典)
                 映射字典格式: {msg_id: {"status": ItemStatus, "file_path": str|None, "error": str|None}}
         """
-        from module.core.task_manager import ItemStatus
+        from module.core.task.manager import ItemStatus
 
         # 支持的媒体类型列表
         supported_types = [
@@ -2710,8 +2710,8 @@ class TelegramRestrictedMediaDownloader(Bot):
                 pass
 
             # 降级：使用 resolved_data_directory 创建本地实例
-            from module.core.repository_db import RepositoryDB
-            from module.core.repository_manager import RepositoryManager
+            from module.core.repository.db import RepositoryDB
+            from module.core.repository.manager import RepositoryManager
 
             db_path = os.path.join(self.app.resolved_data_directory, "repository.db")
             os.makedirs(os.path.dirname(db_path), exist_ok=True)

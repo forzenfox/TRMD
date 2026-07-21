@@ -9,7 +9,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from module.core.file_manager import (
+from module.core.download.file_manager import (
     FileInfo,
     UploadResult,
     MediaGroupConfig,

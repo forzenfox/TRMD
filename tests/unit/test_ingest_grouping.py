@@ -8,7 +8,7 @@
 - 空字符串 media_group_id 视为 None
 """
 
-from module.core.task_manager import ItemStatus, TaskItem
+from module.core.task.manager import ItemStatus, TaskItem
 
 
 def _make_item(

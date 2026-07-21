@@ -11,7 +11,7 @@ import pytest
 import pytest_asyncio
 
 from module.core import db
-from module.core.cache_manager import CacheManager, CacheError
+from module.core.cache.manager import CacheManager, CacheError
 from sqlalchemy import select, text
 
 
@@ -311,7 +311,7 @@ async def test_fetcher_exception_no_cache_write(cache: CacheManager):
     async with db.get_session() as session:
         from sqlalchemy import func
 
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         count = await session.scalar(select(func.count()).select_from(CacheEntryRecord))
     assert count == 0
@@ -384,7 +384,7 @@ async def test_lru_eviction_on_max_entries(cache: CacheManager):
     async with db.get_session() as session:
         from sqlalchemy import func
 
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         count = await session.scalar(select(func.count()).select_from(CacheEntryRecord))
 
@@ -468,7 +468,7 @@ async def test_clear_all(cache: CacheManager):
     async with db.get_session() as session:
         from sqlalchemy import func
 
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         count = await session.scalar(select(func.count()).select_from(CacheEntryRecord))
     assert count == 0
@@ -491,7 +491,7 @@ async def test_message_stats_ttl(cache: CacheManager):
     )
 
     async with db.get_session() as session:
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         # SQLite 不支持 datetime 列直接相减；改为分别读取后在 Python 中相减。
         result = await session.execute(
@@ -524,7 +524,7 @@ async def test_message_list_ttl(cache: CacheManager):
     )
 
     async with db.get_session() as session:
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         # SQLite 不支持 datetime 列直接相减；改为分别读取后在 Python 中相减。
         result = await session.execute(
@@ -553,7 +553,7 @@ async def test_chat_list_ttl(cache: CacheManager):
     await cache.get_chat_list(fetcher=fetcher)
 
     async with db.get_session() as session:
-        from module.core.models.cache import CacheEntryRecord
+        from module.core.cache.models import CacheEntryRecord
 
         # SQLite 不支持 datetime 列直接相减；改为分别读取后在 Python 中相减。
         result = await session.execute(

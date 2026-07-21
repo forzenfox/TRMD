@@ -14,7 +14,7 @@ from sqlalchemy import select, func, delete
 from sqlalchemy.exc import IntegrityError
 
 from module.core import db
-from module.core.models.cache import CacheEntryRecord, CacheParamRecord
+from module.core.cache.models import CacheEntryRecord, CacheParamRecord
 
 
 # ==================== Fixture ====================
