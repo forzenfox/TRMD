@@ -67,7 +67,7 @@ class TestCLIInteractiveRemoved:
 
     def test_config_no_task_links(self):
         """验证 config.yaml 不包含 task.links 配置。"""
-        config_file = Path(__file__).parent.parent / "config.yaml"
+        config_file = Path(__file__).parent.parent.parent / "config.yaml"
 
         if not config_file.exists():
             pytest.skip("config.yaml 不存在")

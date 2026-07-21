@@ -14,7 +14,7 @@ import pytest
 @pytest.fixture
 def tasks_html_text() -> str:
     """加载任务页面 HTML 文本。"""
-    html_path = Path(__file__).parent.parent / "module" / "web" / "tasks.html"
+    html_path = Path(__file__).parent.parent.parent.parent / "module" / "web" / "tasks.html"
     assert html_path.exists(), f"tasks.html 不存在: {html_path}"
     return html_path.read_text(encoding="utf-8")
 
