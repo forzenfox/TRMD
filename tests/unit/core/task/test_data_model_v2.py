@@ -14,7 +14,7 @@
 
 import pytest
 
-from module.core.models import (
+from module.core import (
     RepositorySourceRecord,
     TaskItemRecord,
     TaskRecord,
@@ -83,7 +83,7 @@ class TestTaskEventRecordRemoved:
 
     def test_task_event_record_not_exported(self):
         """__init__.py 不应导出 TaskEventRecord。"""
-        from module.core.models import __all__ as models_all
+        from module.core import __all__ as models_all
 
         assert "TaskEventRecord" not in models_all
 

@@ -15,13 +15,21 @@ RepositoryDB、RepositoryManager 等核心业务组件。
 from module.core.monitor import Monitor
 
 __all__ = [
-    "TaskManager",
-    "FileManager",
-    "TokenManager",
+    "CacheEntryRecord",
     "CacheManager",
+    "CacheParamRecord",
+    "FileDistributionRecord",
+    "FileManager",
     "Monitor",
     "RepositoryDB",
+    "RepositoryFileRecord",
     "RepositoryManager",
+    "RepositorySourceRecord",
+    "TaskItemRecord",
+    "TaskManager",
+    "TaskRecord",
+    "TokenManager",
+    "TokenRecordDB",
 ]
 
 # 延迟导入，避免 module → module.core → module 的循环依赖
@@ -34,6 +42,15 @@ def __getattr__(name):
         "CacheManager": "module.core.cache",
         "RepositoryDB": "module.core.repository",
         "RepositoryManager": "module.core.repository",
+        # 模型 re-export
+        "TaskRecord": "module.core.task.models",
+        "TaskItemRecord": "module.core.task.models",
+        "RepositoryFileRecord": "module.core.repository.models",
+        "RepositorySourceRecord": "module.core.repository.models",
+        "FileDistributionRecord": "module.core.repository.models",
+        "CacheEntryRecord": "module.core.cache.models",
+        "CacheParamRecord": "module.core.cache.models",
+        "TokenRecordDB": "module.core.auth.models",
     }
     if name in _lazy:
         import importlib
