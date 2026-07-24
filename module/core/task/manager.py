@@ -291,6 +291,8 @@ class TaskManager:
         self._tasks: dict[str, Task] = {}
         self._task_queue: list[str] = []
         self._lock = asyncio.Lock()
+        # 已惰性加载子任务的任务 ID 集合
+        self._items_loaded: set[str] = set()
         # 注意：建表由 module.core.db.init_db 统一处理；
         #       历史任务加载由 initialize() 异步完成。
 
@@ -306,19 +308,13 @@ class TaskManager:
     # ============================================================
 
     async def _load_tasks_from_db(self):
-        """从数据库加载所有任务及其子任务到内存缓存。"""
+        """从数据库加载所有任务到内存缓存（子任务按需惰性加载）。"""
         async with get_session() as session:
             result = await session.execute(select(TaskRecord))
             records = result.scalars().all()
 
             for record in records:
                 task = self._record_to_task(record)
-                # 加载子任务
-                item_result = await session.execute(
-                    select(TaskItemRecord).where(TaskItemRecord.task_id == record.id)
-                )
-                for item_record in item_result.scalars().all():
-                    task.items.append(self._record_to_item(item_record))
                 self._tasks[task.task_id] = task
 
             # 恢复排队中的任务到队列（防止重启后排队任务丢失）
@@ -328,6 +324,18 @@ class TaskManager:
             if queued_ids:
                 self._task_queue.extend(queued_ids)
                 log.info(f"已恢复 {len(queued_ids)} 个排队任务: {queued_ids}")
+
+    async def _ensure_items(self, task: Task) -> None:
+        """惰性加载子任务到 task.items（仅首次从数据库加载，后续跳过）。"""
+        if task.task_id in self._items_loaded:
+            return
+        async with get_session() as session:
+            item_result = await session.execute(
+                select(TaskItemRecord).where(TaskItemRecord.task_id == task.task_id)
+            )
+            for item_record in item_result.scalars().all():
+                task.items.append(self._record_to_item(item_record))
+        self._items_loaded.add(task.task_id)
 
     # ---- mapper 方法：业务对象 <-> 数据库模型 ----
 
@@ -733,7 +741,8 @@ class TaskManager:
             task.started_at = None
             task.completed_at = None
 
-            # 重置/跳过失败的子任务
+            # 惰性加载子任务，重置/跳过失败的子任务
+            await self._ensure_items(task)
             for item in task.items:
                 if item.status == ItemStatus.FAILED:
                     if item.can_retry():
@@ -750,9 +759,17 @@ class TaskManager:
             await self._save_task(task)
             log.info(f"任务重试: {task_id} (第 {task.retry_count} 次)")
 
-    async def get_task(self, task_id: str) -> Optional[Task]:
-        """获取任务。"""
-        return self._tasks.get(task_id)
+    async def get_task(self, task_id: str, with_items: bool = False) -> Optional[Task]:
+        """获取任务。
+
+        Args:
+            task_id: 任务 ID
+            with_items: 是否同时加载子任务。默认 False（惰性）。
+        """
+        task = self._tasks.get(task_id)
+        if task and with_items:
+            await self._ensure_items(task)
+        return task
 
     async def list_tasks(
         self,
@@ -816,6 +833,7 @@ class TaskManager:
                         )
                         for item_record in item_result.scalars().all():
                             existing.items.append(self._record_to_item(item_record))
+                        self._items_loaded.add(record.id)
                         tasks.append(existing)
                     else:
                         # 新发现的任务（理论上不应发生，但做防御性处理）
@@ -827,6 +845,7 @@ class TaskManager:
                         )
                         for item_record in item_result.scalars().all():
                             new_task.items.append(self._record_to_item(item_record))
+                        self._items_loaded.add(record.id)
                         self._tasks[new_task.task_id] = new_task
                         tasks.append(new_task)
                 return tasks, total
@@ -863,6 +882,9 @@ class TaskManager:
             task = self._tasks.get(task_id)
             if not task:
                 raise TaskNotFoundError(f"任务不存在: {task_id}")
+
+            # 惰性加载已有子任务，避免覆盖现有记录
+            await self._ensure_items(task)
             for item in items:
                 item.task_id = task_id
                 item.created_at = now
@@ -897,6 +919,9 @@ class TaskManager:
             task = self._tasks.get(task_id)
             if not task:
                 raise TaskNotFoundError(f"任务不存在: {task_id}")
+
+            # 惰性加载子任务，确保能定位到目标 item
+            await self._ensure_items(task)
             for item in task.items:
                 if item.id == item_id:
                     item.status = status
@@ -934,6 +959,7 @@ class TaskManager:
         task = self._tasks.get(task_id)
         if not task:
             raise TaskNotFoundError(f"任务不存在: {task_id}")
+        await self._ensure_items(task)
         return [item for item in task.items if item.status == ItemStatus.FAILED]
 
     def check_size_threshold(self, size_bytes: int) -> tuple[str, Optional[str]]:
@@ -979,6 +1005,14 @@ class TaskManager:
             check_dir = download_dir or os.path.dirname(
                 os.path.dirname(os.path.abspath(__file__))
             )
+            # 如果目录不存在，向上查找最近存在的父目录
+            if not os.path.exists(check_dir):
+                parent = os.path.dirname(check_dir)
+                while parent and not os.path.exists(parent):
+                    parent = os.path.dirname(parent)
+                check_dir = parent or os.path.dirname(
+                    os.path.dirname(os.path.abspath(__file__))
+                )
             usage = shutil.disk_usage(check_dir)
             free_gb = usage.free / (1024 * 1024 * 1024)
             estimated_gb = estimated_size / (1024 * 1024 * 1024)

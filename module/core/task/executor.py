@@ -1100,9 +1100,11 @@ class TaskExecutor:
                 continue
 
             mg_id = item.media_group_id
-            # 空字符串视为 None
-            if mg_id is not None and mg_id.strip() == "":
-                mg_id = None
+            # 统一转为字符串，空字符串视为 None
+            if mg_id is not None:
+                mg_id = str(mg_id).strip()
+                if mg_id == "":
+                    mg_id = None
 
             if mg_id:
                 # 有 media_group_id：按 media_group_id 分组（相册）

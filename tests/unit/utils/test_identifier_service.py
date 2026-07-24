@@ -95,6 +95,27 @@ class TestDetectFormat:
             == IdentifierFormat.INVALID
         )
 
+    def test_t_me_link_c_private_channel(self):
+        """私有频道 c/ 前缀链接应识别为 T_ME_LINK。"""
+        assert (
+            IdentifierService._detect_format("https://t.me/c/3819214828")
+            == IdentifierFormat.T_ME_LINK
+        )
+
+    def test_t_me_link_c_no_scheme(self):
+        """无 scheme 的私有频道 c/ 链接应识别为 T_ME_LINK。"""
+        assert (
+            IdentifierService._detect_format("t.me/c/3819214828")
+            == IdentifierFormat.T_ME_LINK
+        )
+
+    def test_t_me_link_c_with_post_id_invalid(self):
+        """带 post_id 的 c/ 消息链接应视为 INVALID。"""
+        assert (
+            IdentifierService._detect_format("https://t.me/c/3819214828/123")
+            == IdentifierFormat.INVALID
+        )
+
     def test_invalid_special_chars(self):
         assert (
             IdentifierService._detect_format("not valid!!") == IdentifierFormat.INVALID
@@ -154,6 +175,24 @@ class TestNormalize:
                 "https://t.me/+AbCdEfGhIjKlMnOp", IdentifierFormat.T_ME_LINK
             )
             == "https://t.me/+AbCdEfGhIjKlMnOp"
+        )
+
+    def test_normalize_t_me_link_c_private_channel(self):
+        """c/ 前缀私有频道链接应规范化为 -100 格式 ID。"""
+        assert (
+            IdentifierService._normalize(
+                "https://t.me/c/3819214828", IdentifierFormat.T_ME_LINK
+            )
+            == -1003819214828
+        )
+
+    def test_normalize_t_me_link_c_no_scheme(self):
+        """无 scheme 的 c/ 链接应规范化为 -100 格式 ID。"""
+        assert (
+            IdentifierService._normalize(
+                "t.me/c/3819214828", IdentifierFormat.T_ME_LINK
+            )
+            == -1003819214828
         )
 
     def test_normalize_t_me_link_none_group_id(self):
@@ -267,6 +306,30 @@ class TestResolveSuccess:
             is_private=False,
         )
         client.get_chat.assert_awaited_once_with("devgroup")
+
+    @pytest.mark.asyncio
+    async def test_resolve_t_me_link_c_private_channel(self):
+        """c/ 前缀私有频道链接解析应调用 get_chat(-100XXXX)。"""
+        chat = MockChat(
+            -1003819214828, "channel", title="Private Channel", username=None
+        )
+        client = MagicMock()
+        client.get_chat = AsyncMock(return_value=chat)
+        service = make_service(client)
+
+        result = await service.resolve("https://t.me/c/3819214828")
+
+        assert result == ResolvedChat(
+            chat_id=-1003819214828,
+            chat_type="channel",
+            chat_name="Private Channel",
+            username=None,
+            message_count=-1,
+            media_count=-1,
+            has_access=True,
+            is_private=False,
+        )
+        client.get_chat.assert_awaited_once_with(-1003819214828)
 
     @pytest.mark.asyncio
     async def test_resolve_group(self):

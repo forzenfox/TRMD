@@ -264,6 +264,9 @@ class AppContext:
         # 确保异步数据库引擎已初始化
         await self.init_database()
 
+        # 从数据库加载历史任务到内存缓存
+        await self.task_manager.initialize()
+
         from module.core.task.executor import TaskExecutor
 
         # 向 FileManager 注入真实的 client、config 和 RepositoryManager（初始化时为占位值）

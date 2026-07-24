@@ -7,6 +7,7 @@
 import logging
 import os
 import shutil
+import sys
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
@@ -71,8 +72,9 @@ def _load_log_levels_from_config():
     global FILE_LOG_LEVEL, CONSOLE_LOG_LEVEL
 
     # 尝试从 config.yaml 的 log 分组读取
+    # 使用与 UserConfig 一致的路径解析：sys.argv[0] 所在目录下的 config.yaml
     config_yaml_path = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "config.yaml"
+        os.path.dirname(os.path.abspath(sys.argv[0])), "config.yaml"
     )
     config_yaml_path = os.path.normpath(config_yaml_path)
     if os.path.exists(config_yaml_path):

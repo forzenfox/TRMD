@@ -1204,6 +1204,11 @@
         fileListPath: '',
         allSelected: false,
 
+        // HTML 模板直接引用 selectedFiles，代理到 createForm.selectedFiles
+        get selectedFiles() {
+          return this.createForm.selectedFiles;
+        },
+
         // 分页响应式镜像（taskManager.totalPages/totalTasks/page 是非响应式全局对象，
         // Alpine 无法自动检测其变更，需通过响应式属性同步以驱动 x-show/x-text 更新）
         totalPages: 0,

@@ -81,6 +81,28 @@ class ChatNotFoundError(TRMDAPIException):
 # ==================== 异常处理器 ====================
 
 
+def _sanitize_errors(errors: list) -> list:
+    """递归清理错误中的非 JSON 可序列化对象（如 Exception 实例）。"""
+    sanitized = []
+    for err in errors:
+        if isinstance(err, dict):
+            sanitized.append({k: _sanitize_value(v) for k, v in err.items()})
+        else:
+            sanitized.append(err)
+    return sanitized
+
+
+def _sanitize_value(value):
+    """将非 JSON 可序列化对象转为字符串。"""
+    if isinstance(value, dict):
+        return {k: _sanitize_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_value(v) for v in value]
+    if isinstance(value, Exception):
+        return str(value)
+    return value
+
+
 def setup_exception_handlers(app: FastAPI) -> None:
     """注册全局异常处理器。
 
@@ -202,12 +224,13 @@ def setup_exception_handlers(app: FastAPI) -> None:
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
         """处理请求参数校验失败。"""
+        errors = _sanitize_errors(exc.errors())
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
                 "code": 422,
                 "message": "请求参数校验失败",
-                "data": {"detail": exc.errors()},
+                "data": {"detail": errors},
             },
         )
 

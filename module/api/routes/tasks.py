@@ -121,7 +121,7 @@ async def get_task(
     task_manager: TaskManager = Depends(get_task_manager),
 ):
     """获取任务详情。"""
-    task = await task_manager.get_task(task_id)
+    task = await task_manager.get_task(task_id, with_items=True)
     if not task:
         raise TaskNotFoundError(task_id)
     return json_response(data=_task_to_out(task).model_dump(mode="json"))

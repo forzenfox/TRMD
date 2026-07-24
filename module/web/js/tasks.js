@@ -340,6 +340,7 @@ class TaskManager {
       start_date: params.start_date,
       end_date: params.end_date,
       message_list: params.message_list,
+      recent_count: params.recent_count,
       type_filters: this.createForm.typeFilters || [],
     };
   }

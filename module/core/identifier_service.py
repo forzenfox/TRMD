@@ -127,9 +127,14 @@ class IdentifierService:
     # 纯数字 ID（支持负数）
     _NUMERIC_ID_RE = re.compile(r"^-?\d+$")
     # t.me 链接，path 只能有一段（即只接受对话主页，不接受消息链接）
-    _T_ME_LINK_RE = re.compile(r"^https?://(www\.)?t\.me/([a-zA-Z0-9_+\-]{5,100})$")
+    # 支持常规 username 和私有频道 c/ 前缀格式（如 https://t.me/c/3819214828）
+    _T_ME_LINK_RE = re.compile(
+        r"^https?://(www\.)?t\.me/(c/\d{5,}|[a-zA-Z0-9_+\-]{5,100})$"
+    )
     # 无 scheme 的 t.me 链接
-    _T_ME_LINK_NO_SCHEME_RE = re.compile(r"^t\.me/([a-zA-Z0-9_+\-]{5,100})$")
+    _T_ME_LINK_NO_SCHEME_RE = re.compile(
+        r"^t\.me/(c/\d{5,}|[a-zA-Z0-9_+\-]{5,100})$"
+    )
 
     def __init__(self, client: Optional[pyrogram.Client]):
         """
