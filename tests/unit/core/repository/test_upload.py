@@ -32,15 +32,15 @@ from module.core.repository.manager import RepositoryManager
 
 
 @pytest.fixture
-def repo_db(tmp_path):
+async def repo_db(tmp_path):
     """提供使用临时数据库的 RepositoryDB 实例。"""
     from module.core import db as db_module
 
     db_path = str(tmp_path / "test_repo_upload.db")
-    db_module.init_sync_db(db_path)
+    await db_module.init_db(db_path)
     db = RepositoryDB()
     yield db
-    db_module.close_sync_db()
+    await db_module.close_db()
 
 
 @pytest.fixture
@@ -70,7 +70,7 @@ def config_manager_disabled():
 
 
 @pytest.fixture
-def repository_manager(repo_db, config_manager_enabled):
+async def repository_manager(repo_db, config_manager_enabled):
     """提供仓库模式启用的 RepositoryManager 实例。"""
     return RepositoryManager(
         repository_db=repo_db, config_manager=config_manager_enabled
@@ -78,7 +78,7 @@ def repository_manager(repo_db, config_manager_enabled):
 
 
 @pytest.fixture
-def repository_manager_disabled(repo_db, config_manager_disabled):
+async def repository_manager_disabled(repo_db, config_manager_disabled):
     """提供仓库模式禁用的 RepositoryManager 实例。"""
     return RepositoryManager(
         repository_db=repo_db, config_manager=config_manager_disabled
@@ -272,7 +272,7 @@ class TestFileManagerRepositoryIntegration:
             source_message_id=50,
         )
         assert result.success is True
-        repo_file = repository_manager.check_dedup(
+        repo_file = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=50,
         )
@@ -425,7 +425,7 @@ class TestUploaderRepositoryIntegration:
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
@@ -445,7 +445,7 @@ class TestUploaderRepositoryIntegration:
             source_chat_id=-1009876543210,
             source_message_id=101,
         )
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=101,
         )
@@ -471,7 +471,7 @@ class TestUploaderRepositoryIntegration:
             source_chat_id=-1009876543210,
             source_message_id=102,
         )
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=102,
         )

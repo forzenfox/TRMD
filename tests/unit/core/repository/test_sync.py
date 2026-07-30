@@ -18,15 +18,15 @@ from module.core.repository.sync import RepositorySync
 
 
 @pytest.fixture
-def repo_db(tmp_path):
+async def repo_db(tmp_path):
     """提供使用临时数据库的 RepositoryDB 实例。"""
     from module.core import db as db_module
 
     db_path = str(tmp_path / "test_sync.db")
-    db_module.init_sync_db(db_path)
+    await db_module.init_db(db_path)
     db = RepositoryDB()
     yield db
-    db_module.close_sync_db()
+    await db_module.close_db()
 
 
 @pytest.fixture
@@ -279,12 +279,12 @@ class TestIncrementalSync:
         assert result == 2
 
         # 验证数据库写入
-        file1 = sync._db.get_file_by_unique_id("uid_101")
+        file1 = await sync._db.get_file_by_unique_id("uid_101")
         assert file1 is not None
         assert file1.file_type == "video"
         assert file1.repository_message_id == 101
 
-        file2 = sync._db.get_file_by_unique_id("uid_102")
+        file2 = await sync._db.get_file_by_unique_id("uid_102")
         assert file2 is not None
         assert file2.file_type == "photo"
 
@@ -298,7 +298,7 @@ class TestIncrementalSync:
             repository_chat_id=-1001234567890,
             repository_message_id=101,
         )
-        repo_db.insert_file_record(existing)
+        await repo_db.insert_file_record(existing)
 
         msg1 = _make_mock_message(
             msg_id=101, media_type="video", file_unique_id="uid_101"
@@ -352,11 +352,11 @@ class TestIncrementalSync:
         assert result == 5
 
         # 验证各类型
-        assert sync._db.get_file_by_unique_id("uid_photo").file_type == "photo"
-        assert sync._db.get_file_by_unique_id("uid_video").file_type == "video"
-        assert sync._db.get_file_by_unique_id("uid_doc").file_type == "document"
-        assert sync._db.get_file_by_unique_id("uid_audio").file_type == "audio"
-        assert sync._db.get_file_by_unique_id("uid_anim").file_type == "animation"
+        assert (await sync._db.get_file_by_unique_id("uid_photo")).file_type == "photo"
+        assert (await sync._db.get_file_by_unique_id("uid_video")).file_type == "video"
+        assert (await sync._db.get_file_by_unique_id("uid_doc")).file_type == "document"
+        assert (await sync._db.get_file_by_unique_id("uid_audio")).file_type == "audio"
+        assert (await sync._db.get_file_by_unique_id("uid_anim")).file_type == "animation"
 
     @pytest.mark.asyncio
     async def test_sync_no_new_records(self, sync):
@@ -374,12 +374,14 @@ class TestIncrementalSync:
 class TestLastSyncedMessageId:
     """上次同步位置追踪测试。"""
 
-    def test_returns_none_when_no_records(self, sync):
+    @pytest.mark.asyncio
+    async def test_returns_none_when_no_records(self, sync):
         """数据库无记录时应返回 None。"""
-        result = sync._get_last_synced_message_id()
+        result = await sync._get_last_synced_message_id()
         assert result is None
 
-    def test_returns_max_message_id(self, sync, repo_db):
+    @pytest.mark.asyncio
+    async def test_returns_max_message_id(self, sync, repo_db):
         """应返回最大的 repository_message_id。"""
         for i in range(1, 4):
             record = _make_repository_file(
@@ -387,18 +389,19 @@ class TestLastSyncedMessageId:
                 file_id=f"fid_{i}",
                 repository_message_id=i * 10,
             )
-            repo_db.insert_file_record(record)
+            await repo_db.insert_file_record(record)
 
-        result = sync._get_last_synced_message_id()
+        result = await sync._get_last_synced_message_id()
         assert result == 30
 
-    def test_returns_none_on_db_error(self, sync):
+    @pytest.mark.asyncio
+    async def test_returns_none_on_db_error(self, sync):
         """数据库出错时应返回 None。"""
         # 使用已关闭的数据库模拟错误
         sync._db = MagicMock()
         sync._db._get_connection.side_effect = Exception("DB error")
 
-        result = sync._get_last_synced_message_id()
+        result = await sync._get_last_synced_message_id()
         assert result is None
 
 
@@ -408,30 +411,33 @@ class TestLastSyncedMessageId:
 class TestExistsInDb:
     """消息存在性检查测试。"""
 
-    def test_returns_true_when_exists(self, sync, repo_db):
+    @pytest.mark.asyncio
+    async def test_returns_true_when_exists(self, sync, repo_db):
         """消息已存在时应返回 True。"""
         record = _make_repository_file(
             file_unique_id="uid_exist",
             repository_chat_id=-1001234567890,
             repository_message_id=100,
         )
-        repo_db.insert_file_record(record)
+        await repo_db.insert_file_record(record)
 
         msg = MockMessage(id=100, chat=MockChat(id=-1001234567890))
-        assert sync._exists_in_db(msg) is True
+        assert await sync._exists_in_db(msg) is True
 
-    def test_returns_false_when_not_exists(self, sync):
+    @pytest.mark.asyncio
+    async def test_returns_false_when_not_exists(self, sync):
         """消息不存在时应返回 False。"""
         msg = MockMessage(id=999, chat=MockChat(id=-1001234567890))
-        assert sync._exists_in_db(msg) is False
+        assert await sync._exists_in_db(msg) is False
 
-    def test_returns_false_on_db_error(self, sync):
+    @pytest.mark.asyncio
+    async def test_returns_false_on_db_error(self, sync):
         """数据库出错时应返回 False。"""
         sync._db = MagicMock()
         sync._db._get_connection.side_effect = Exception("DB error")
 
         msg = MockMessage(id=100, chat=MockChat(id=-1001234567890))
-        assert sync._exists_in_db(msg) is False
+        assert await sync._exists_in_db(msg) is False
 
 
 # ==================== 文件记录写入测试 ====================
@@ -440,53 +446,58 @@ class TestExistsInDb:
 class TestInsertFileRecord:
     """从消息提取文件信息并写入数据库的测试。"""
 
-    def test_insert_video_message(self, sync, repo_db):
+    @pytest.mark.asyncio
+    async def test_insert_video_message(self, sync, repo_db):
         """应正确提取视频消息信息并写入。"""
         msg = _make_mock_message(
             msg_id=300, media_type="video", file_unique_id="uid_video_300"
         )
-        result = sync._insert_file_record(msg)
+        result = await sync._insert_file_record(msg)
         assert result is True
 
-        file = repo_db.get_file_by_unique_id("uid_video_300")
+        file = await repo_db.get_file_by_unique_id("uid_video_300")
         assert file is not None
         assert file.file_type == "video"
         assert file.repository_message_id == 300
         assert file.content_hash is None  # 同步时不计算哈希
 
-    def test_insert_photo_message(self, sync, repo_db):
+    @pytest.mark.asyncio
+    async def test_insert_photo_message(self, sync, repo_db):
         """应正确提取照片消息信息并写入。"""
         msg = _make_mock_message(
             msg_id=301, media_type="photo", file_unique_id="uid_photo_301"
         )
-        result = sync._insert_file_record(msg)
+        result = await sync._insert_file_record(msg)
         assert result is True
 
-        file = repo_db.get_file_by_unique_id("uid_photo_301")
+        file = await repo_db.get_file_by_unique_id("uid_photo_301")
         assert file is not None
         assert file.file_type == "photo"
 
-    def test_insert_document_message(self, sync, repo_db):
+    @pytest.mark.asyncio
+    async def test_insert_document_message(self, sync, repo_db):
         """应正确提取文档消息信息并写入。"""
         msg = _make_mock_message(
             msg_id=302, media_type="document", file_unique_id="uid_doc_302"
         )
-        result = sync._insert_file_record(msg)
+        result = await sync._insert_file_record(msg)
         assert result is True
 
-        file = repo_db.get_file_by_unique_id("uid_doc_302")
+        file = await repo_db.get_file_by_unique_id("uid_doc_302")
         assert file is not None
         assert file.file_type == "document"
         assert file.mime_type == "application/pdf"
         assert file.file_name == "doc.pdf"
 
-    def test_insert_returns_false_for_no_media(self, sync):
+    @pytest.mark.asyncio
+    async def test_insert_returns_false_for_no_media(self, sync):
         """无媒体消息应返回 False。"""
         msg = MockMessage(id=400, chat=MockChat(id=-1001234567890))
-        result = sync._insert_file_record(msg)
+        result = await sync._insert_file_record(msg)
         assert result is False
 
-    def test_insert_returns_false_on_db_error(self, sync):
+    @pytest.mark.asyncio
+    async def test_insert_returns_false_on_db_error(self, sync):
         """数据库写入失败时应返回 False。"""
         sync._db = MagicMock()
         sync._db.insert_file_record.side_effect = Exception("DB write error")
@@ -494,28 +505,30 @@ class TestInsertFileRecord:
         msg = _make_mock_message(
             msg_id=500, media_type="video", file_unique_id="uid_err"
         )
-        result = sync._insert_file_record(msg)
+        result = await sync._insert_file_record(msg)
         assert result is False
 
-    def test_insert_sets_status_active(self, sync, repo_db):
+    @pytest.mark.asyncio
+    async def test_insert_sets_status_active(self, sync, repo_db):
         """写入的记录 status 应为 'active'。"""
         msg = _make_mock_message(
             msg_id=303, media_type="video", file_unique_id="uid_active"
         )
-        sync._insert_file_record(msg)
+        await sync._insert_file_record(msg)
 
-        file = repo_db.get_file_by_unique_id("uid_active")
+        file = await repo_db.get_file_by_unique_id("uid_active")
         assert file is not None
         assert file.status == "active"
 
-    def test_insert_content_hash_is_none(self, sync, repo_db):
+    @pytest.mark.asyncio
+    async def test_insert_content_hash_is_none(self, sync, repo_db):
         """同步写入的记录 content_hash 应为 None。"""
         msg = _make_mock_message(
             msg_id=304, media_type="video", file_unique_id="uid_no_hash"
         )
-        sync._insert_file_record(msg)
+        await sync._insert_file_record(msg)
 
-        file = repo_db.get_file_by_unique_id("uid_no_hash")
+        file = await repo_db.get_file_by_unique_id("uid_no_hash")
         assert file is not None
         assert file.content_hash is None
 

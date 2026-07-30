@@ -398,7 +398,7 @@ class TaskExecutor:
             # L2 去重检查
             if self._should_use_repository() and file_unique_id:
                 assert self._repository_manager is not None
-                dedup = self._repository_manager.check_dedup(
+                dedup = await self._repository_manager.check_dedup(
                     source_chat_id=chat_id,
                     source_message_id=source_id,
                     file_unique_id=file_unique_id,
@@ -520,7 +520,7 @@ class TaskExecutor:
                 assert self._repository_manager is not None
                 file_unique_id = self._extract_file_unique_id(message)
                 if file_unique_id:
-                    dedup = self._repository_manager.check_dedup(
+                    dedup = await self._repository_manager.check_dedup(
                         source_chat_id=chat_id,
                         source_message_id=source_id,
                         file_unique_id=file_unique_id,
@@ -936,7 +936,7 @@ class TaskExecutor:
 
                             # L2 去重检查
                             if self._should_use_repository() and file_unique_id:
-                                dedup = self._repository_manager.check_dedup(
+                                dedup = await self._repository_manager.check_dedup(
                                     source_chat_id=chat_id,
                                     source_message_id=item.source_message_id,
                                     file_unique_id=file_unique_id,
@@ -1169,7 +1169,7 @@ class TaskExecutor:
         for item in items:
             abs_file_path = from_portable_path(item.file_path, save_root)
             file_sha256 = self._repository_manager.compute_content_hash(abs_file_path)
-            dedup = self._repository_manager.check_dedup(
+            dedup = await self._repository_manager.check_dedup(
                 source_chat_id=chat_id,
                 source_message_id=source_message_id,
                 content_hash=file_sha256,
@@ -1387,7 +1387,7 @@ class TaskExecutor:
         save_root = self._get_save_root()
         abs_file_path = from_portable_path(item.file_path, save_root)
         file_sha256 = self._repository_manager.compute_content_hash(abs_file_path)
-        dedup = self._repository_manager.check_dedup(
+        dedup = await self._repository_manager.check_dedup(
             source_chat_id=chat_id,
             source_message_id=item.source_message_id,
             content_hash=file_sha256,
@@ -1509,7 +1509,7 @@ class TaskExecutor:
 
                         if file_unique_id:
                             # L2 去重检查
-                            dedup = self._repository_manager.check_dedup(
+                            dedup = await self._repository_manager.check_dedup(
                                 source_chat_id=chat_id,
                                 source_message_id=item.source_message_id,
                                 file_unique_id=file_unique_id,
@@ -1730,7 +1730,7 @@ class TaskExecutor:
                         file_sha256 = self._repository_manager.compute_content_hash(
                             file_info.path
                         )
-                        dedup = self._repository_manager.check_dedup(
+                        dedup = await self._repository_manager.check_dedup(
                             content_hash=file_sha256,
                         )
                         if dedup:

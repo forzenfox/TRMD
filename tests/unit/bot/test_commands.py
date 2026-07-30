@@ -10,7 +10,7 @@
 使用 mock 模拟 Pyrogram 客户端，不实际连接 Telegram。
 """
 
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
 
@@ -202,7 +202,12 @@ class TestCmdWeb:
     ):
         """cmd_web 应发送可点击的内联按钮，URL 带 Token。"""
         mock_message.text = "/web"
-        result = await bot_commands.cmd_web(mock_client, mock_message)
+        with patch.object(
+            bot_commands,
+            "get_webui_link",
+            return_value="https://example.com/web?token=test_token",
+        ):
+            result = await bot_commands.cmd_web(mock_client, mock_message)
 
         call_kwargs = mock_client.send_message.call_args[1]
         reply_markup = call_kwargs.get("reply_markup")

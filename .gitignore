@@ -45,3 +45,6 @@ Thumbs.db
 
 # Log files
 *.log
+
+# Test database files
+test_*.db*

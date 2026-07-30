@@ -86,7 +86,7 @@ class RepositoryManager:
 
     # --- 去重检查 ---
 
-    def check_dedup(
+    async def check_dedup(
         self,
         source_chat_id: int,
         source_message_id: int,
@@ -110,21 +110,21 @@ class RepositoryManager:
             已存在的文件记录，或 None（未命中去重）
         """
         # Level 1: source 定位
-        result = self._db.get_file_by_source(source_chat_id, source_message_id)
+        result = await self._db.get_file_by_source(source_chat_id, source_message_id)
         if result:
             logger.debug(f"L1 去重命中: source={source_chat_id}/{source_message_id}")
             return result
 
         # Level 2: file_unique_id 去重
         if file_unique_id:
-            result = self._db.get_file_by_unique_id(file_unique_id)
+            result = await self._db.get_file_by_unique_id(file_unique_id)
             if result:
                 logger.debug(f"L2 去重命中: file_unique_id={file_unique_id}")
                 return result
 
         # Level 3: 内容哈希去重
         if content_hash:
-            result = self._db.get_file_by_content_hash(content_hash)
+            result = await self._db.get_file_by_content_hash(content_hash)
             if result:
                 logger.debug(f"L3 去重命中: content_hash={content_hash}")
                 return result
@@ -201,12 +201,21 @@ class RepositoryManager:
 
         async with self._lock:
             try:
-                self._db.insert_file_record(file_record)
-                self._db.insert_source_mapping(source_record)
-                logger.info(
-                    f"仓库记录已写入: file_unique_id={media.file_unique_id}, "
-                    f"source={source_chat_id}/{source_message_id}"
-                )
+                file_id = await self._db.insert_file_record(file_record)
+                source_id = await self._db.insert_source_mapping(source_record)
+                if file_id > 0 or source_id > 0:
+                    logger.info(
+                        f"仓库记录已写入: file_unique_id={media.file_unique_id}, "
+                        f"source={source_chat_id}/{source_message_id}, "
+                        f"file_id={file_id}, source_id={source_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"仓库记录未写入（可能已存在）: "
+                        f"file_unique_id={media.file_unique_id}, "
+                        f"source={source_chat_id}/{source_message_id}, "
+                        f"file_id={file_id}, source_id={source_id}"
+                    )
             except Exception as e:
                 logger.error(f"仓库记录写入失败: {e}")
 
@@ -295,7 +304,7 @@ class RepositoryManager:
             目标频道的消息 ID，或 None（分发失败）
         """
         # 获取仓库消息位置
-        repo_location = self._db.get_repository_message_id(file_unique_id)
+        repo_location = await self._db.get_repository_message_id(file_unique_id)
         if not repo_location:
             logger.error(f"未找到文件记录: file_unique_id={file_unique_id}")
             return None
@@ -311,7 +320,7 @@ class RepositoryManager:
                 message_id=repo_message_id,
                 caption=caption,
             )
-            self._record_distribution(file_unique_id, target_chat_id, result.id, method)
+            await self._record_distribution(file_unique_id, target_chat_id, result.id, method)
             logger.info(f"copy_message 分发成功: {file_unique_id} -> {target_chat_id}")
             return result.id
         except Exception as e:
@@ -329,14 +338,14 @@ class RepositoryManager:
                 fresh_file_id = self._extract_file_id(messages)
                 if fresh_file_id:
                     # 更新数据库中的 file_id
-                    self._db.update_file_id(file_unique_id, fresh_file_id)
+                    await self._db.update_file_id(file_unique_id, fresh_file_id)
 
                     # 使用 file_id 发送
                     result = await self._send_by_file_id(
                         client, fresh_file_id, file_unique_id, target_chat_id, caption
                     )
                     if result:
-                        self._record_distribution(
+                        await self._record_distribution(
                             file_unique_id, target_chat_id, result.id, method
                         )
                         logger.info(
@@ -390,7 +399,7 @@ class RepositoryManager:
             Pyrogram Message 对象，发送失败时返回 None
         """
         # 查询文件类型
-        file_record = self._db.get_file_by_unique_id(file_unique_id)
+        file_record = await self._db.get_file_by_unique_id(file_unique_id)
         if not file_record:
             return None
 
@@ -417,7 +426,7 @@ class RepositoryManager:
                 chat_id=target_chat_id, document=file_id, caption=caption
             )
 
-    def _record_distribution(
+    async def _record_distribution(
         self,
         file_unique_id: str,
         target_chat_id: int,
@@ -444,6 +453,6 @@ class RepositoryManager:
                 task_id=task_id,
                 created_at=None,
             )
-            self._db.insert_distribution(record)
+            await self._db.insert_distribution(record)
         except Exception as e:
             logger.error(f"分发记录写入失败: {e}")

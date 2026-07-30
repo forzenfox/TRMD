@@ -1078,7 +1078,7 @@ class TelegramRestrictedMediaDownloader(Bot):
                     file_unique_id = self._extract_file_unique_id(message)
                     # 消息无媒体时无法从仓库分发，跳过去重检查
                     if file_unique_id is not None:
-                        existing = self.repository_manager.check_dedup(
+                        existing = await self.repository_manager.check_dedup(
                             source_chat_id=int(origin_chat_id),
                             source_message_id=message_id,
                             file_unique_id=file_unique_id,

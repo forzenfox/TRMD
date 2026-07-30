@@ -614,18 +614,22 @@ class TelegramUploader:
         """
         try:
             # 从仓库频道获取刚上传的消息
-            messages = await self.client.get_messages(
+            msg_or_list = await self.client.get_messages(
                 chat_id=upload_task.chat_id,
                 message_ids=upload_task.message_id if upload_task.message_id else 1,
             )
-            if messages:
+            if msg_or_list:
+                # get_messages 返回值：int → Optional[Message], list[int] → List[Message]
+                message = msg_or_list[0] if isinstance(msg_or_list, list) else msg_or_list
                 await self.repository_manager.on_upload_success(
-                    message=messages,
+                    message=message,
                     source_chat_id=upload_task.source_chat_id,
                     source_message_id=upload_task.source_message_id,
                 )
-                log.info(
-                    f"仓库记录已写入: source={upload_task.source_chat_id}/{upload_task.source_message_id}"
+            else:
+                log.warning(
+                    f"仓库记录写入失败: 未找到消息 "
+                    f"chat_id={upload_task.chat_id}, message_id={upload_task.message_id}"
                 )
         except Exception as e:
             log.warning(f"仓库记录写入失败: {e}")

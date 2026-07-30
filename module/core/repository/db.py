@@ -225,15 +225,23 @@ class RepositoryDB:
         db_record.created_at = record.created_at or now
         db_record.updated_at = record.updated_at or now
 
+        logger.debug(
+            f"insert_file_record: file_unique_id={db_record.file_unique_id}, "
+            f"file_id={db_record.file_id}"
+        )
+
         async with get_session() as session:
             try:
                 session.add(db_record)
                 await session.flush()  # 触发 UNIQUE 约束检查
                 await session.commit()
-                return db_record.id or 0
-            except IntegrityError:
+                result_id = db_record.id or 0
+                logger.debug(f"insert_file_record OK: id={result_id}")
+                return result_id
+            except IntegrityError as e:
                 # INSERT OR IGNORE 语义：UNIQUE 约束冲突时回滚并返回 0
                 await session.rollback()
+                logger.debug(f"insert_file_record INTEGRITY_ERROR: {e}")
                 return 0
 
     async def insert_source_mapping(self, record: RepositorySource) -> int:
@@ -253,15 +261,23 @@ class RepositoryDB:
         db_record = self._source_to_record(record)
         db_record.created_at = record.created_at or now
 
+        logger.debug(
+            f"insert_source_mapping: file_unique_id={db_record.file_unique_id}, "
+            f"source={db_record.source_chat_id}/{db_record.source_message_id}"
+        )
+
         async with get_session() as session:
             try:
                 session.add(db_record)
                 await session.flush()  # 触发复合 UNIQUE 约束检查
                 await session.commit()
-                return db_record.id or 0
-            except IntegrityError:
+                result_id = db_record.id or 0
+                logger.debug(f"insert_source_mapping OK: id={result_id}")
+                return result_id
+            except IntegrityError as e:
                 # INSERT OR IGNORE 语义：复合 UNIQUE 约束冲突时回滚并返回 0
                 await session.rollback()
+                logger.debug(f"insert_source_mapping INTEGRITY_ERROR: {e}")
                 return 0
 
     async def update_file_id(self, file_unique_id: str, new_file_id: str) -> None:

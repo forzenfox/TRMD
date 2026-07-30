@@ -79,15 +79,15 @@ class MockMessage:
 
 
 @pytest.fixture
-def repo_db(tmp_path):
+async def repo_db(tmp_path):
     """Provide RepositoryDB with temporary database."""
     from module.core import db as db_module
 
     db_path = str(tmp_path / "test_distribute.db")
-    db_module.init_sync_db(db_path)
+    await db_module.init_db(db_path)
     db = RepositoryDB()
     yield db
-    db_module.close_sync_db()
+    await db_module.close_db()
 
 
 @pytest.fixture
@@ -113,13 +113,13 @@ def config_disabled():
 
 
 @pytest.fixture
-def repo_manager(repo_db, config_enabled):
+async def repo_manager(repo_db, config_enabled):
     """Provide RepositoryManager with repository enabled."""
     return RepositoryManager(repository_db=repo_db, config_manager=config_enabled)
 
 
 @pytest.fixture
-def repo_manager_disabled(repo_db, config_disabled):
+async def repo_manager_disabled(repo_db, config_disabled):
     """Provide RepositoryManager with repository disabled."""
     return RepositoryManager(repository_db=repo_db, config_manager=config_disabled)
 
@@ -138,7 +138,7 @@ def _make_video_message(
     return MockMessage(id=msg_id, chat=chat, video=media)
 
 
-def _seed_repository(
+async def _seed_repository(
     repo_db: RepositoryDB,
     file_unique_id: str = "uid_video_001",
     source_chat_id: int = -1001234567890,
@@ -160,7 +160,7 @@ def _seed_repository(
         updated_at=None,
         status="active",
     )
-    repo_db.insert_file_record(file_record)
+    await repo_db.insert_file_record(file_record)
     source = RepositorySource(
         id=None,
         file_unique_id=file_unique_id,
@@ -168,7 +168,7 @@ def _seed_repository(
         source_message_id=source_message_id,
         created_at=None,
     )
-    repo_db.insert_source_mapping(source)
+    await repo_db.insert_source_mapping(source)
 
 
 def _create_downloader(repo_manager_instance) -> object:
@@ -236,7 +236,7 @@ class TestDistributeViaCopyMessage:
         self, repo_db, repo_manager
     ):
         """When file exists in repository, forward() should use distribute_to_target."""
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
 
@@ -265,7 +265,7 @@ class TestDistributeViaCopyMessage:
     @pytest.mark.asyncio
     async def test_forward_notifies_on_repository_success(self, repo_db, repo_manager):
         """forward() should call done_notice on successful repository distribution."""
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())
@@ -298,7 +298,7 @@ class TestFallbackToFileIdSend:
     @pytest.mark.asyncio
     async def test_forward_succeeds_when_file_id_send_used(self, repo_db, repo_manager):
         """When copy_message fails but file_id_send works, forward() should succeed."""
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())
@@ -332,7 +332,7 @@ class TestFallbackToRedownload:
         self, repo_db, repo_manager
     ):
         """When distribute_to_target returns None, forward() should fall back."""
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())
@@ -377,7 +377,7 @@ class TestFallbackToRedownload:
     @pytest.mark.asyncio
     async def test_forward_falls_back_on_repo_exception(self, repo_db, repo_manager):
         """When repository mode throws, forward() should fall back."""
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())
@@ -410,7 +410,7 @@ class TestDistributionRecordInDb:
         self, repo_db, repo_manager
     ):
         """forward() should pass the correct file_unique_id to distribute_to_target."""
-        _seed_repository(repo_db, file_unique_id="uid_db_rec")
+        await _seed_repository(repo_db, file_unique_id="uid_db_rec")
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())
@@ -430,24 +430,30 @@ class TestDistributionRecordInDb:
         call_kwargs = repo_manager.distribute_to_target.call_args[1]
         assert call_kwargs["file_unique_id"] == "uid_db_rec"
 
-    def test_record_written_by_repository_manager(self, repo_db, repo_manager):
+    @pytest.mark.asyncio
+    async def test_record_written_by_repository_manager(self, repo_db, repo_manager):
         """RepositoryManager._record_distribution should write to file_distributions."""
-        _seed_repository(repo_db, file_unique_id="uid_rec_write")
+        await _seed_repository(repo_db, file_unique_id="uid_rec_write")
 
-        repo_manager._record_distribution(
+        await repo_manager._record_distribution(
             file_unique_id="uid_rec_write",
             target_chat_id=-1008888888888,
             target_message_id=300,
             method="copy_message",
         )
 
-        with repo_db._get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT file_unique_id, target_chat_id, target_message_id, method "
-                "FROM file_distributions WHERE file_unique_id = ?",
-                ("uid_rec_write",),
+        from module.core.db import get_session
+        from sqlmodel import select, text
+
+        async with get_session() as session:
+            result = await session.execute(
+                text(
+                    "SELECT file_unique_id, target_chat_id, target_message_id, method "
+                    "FROM file_distributions WHERE file_unique_id = :fuid"
+                ),
+                {"fuid": "uid_rec_write"},
             )
-            row = cursor.fetchone()
+            row = result.fetchone()
 
         assert row is not None
         assert row[0] == "uid_rec_write"
@@ -547,7 +553,7 @@ class TestDegradationWhenRepositoryFails:
     @pytest.mark.asyncio
     async def test_check_dedup_exception_falls_back(self, repo_db, repo_manager):
         """When check_dedup raises an exception, forward() should fall back."""
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())
@@ -615,7 +621,7 @@ class TestDegradationWhenRepositoryFails:
     @pytest.mark.asyncio
     async def test_distribute_exception_falls_back(self, repo_db, repo_manager):
         """When distribute_to_target raises, forward() should fall back."""
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())
@@ -651,7 +657,7 @@ class TestDegradationWhenRepositoryFails:
         repo_mgr = RepositoryManager(
             repository_db=repo_db, config_manager=config_enabled
         )
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
 
         dl = _create_downloader(repo_mgr)
         CFR = _get_cfr_exception()
@@ -684,7 +690,7 @@ class TestDegradationWhenRepositoryFails:
         (both copy_message and file_id_send failed internally), then falls
         back to original download-upload logic.
         """
-        _seed_repository(repo_db)
+        await _seed_repository(repo_db)
         dl = _create_downloader(repo_manager)
         CFR = _get_cfr_exception()
         dl.app.client.copy_message = AsyncMock(side_effect=CFR())

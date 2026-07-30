@@ -226,7 +226,7 @@ class TestFinalizePendingItems:
 
         # 验证：消息ID 3 应被标记为 FAILED（NOT_PROCESSED）
         task = await task_manager.get_task(task.task_id)
-        item_3 = [item for item in task.items if item.source_id == 3][0]
+        item_3 = [item for item in task.items if item.source_message_id == 3][0]
         assert item_3.status == ItemStatus.FAILED
         assert item_3.error_code == "NOT_PROCESSED"
         assert item_3.error_message == "消息未被处理"
@@ -895,7 +895,7 @@ class TestOnItemProgress:
             chat_id=-1001234567890,
             params={"message_range_start": 1, "message_range_end": 1},
         )
-        item = TaskItem(id="msg_1", task_id="", source_id=1)
+        item = TaskItem(id="msg_1", task_id="", source_message_id=1)
         await task_manager.add_items(task.task_id, [item])
 
         await executor._on_item_progress(task.task_id, "msg_1", ItemStatus.SUCCESS)
@@ -920,7 +920,7 @@ class TestOnItemProgress:
             chat_id=-1001234567890,
             params={"message_range_start": 1, "message_range_end": 1},
         )
-        item = TaskItem(id="msg_1", task_id="", source_id=1)
+        item = TaskItem(id="msg_1", task_id="", source_message_id=1)
         await task_manager.add_items(task.task_id, [item])
 
         await executor._on_item_progress(
@@ -1353,7 +1353,7 @@ class TestDedupAndFieldPopulation:
 
         updated = await task_manager.get_task(task.task_id)
         item = updated.items[0]
-        assert item.target_id == -1009876543210
+        assert item.target_chat_id == -1009876543210
         assert item.uploaded_message_id == 98765
 
     @pytest.mark.asyncio
@@ -1390,7 +1390,7 @@ class TestDedupAndFieldPopulation:
         updated = await task_manager.get_task(task.task_id)
         item = updated.items[0]
         assert item.status == ItemStatus.SUCCESS
-        assert item.target_id == -1001234567890
+        assert item.target_chat_id == -1001234567890
         assert item.uploaded_message_id == 999
         mock_repository_manager.distribute_to_target.assert_called_once()
 
@@ -1755,7 +1755,7 @@ class TestPhase2RecentAndMediaFilter:
         await executor._execute_download(task)
         # 过滤后应只有 2 个 video 消息生成 item
         assert len(task.items) == 2
-        assert all(item.source_id in (1, 3) for item in task.items)
+        assert all(item.source_message_id in (1, 3) for item in task.items)
 
 
 # ============================================================
@@ -2173,7 +2173,7 @@ class TestPhase3HandleListenDownload:
         # 验证创建了 TaskItem
         updated = await task_manager.get_task(task.task_id)
         assert len(updated.items) == 1
-        assert updated.items[0].source_id == 12345
+        assert updated.items[0].source_message_id == 12345
 
     @pytest.mark.asyncio
     async def test_handle_listen_download_dedup(
@@ -2360,7 +2360,7 @@ class TestPhase3HandleListenForward:
         # 验证创建了 TaskItem
         updated = await task_manager.get_task(task.task_id)
         assert len(updated.items) == 1
-        assert updated.items[0].source_id == 12345
+        assert updated.items[0].source_message_id == 12345
 
         # 验证 copy_message 被调用
         mock_client.copy_message.assert_called_once_with(

@@ -11,12 +11,14 @@
 
 import os
 import pytest
+import pytest_asyncio
 from unittest.mock import MagicMock
 
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from module.core.db import close_db, init_db
 from module.core.repository.db import (
     RepositoryDB,
     RepositoryFile,
@@ -28,16 +30,20 @@ from module.core.repository.manager import RepositoryManager
 # ==================== Fixture ====================
 
 
-@pytest.fixture
-def repo_db(tmp_path):
-    """提供使用临时数据库的 RepositoryDB 实例。"""
+@pytest_asyncio.fixture
+async def repo_db(tmp_path):
+    """提供使用临时数据库的 RepositoryDB 异步实例。
+
+    通过 init_db 初始化全局引擎，测试结束后 close_db 重置，
+    确保各测试之间引擎隔离。
+    """
     from module.core import db as db_module
 
     db_path = str(tmp_path / "test_dedup.db")
-    db_module.init_sync_db(db_path)
+    await db_module.init_db(db_path)
     db = RepositoryDB()
     yield db
-    db_module.close_sync_db()
+    await db_module.close_db()
 
 
 @pytest.fixture
@@ -148,67 +154,71 @@ def _make_mock_message(
 class TestLevel1Dedup:
     """Level 1 去重: 相同 source 定位跳过下载。"""
 
-    def test_l1_dedup_hit_returns_existing_file(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l1_dedup_hit_returns_existing_file(self, repository_manager, repo_db):
         """DEDUP-L1-01: source 定位命中时 check_dedup 返回已有文件记录。"""
         file_record = _make_repository_file(file_unique_id="uid_l1_hit")
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
         source = _make_repository_source(
             file_unique_id="uid_l1_hit",
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
-        repo_db.insert_source_mapping(source)
+        await repo_db.insert_source_mapping(source)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
         assert result is not None
         assert result.file_unique_id == "uid_l1_hit"
 
-    def test_l1_dedup_miss_returns_none(self, repository_manager):
+    @pytest.mark.asyncio
+    async def test_l1_dedup_miss_returns_none(self, repository_manager):
         """DEDUP-L1-02: source 定位未命中时 check_dedup 返回 None。"""
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=999,
         )
         assert result is None
 
-    def test_l1_dedup_only_needs_source_info(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l1_dedup_only_needs_source_info(self, repository_manager, repo_db):
         """DEDUP-L1-03: Level 1 去重仅需 source_chat_id 和 source_message_id。"""
         file_record = _make_repository_file(file_unique_id="uid_l1_only")
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
         source = _make_repository_source(
             file_unique_id="uid_l1_only",
             source_chat_id=-1005555555555,
             source_message_id=200,
         )
-        repo_db.insert_source_mapping(source)
+        await repo_db.insert_source_mapping(source)
 
         # 不传 file_unique_id 和 content_hash，仅用 source 信息
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1005555555555,
             source_message_id=200,
         )
         assert result is not None
         assert result.file_unique_id == "uid_l1_only"
 
-    def test_l1_dedup_skips_download_when_hit(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l1_dedup_skips_download_when_hit(self, repository_manager, repo_db):
         """DEDUP-L1-04: L1 命中时应跳过下载，返回已有文件记录信息。"""
         file_record = _make_repository_file(
             file_unique_id="uid_l1_skip",
             repository_chat_id=-1001234567890,
             repository_message_id=500,
         )
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
         source = _make_repository_source(
             file_unique_id="uid_l1_skip",
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
-        repo_db.insert_source_mapping(source)
+        await repo_db.insert_source_mapping(source)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
@@ -223,13 +233,14 @@ class TestLevel1Dedup:
 class TestLevel2Dedup:
     """Level 2 去重: 相同 file_unique_id 跳过上传，添加 source mapping。"""
 
-    def test_l2_dedup_hit_returns_existing_file(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l2_dedup_hit_returns_existing_file(self, repository_manager, repo_db):
         """DEDUP-L2-01: file_unique_id 命中时 check_dedup 返回已有文件记录。"""
         file_record = _make_repository_file(file_unique_id="uid_l2_hit")
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
         # 不添加 source mapping，确保 L1 不会命中
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="uid_l2_hit",
@@ -237,24 +248,26 @@ class TestLevel2Dedup:
         assert result is not None
         assert result.file_unique_id == "uid_l2_hit"
 
-    def test_l2_dedup_miss_returns_none(self, repository_manager):
+    @pytest.mark.asyncio
+    async def test_l2_dedup_miss_returns_none(self, repository_manager):
         """DEDUP-L2-02: file_unique_id 未命中时 check_dedup 返回 None。"""
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="nonexistent_uid",
         )
         assert result is None
 
-    def test_l2_dedup_skips_upload_and_adds_source_mapping(
+    @pytest.mark.asyncio
+    async def test_l2_dedup_skips_upload_and_adds_source_mapping(
         self, repository_manager, repo_db
     ):
         """DEDUP-L2-03: L2 命中时应跳过上传，并添加 source mapping。"""
         file_record = _make_repository_file(file_unique_id="uid_l2_skip")
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
 
         # L2 命中
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="uid_l2_skip",
@@ -267,20 +280,21 @@ class TestLevel2Dedup:
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
-        repo_db.insert_source_mapping(source)
+        await repo_db.insert_source_mapping(source)
 
         # 验证 source mapping 已写入
-        verify = repo_db.get_file_by_source(-1009876543210, 100)
+        verify = await repo_db.get_file_by_source(-1009876543210, 100)
         assert verify is not None
         assert verify.file_unique_id == "uid_l2_skip"
 
-    def test_l2_dedup_l1_miss_l2_hit(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l2_dedup_l1_miss_l2_hit(self, repository_manager, repo_db):
         """DEDUP-L2-04: L1 未命中但 L2 命中时应返回 L2 的结果。"""
         file_record = _make_repository_file(file_unique_id="uid_l2_priority")
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
         # 不添加 source mapping for (-1009876543210, 100)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="uid_l2_priority",
@@ -288,12 +302,13 @@ class TestLevel2Dedup:
         assert result is not None
         assert result.file_unique_id == "uid_l2_priority"
 
-    def test_l2_dedup_without_file_unique_id(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l2_dedup_without_file_unique_id(self, repository_manager, repo_db):
         """DEDUP-L2-05: 不传 file_unique_id 时 L2 不执行。"""
         file_record = _make_repository_file(file_unique_id="uid_l2_no_fid")
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=999,
             file_unique_id=None,
@@ -307,15 +322,16 @@ class TestLevel2Dedup:
 class TestLevel3Dedup:
     """Level 3 去重: 相同内容哈希删除本地文件，跳过上传，添加 source mapping。"""
 
-    def test_l3_dedup_hit_returns_existing_file(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l3_dedup_hit_returns_existing_file(self, repository_manager, repo_db):
         """DEDUP-L3-01: content_hash 命中时 check_dedup 返回已有文件记录。"""
         file_record = _make_repository_file(
             file_unique_id="uid_l3_hit",
             content_hash="sha256_same_content",
         )
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="different_uid",
@@ -325,9 +341,10 @@ class TestLevel3Dedup:
         assert result.file_unique_id == "uid_l3_hit"
         assert result.content_hash == "sha256_same_content"
 
-    def test_l3_dedup_miss_returns_none(self, repository_manager):
+    @pytest.mark.asyncio
+    async def test_l3_dedup_miss_returns_none(self, repository_manager):
         """DEDUP-L3-02: content_hash 未命中时 check_dedup 返回 None。"""
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="different_uid",
@@ -335,7 +352,8 @@ class TestLevel3Dedup:
         )
         assert result is None
 
-    def test_l3_dedup_deletes_local_file_and_adds_source_mapping(
+    @pytest.mark.asyncio
+    async def test_l3_dedup_deletes_local_file_and_adds_source_mapping(
         self, repository_manager, repo_db, tmp_path
     ):
         """DEDUP-L3-03: L3 命中时应删除本地文件，跳过上传，添加 source mapping。"""
@@ -343,14 +361,14 @@ class TestLevel3Dedup:
             file_unique_id="uid_l3_delete",
             content_hash="sha256_delete_test",
         )
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
 
         # 创建本地临时文件
         local_file = tmp_path / "test_l3_delete.mp4"
         local_file.write_bytes(b"fake video data")
 
         # L3 命中
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="different_uid",
@@ -368,22 +386,23 @@ class TestLevel3Dedup:
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
-        repo_db.insert_source_mapping(source)
+        await repo_db.insert_source_mapping(source)
 
         # 验证 source mapping 指向已有文件
-        verify = repo_db.get_file_by_source(-1009876543210, 100)
+        verify = await repo_db.get_file_by_source(-1009876543210, 100)
         assert verify is not None
         assert verify.file_unique_id == "uid_l3_delete"
 
-    def test_l3_dedup_l1_l2_miss_l3_hit(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l3_dedup_l1_l2_miss_l3_hit(self, repository_manager, repo_db):
         """DEDUP-L3-04: L1/L2 未命中但 L3 命中时应返回 L3 的结果。"""
         file_record = _make_repository_file(
             file_unique_id="uid_l3_priority",
             content_hash="sha256_priority",
         )
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=999,
             file_unique_id="nonexistent_uid",
@@ -392,15 +411,16 @@ class TestLevel3Dedup:
         assert result is not None
         assert result.file_unique_id == "uid_l3_priority"
 
-    def test_l3_dedup_without_content_hash(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l3_dedup_without_content_hash(self, repository_manager, repo_db):
         """DEDUP-L3-05: 不传 content_hash 时 L3 不执行。"""
         file_record = _make_repository_file(
             file_unique_id="uid_l3_no_hash",
             content_hash="sha256_exists",
         )
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=999,
             file_unique_id="nonexistent_uid",
@@ -415,9 +435,10 @@ class TestLevel3Dedup:
 class TestAllLevelsMiss:
     """所有级别未命中: 正常上传到仓库频道。"""
 
-    def test_all_miss_returns_none(self, repository_manager):
+    @pytest.mark.asyncio
+    async def test_all_miss_returns_none(self, repository_manager):
         """DEDUP-ALL-01: L1/L2/L3 全部未命中时 check_dedup 返回 None。"""
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="brand_new_uid",
@@ -425,10 +446,11 @@ class TestAllLevelsMiss:
         )
         assert result is None
 
-    def test_all_miss_proceeds_with_upload(self, repository_manager, repo_db, tmp_path):
+    @pytest.mark.asyncio
+    async def test_all_miss_proceeds_with_upload(self, repository_manager, repo_db, tmp_path):
         """DEDUP-ALL-02: 全部未命中时应正常上传到仓库频道。"""
         # 全部未命中
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
             file_unique_id="new_file_uid",
@@ -442,19 +464,15 @@ class TestAllLevelsMiss:
             chat_id=-1001234567890,
             message_id=999,
         )
-        import asyncio
-
-        asyncio.run(
-            repository_manager.on_upload_success(
-                message=mock_message,
-                source_chat_id=-1009876543210,
-                source_message_id=100,
-                content_hash="new_file_hash",
-            )
+        await repository_manager.on_upload_success(
+            message=mock_message,
+            source_chat_id=-1009876543210,
+            source_message_id=100,
+            content_hash="new_file_hash",
         )
 
         # 验证记录已写入
-        verify = repository_manager.check_dedup(
+        verify = await repository_manager.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
@@ -496,22 +514,23 @@ class TestDedupDisabled:
         """DEDUP-DIS-01: 仓库模式禁用时 should_use_repository 返回 False。"""
         assert repository_manager_disabled.should_use_repository() is False
 
-    def test_disabled_check_dedup_still_works_but_not_called(
+    @pytest.mark.asyncio
+    async def test_disabled_check_dedup_still_works_but_not_called(
         self, repository_manager_disabled, repo_db
     ):
         """DEDUP-DIS-02: 仓库模式禁用时 check_dedup 仍可调用但不应被调用。"""
         # 即使 check_dedup 方法本身可用，调用方应先检查 should_use_repository
         file_record = _make_repository_file(file_unique_id="uid_disabled")
-        repo_db.insert_file_record(file_record)
+        await repo_db.insert_file_record(file_record)
         source = _make_repository_source(
             file_unique_id="uid_disabled",
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
-        repo_db.insert_source_mapping(source)
+        await repo_db.insert_source_mapping(source)
 
         # 方法本身仍可工作
-        result = repository_manager_disabled.check_dedup(
+        result = await repository_manager_disabled.check_dedup(
             source_chat_id=-1009876543210,
             source_message_id=100,
         )
@@ -617,22 +636,23 @@ class TestDownloaderDedupIntegration:
 class TestDedupPriority:
     """验证三级去重的优先级顺序。"""
 
-    def test_l1_has_highest_priority(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l1_has_highest_priority(self, repository_manager, repo_db):
         """DEDUP-PRI-01: L1 命中时不应执行 L2/L3。"""
         file_l1 = _make_repository_file(
             file_unique_id="uid_l1_priority",
             content_hash="hash_l1",
         )
-        repo_db.insert_file_record(file_l1)
+        await repo_db.insert_file_record(file_l1)
         source_l1 = _make_repository_source(
             file_unique_id="uid_l1_priority",
             source_chat_id=-100111,
             source_message_id=111,
         )
-        repo_db.insert_source_mapping(source_l1)
+        await repo_db.insert_source_mapping(source_l1)
 
         # L1 命中
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-100111,
             source_message_id=111,
             file_unique_id="different_uid",
@@ -641,16 +661,17 @@ class TestDedupPriority:
         assert result is not None
         assert result.file_unique_id == "uid_l1_priority"
 
-    def test_l2_has_second_priority(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l2_has_second_priority(self, repository_manager, repo_db):
         """DEDUP-PRI-02: L1 未命中但 L2 命中时不应执行 L3。"""
         file_l2 = _make_repository_file(
             file_unique_id="uid_l2_priority",
             content_hash="hash_l2",
         )
-        repo_db.insert_file_record(file_l2)
+        await repo_db.insert_file_record(file_l2)
         # 不添加 source mapping，L1 不会命中
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-100222,
             source_message_id=222,
             file_unique_id="uid_l2_priority",
@@ -659,15 +680,16 @@ class TestDedupPriority:
         assert result is not None
         assert result.file_unique_id == "uid_l2_priority"
 
-    def test_l3_has_lowest_priority(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l3_has_lowest_priority(self, repository_manager, repo_db):
         """DEDUP-PRI-03: L1/L2 未命中但 L3 命中时返回 L3 结果。"""
         file_l3 = _make_repository_file(
             file_unique_id="uid_l3_priority",
             content_hash="hash_l3",
         )
-        repo_db.insert_file_record(file_l3)
+        await repo_db.insert_file_record(file_l3)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-100333,
             source_message_id=333,
             file_unique_id="different_uid",
@@ -676,27 +698,28 @@ class TestDedupPriority:
         assert result is not None
         assert result.file_unique_id == "uid_l3_priority"
 
-    def test_l1_overrides_l2_different_file(self, repository_manager, repo_db):
+    @pytest.mark.asyncio
+    async def test_l1_overrides_l2_different_file(self, repository_manager, repo_db):
         """DEDUP-PRI-04: L1 和 L2 指向不同文件时，L1 优先。"""
         file_l1 = _make_repository_file(
             file_unique_id="uid_l1_file",
             content_hash="hash_l1_file",
         )
-        repo_db.insert_file_record(file_l1)
+        await repo_db.insert_file_record(file_l1)
         source_l1 = _make_repository_source(
             file_unique_id="uid_l1_file",
             source_chat_id=-100444,
             source_message_id=444,
         )
-        repo_db.insert_source_mapping(source_l1)
+        await repo_db.insert_source_mapping(source_l1)
 
         file_l2 = _make_repository_file(
             file_unique_id="uid_l2_file",
             content_hash="hash_l2_file",
         )
-        repo_db.insert_file_record(file_l2)
+        await repo_db.insert_file_record(file_l2)
 
-        result = repository_manager.check_dedup(
+        result = await repository_manager.check_dedup(
             source_chat_id=-100444,
             source_message_id=444,
             file_unique_id="uid_l2_file",
