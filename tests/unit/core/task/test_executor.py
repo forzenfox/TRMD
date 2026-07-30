@@ -109,9 +109,11 @@ def mock_repository_manager():
     """Mock RepositoryManager。"""
     rm = MagicMock()
     rm.should_use_repository.return_value = True
-    rm.check_dedup.return_value = None
+    rm.check_dedup = AsyncMock(return_value=None)
     rm.compute_content_hash.return_value = "abc123sha256"
     rm.distribute_to_target = AsyncMock(return_value=999)
+    rm.on_upload_success = AsyncMock()
+    rm.get_repository_chat_id = MagicMock(return_value=-1009999999999)
     return rm
 
 
@@ -644,7 +646,11 @@ class TestExecuteDownload:
         """测试无 downloader 时走降级路径。"""
         mock_client.get_messages = AsyncMock()
         mock_message = MagicMock()
+        mock_message.media_group_id = None
         mock_message.media = True
+        # _extract_file_unique_id 直接读取 message 的属性
+        for attr in ("video", "photo", "document", "audio", "animation", "voice", "video_note"):
+            setattr(mock_message, attr, None)
         mock_client.get_messages.return_value = mock_message
 
         executor = TaskExecutor(
@@ -1243,9 +1249,16 @@ class TestDedupAndFieldPopulation:
         )
 
         mock_msg = MagicMock()
-        mock_msg.media = MagicMock()
-        mock_msg.media.file_unique_id = "uniq_123"
-        mock_msg.media.file_id = "file_123"
+        mock_msg.media_group_id = None
+        mock_msg.media = True
+        # _extract_file_unique_id 直接读取 message.video 等属性
+        mock_msg.video = MagicMock(file_unique_id="uniq_123", file_id="file_123")
+        mock_msg.photo = None
+        mock_msg.document = None
+        mock_msg.audio = None
+        mock_msg.animation = None
+        mock_msg.voice = None
+        mock_msg.video_note = None
         mock_client.get_messages = AsyncMock(return_value=mock_msg)
 
         task = await task_manager.create_task(
@@ -1273,10 +1286,15 @@ class TestDedupAndFieldPopulation:
         )
 
         mock_msg = MagicMock()
-        mock_media = MagicMock(spec=[])
-        mock_media.file_unique_id = "uniq_new"
-        mock_media.file_id = "file_new"
-        mock_msg.media = mock_media
+        mock_msg.media_group_id = None
+        mock_msg.media = True
+        mock_msg.video = MagicMock(file_unique_id="uniq_new", file_id="file_new")
+        mock_msg.photo = None
+        mock_msg.document = None
+        mock_msg.audio = None
+        mock_msg.animation = None
+        mock_msg.voice = None
+        mock_msg.video_note = None
         mock_client.get_messages = AsyncMock(return_value=mock_msg)
 
         task = await task_manager.create_task(
@@ -1305,10 +1323,15 @@ class TestDedupAndFieldPopulation:
         )
 
         mock_msg = MagicMock()
-        mock_media = MagicMock(spec=[])
-        mock_media.file_unique_id = "uniq_filled"
-        mock_media.file_id = "file_filled"
-        mock_msg.media = mock_media
+        mock_msg.media_group_id = None
+        mock_msg.media = True
+        mock_msg.video = MagicMock(file_unique_id="uniq_filled", file_id="file_filled")
+        mock_msg.photo = None
+        mock_msg.document = None
+        mock_msg.audio = None
+        mock_msg.animation = None
+        mock_msg.voice = None
+        mock_msg.video_note = None
         mock_client.get_messages = AsyncMock(return_value=mock_msg)
 
         task = await task_manager.create_task(
@@ -1559,6 +1582,7 @@ class TestPhase2RecentAndMediaFilter:
         """构造含媒体的 mock Message。"""
         msg = MagicMock()
         msg.id = msg_id
+        msg.media_group_id = None
         if media_type:
             msg.media = MagicMock()
             for attr in (
@@ -1570,11 +1594,13 @@ class TestPhase2RecentAndMediaFilter:
                 "voice",
                 "video_note",
             ):
+                setattr(msg, attr, None)
                 setattr(msg.media, attr, None)
             media_obj = MagicMock()
             media_obj.file_size = file_size
             media_obj.file_unique_id = f"unique_{msg_id}"
             media_obj.file_id = f"file_{msg_id}"
+            setattr(msg, media_type, media_obj)
             setattr(msg.media, media_type, media_obj)
         else:
             msg.media = None
@@ -1650,11 +1676,13 @@ class TestPhase2RecentAndMediaFilter:
             "voice",
             "video_note",
         ):
+            setattr(msg_photo, attr, None)
             setattr(msg_photo.media, attr, None)
-        msg_photo.media.photo = MagicMock()
+        msg_photo.photo = MagicMock()
+        msg_photo.media.photo = msg_photo.photo
         size1 = MagicMock(file_size=100)
         size2 = MagicMock(file_size=200)
-        msg_photo.media.photo.sizes = [size1, size2]
+        msg_photo.photo.sizes = [size1, size2]
         assert TaskExecutor._get_message_file_size(msg_photo) == 200
 
         # 不支持的媒体类型
@@ -1669,6 +1697,7 @@ class TestPhase2RecentAndMediaFilter:
             "video_note",
             "photo",
         ):
+            setattr(msg_unsupported, attr, None)
             setattr(msg_unsupported.media, attr, None)
         assert TaskExecutor._get_message_file_size(msg_unsupported) is None
 
@@ -2163,10 +2192,15 @@ class TestPhase3HandleListenDownload:
 
         mock_message = MagicMock()
         mock_message.id = 12345
+        mock_message.media_group_id = None
         mock_message.media = MagicMock()
-        mock_message.media.video = MagicMock()
-        mock_message.media.video.file_unique_id = "uniq123"
-        mock_message.media.video.file_id = "file123"
+        mock_message.video = MagicMock(file_unique_id="uniq123", file_id="file123")
+        mock_message.photo = None
+        mock_message.document = None
+        mock_message.audio = None
+        mock_message.animation = None
+        mock_message.voice = None
+        mock_message.video_note = None
 
         await executor._handle_listen_download(task.task_id, mock_client, mock_message)
 
@@ -2193,10 +2227,15 @@ class TestPhase3HandleListenDownload:
 
         mock_message = MagicMock()
         mock_message.id = 12345
+        mock_message.media_group_id = None
         mock_message.media = MagicMock()
-        mock_message.media.video = MagicMock()
-        mock_message.media.video.file_unique_id = "uniq123"
-        mock_message.media.video.file_id = "file123"
+        mock_message.video = MagicMock(file_unique_id="uniq123", file_id="file123")
+        mock_message.photo = None
+        mock_message.document = None
+        mock_message.audio = None
+        mock_message.animation = None
+        mock_message.voice = None
+        mock_message.video_note = None
 
         # 第一次调用
         await executor._handle_listen_download(task.task_id, mock_client, mock_message)
@@ -2271,10 +2310,15 @@ class TestPhase3HandleListenDownload:
 
         mock_message = MagicMock()
         mock_message.id = 12345
+        mock_message.media_group_id = None
         mock_message.media = MagicMock()
-        mock_message.media.video = MagicMock()
-        mock_message.media.video.file_unique_id = "uniq123"
-        mock_message.media.video.file_id = "file123"
+        mock_message.video = MagicMock(file_unique_id="uniq123", file_id="file123")
+        mock_message.photo = None
+        mock_message.document = None
+        mock_message.audio = None
+        mock_message.animation = None
+        mock_message.voice = None
+        mock_message.video_note = None
 
         await executor._handle_listen_download(task.task_id, mock_client, mock_message)
 
@@ -3016,7 +3060,10 @@ class TestDownloadFallbackNoFalseSuccess:
     ):
         """降级路径中有媒体的消息应标记为 SKIPPED 而非 SUCCESS。"""
         mock_msg = MagicMock()
+        mock_msg.media_group_id = None
         mock_msg.media = True
+        for attr in ("video", "photo", "document", "audio", "animation", "voice", "video_note"):
+            setattr(mock_msg, attr, None)
         mock_client.get_messages = AsyncMock(return_value=mock_msg)
 
         executor = TaskExecutor(
@@ -3046,9 +3093,12 @@ class TestDownloadFallbackNoFalseSuccess:
         """监听下载降级路径中应标记为 SKIPPED 而非 SUCCESS。"""
         # 构造模拟消息
         mock_message = MagicMock()
+        mock_message.media_group_id = None
         mock_message.media = True
         mock_message.id = 42
-        mock_message.photo = MagicMock()
+        mock_message.photo = None
+        for attr in ("video", "document", "audio", "animation", "voice", "video_note"):
+            setattr(mock_message, attr, None)
 
         executor = TaskExecutor(
             task_manager=task_manager,
@@ -3396,7 +3446,7 @@ class TestForwardIngestion:
 
         # 验证仓库中转的调用链
         # 1. check_dedup 被调用
-        dedup_result = mock_repository_manager.check_dedup(
+        dedup_result = await mock_repository_manager.check_dedup(
             source_chat_id=-1001234567890,
             source_message_id=100,
             file_unique_id="fuid_forward_001",
