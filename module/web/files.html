@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>文件管理 - Telegram Restricted Media Downloader</title>
+  
+  <!-- Tailwind 自定义配置 -->
+  <script>
+    window.tailwind = window.tailwind || {};
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd',
+              400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8',
+              800: '#1e40af', 900: '#1e3a8a',
+            },
+            slate: {
+              850: '#1e293b', 900: '#0f172a', 950: '#020617',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- Tailwind CSS (本地) -->
+  <script src="vendor/tailwindcss.js"></script>
+  
+  <!-- 自定义样式 -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-slate-900 min-h-screen">
+  <div 
+    x-data="filesPage()"
+    x-init="init()"
+    class="flex min-h-screen"
+  >
+    <!-- 移动端侧边栏遮罩 -->
+    <div 
+      x-show="mobileSidebarOpen" 
+      x-transition:enter="transition-opacity ease-linear duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition-opacity ease-linear duration-300"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="fixed inset-0 bg-black/50 z-40 lg:hidden"
+      @click="mobileSidebarOpen = false"
+    ></div>
+
+    <!-- 侧边栏 -->
+    <aside 
+      :class="mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'"
+      class="fixed inset-y-0 left-0 z-50 w-64 bg-slate-800 border-r border-slate-700 transform transition-transform duration-300 lg:translate-x-0 lg:static lg:inset-0"
+    >
+      <div class="flex items-center h-16 px-6 border-b border-slate-700">
+        <div class="flex items-center">
+          <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m0 0V7a3 3 0 013-3h4a3 3 0 013 3v4m-4 4l-4 4m0 0l-4-4m0-8v-2m0 6V8m0 0l4 4m-4-4l4-4"></path>
+            </svg>
+          </div>
+          <span class="ml-3 text-lg font-bold text-white">TRMD</span>
+        </div>
+      </div>
+
+      <nav class="mt-4 px-4 space-y-1">
+        <a href="index.html" class="sidebar-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+          </svg>
+          <span>Dashboard</span>
+        </a>
+        <a href="tasks.html" class="sidebar-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path>
+          </svg>
+          <span>任务管理</span>
+        </a>
+        <a href="files.html" class="sidebar-link active">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+          </svg>
+          <span>文件管理</span>
+        </a>
+        <a href="config.html" class="sidebar-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          </svg>
+          <span>系统配置</span>
+        </a>
+      </nav>
+
+      <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-700">
+        <div class="flex items-center">
+          <div class="w-8 h-8 bg-slate-600 rounded-full flex items-center justify-center">
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+            </svg>
+          </div>
+          <div class="ml-3 flex-1 min-w-0">
+            <p class="text-sm font-medium text-white truncate" x-text="userName"></p>
+            <p class="text-xs text-slate-400">在线</p>
+          </div>
+          <button @click="logout" class="text-slate-400 hover:text-white">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <header class="h-16 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-4 lg:px-6">
+        <div class="flex items-center">
+          <button @click="mobileSidebarOpen = true" class="lg:hidden mr-4 text-slate-400 hover:text-white">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+          </button>
+          <h1 class="text-xl font-semibold text-white">文件管理</h1>
+        </div>
+        <div class="flex items-center space-x-3">
+          <button @click="refreshFiles()" class="btn btn-secondary" data-testid="refresh-btn">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+            <span>刷新</span>
+          </button>
+          <button 
+            x-show="selectedFiles.length > 0"
+            @click="openUploadModal()"
+            class="btn btn-primary"
+            data-testid="upload-selected-btn"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path>
+            </svg>
+            <span>上传选中文件</span>
+          </button>
+        </div>
+      </header>
+
+      <main class="flex-1 p-4 lg:p-6 overflow-y-auto">
+        <!-- 通知 -->
+        <div class="fixed top-4 right-4 z-50 space-y-2 max-w-sm">
+          <template x-for="(notification, index) in notifications" :key="index">
+            <div 
+              x-show="true"
+              x-transition:enter="transition ease-out duration-300"
+              x-transition:enter-start="opacity-0 translate-y-2"
+              x-transition:enter-end="opacity-100 translate-y-0"
+              x-transition:leave="transition ease-in duration-300"
+              x-transition:leave-start="opacity-100 translate-y-0"
+              x-transition:leave-end="opacity-0 translate-y-2"
+              :class="{
+                'bg-slate-800 border-l-4 border-blue-500': notification.type === 'info',
+                'bg-slate-800 border-l-4 border-green-500': notification.type === 'success',
+                'bg-slate-800 border-l-4 border-yellow-500': notification.type === 'warning',
+                'bg-slate-800 border-l-4 border-red-500': notification.type === 'error',
+              }"
+              class="p-4 rounded-lg shadow-lg"
+            >
+              <div class="flex items-start">
+                <div class="flex-1">
+                  <p class="text-sm text-white" x-text="notification.message"></p>
+                </div>
+                <button @click="notifications.splice(index, 1)" class="ml-3 text-slate-400 hover:text-white">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 面包屑导航 -->
+        <div class="breadcrumb" data-testid="breadcrumb-container">
+          <template x-for="(crumb, index) in getBreadcrumbs()" :key="crumb.path">
+            <span class="flex items-center">
+              <span x-show="index > 0" class="breadcrumb-separator mx-1">/</span>
+              <a 
+                @click.prevent="loadFiles(crumb.path)"
+                href="#"
+                :class="index === getBreadcrumbs().length - 1 ? 'breadcrumb-item active' : 'breadcrumb-item'"
+                x-text="crumb.name"
+                data-testid="breadcrumb-item"
+              ></a>
+            </span>
+          </template>
+        </div>
+
+        <!-- 工具栏 -->
+        <div class="flex items-center justify-between mb-4" data-testid="toolbar">
+          <div class="flex items-center gap-2">
+            <button 
+              @click="selectAllFiles()"
+              class="btn btn-sm btn-secondary"
+              data-testid="select-all-btn"
+            >
+              全选
+            </button>
+            <button 
+              x-show="selectedFiles.length > 0"
+              @click="clearSelection()"
+              class="btn btn-sm btn-secondary"
+              data-testid="clear-selection-btn"
+            >
+              清空选择
+            </button>
+          </div>
+          <div class="flex items-center gap-2">
+            <button 
+              @click="toggleSort('name')"
+              class="btn btn-sm"
+              :class="sortBy === 'name' ? 'btn-primary' : 'btn-secondary'"
+              data-testid="sort-name-btn"
+            >
+              名称
+              <span x-show="sortBy === 'name'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+            </button>
+            <button 
+              @click="toggleSort('size')"
+              class="btn btn-sm"
+              :class="sortBy === 'size' ? 'btn-primary' : 'btn-secondary'"
+              data-testid="sort-size-btn"
+            >
+              大小
+              <span x-show="sortBy === 'size'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+            </button>
+            <button 
+              @click="toggleSort('date')"
+              class="btn btn-sm"
+              :class="sortBy === 'date' ? 'btn-primary' : 'btn-secondary'"
+              data-testid="sort-date-btn"
+            >
+              日期
+              <span x-show="sortBy === 'date'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 加载状态 -->
+        <div x-show="loading" data-testid="files-loading" class="flex items-center justify-center py-12">
+          <div class="spinner spinner-lg"></div>
+          <span class="ml-3 text-slate-400">加载文件列表...</span>
+        </div>
+
+        <!-- 错误提示 -->
+        <div x-show="error" data-testid="files-error" class="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg mb-4">
+          <span x-text="error"></span>
+        </div>
+
+        <!-- 文件列表 -->
+        <div x-show="!loading && !error" class="card" data-testid="files-container">
+          <div x-show="files.length === 0" class="py-8 text-center">
+            <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+            </svg>
+            <p class="text-slate-400 mt-2">当前目录为空</p>
+          </div>
+
+          <div x-show="files.length > 0" class="overflow-x-auto">
+            <table class="table" data-testid="files-table">
+              <thead>
+                <tr>
+                  <th class="w-10"></th>
+                  <th>名称</th>
+                  <th>大小</th>
+                  <th>修改时间</th>
+                  <th class="w-20">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="file in files" :key="file.path">
+                  <tr 
+                    :class="isSelected(file) ? 'bg-primary-500/10' : ''"
+                    @dblclick="file.is_directory && enterDirectory(file.name)"
+                    data-testid="file-row"
+                  >
+                    <td>
+                      <input 
+                        type="checkbox"
+                        :checked="isSelected(file)"
+                        @change="toggleFileSelection(file)"
+                        :disabled="file.is_directory"
+                        class="w-4 h-4 rounded border-slate-600 bg-slate-700 text-primary-600 focus:ring-primary-500"
+                        data-testid="file-checkbox"
+                      >
+                    </td>
+                    <td>
+                      <div class="flex items-center gap-2">
+                        <span x-text="getFileIcon(file)" class="text-lg"></span>
+                        <a 
+                          x-show="file.is_directory"
+                          @click.prevent="enterDirectory(file.name)"
+                          href="#"
+                          class="text-primary-400 hover:text-primary-300"
+                          x-text="file.name"
+                          data-testid="file-name"
+                        ></a>
+                        <span x-show="!file.is_directory" class="text-white" x-text="file.name" data-testid="file-name"></span>
+                      </div>
+                    </td>
+                    <td class="text-sm text-slate-400" x-text="file.is_directory ? '-' : formatFileSize(file.size)" data-testid="file-size"></td>
+                    <td class="text-sm text-slate-400" x-text="formatTime(file.modified_at)" data-testid="file-date"></td>
+                    <td>
+                      <button 
+                        x-show="!file.is_directory && isMediaFile(file)"
+                        @click="previewFile(file)"
+                        class="text-slate-400 hover:text-white"
+                        title="预览"
+                        data-testid="btn-file-preview"
+                      >
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                        </svg>
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 底部选择信息栏 -->
+        <div 
+          x-show="selectedFiles.length > 0"
+          x-transition:enter="transition ease-out duration-300"
+          x-transition:enter-start="translate-y-full"
+          x-transition:enter-end="translate-y-0"
+          x-transition:leave="transition ease-in duration-300"
+          x-transition:leave-start="translate-y-0"
+          x-transition:leave-end="translate-y-full"
+          class="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-slate-800 border border-slate-700 rounded-lg shadow-lg px-6 py-3 flex items-center gap-4 z-40"
+          data-testid="selection-info-bar"
+        >
+          <span class="text-sm text-white">
+            已选择 <span class="font-medium text-primary-400" x-text="selectedFiles.length" data-testid="selected-count"></span> 个文件
+          </span>
+          <span class="text-sm text-slate-400">
+            共 <span x-text="formatFileSize(getTotalSelectedSize())" data-testid="selected-size"></span>
+          </span>
+          <button @click="openUploadModal()" class="btn btn-sm btn-primary" data-testid="upload-btn-bottom">
+            上传
+          </button>
+          <button @click="clearSelection()" class="text-slate-400 hover:text-white">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+      </main>
+    </div>
+
+    <!-- 上传配置弹窗 -->
+    <div 
+      x-show="showUploadModal"
+      x-transition:enter="transition ease-out duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition ease-in duration-300"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+      @click="closeUploadModal()"
+      data-testid="upload-modal"
+    >
+      <div 
+        x-show="showUploadModal"
+        x-transition:enter="transition ease-out duration-300"
+        x-transition:enter-start="opacity-0 scale-95"
+        x-transition:enter-end="opacity-100 scale-100"
+        x-transition:leave="transition ease-in duration-300"
+        x-transition:leave-start="opacity-100 scale-100"
+        x-transition:leave-end="opacity-0 scale-95"
+        class="bg-slate-800 rounded-lg border border-slate-700 w-full max-w-md"
+        @click.stop
+      >
+        <div class="modal-header">
+          <h3 class="modal-title text-white">上传配置</h3>
+          <button @click="closeUploadModal()" class="text-slate-400 hover:text-white" data-testid="modal-close-btn">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <form @submit.prevent="handleUpload" class="space-y-4">
+            <!-- 目标频道 -->
+            <div class="form-group">
+              <label class="form-label">目标频道</label>
+              <input 
+                type="text" 
+                x-model="uploadForm.targetChat"
+                class="form-input"
+                placeholder="@username 或 https://t.me/xxx"
+                required
+                data-testid="upload-target-input"
+              >
+            </div>
+
+            <!-- 媒体组选项 -->
+            <div class="form-group">
+              <label class="flex items-center cursor-pointer">
+                <input type="checkbox" x-model="uploadForm.sendAsMediaGroup" class="mr-2" data-testid="upload-media-group-checkbox">
+                <span>发送为媒体组（最多 10 个一组）</span>
+              </label>
+            </div>
+
+            <!-- 上传后删除 -->
+            <div class="form-group">
+              <label class="flex items-center cursor-pointer">
+                <input type="checkbox" x-model="uploadForm.deleteAfterUpload" class="mr-2" data-testid="upload-delete-checkbox">
+                <span>上传后删除本地文件</span>
+              </label>
+            </div>
+
+            <!-- 文件预览 -->
+            <div>
+              <p class="text-sm text-slate-400 mb-2">已选文件：</p>
+              <div class="bg-slate-700/50 rounded p-3 max-h-40 overflow-y-auto" data-testid="upload-file-preview">
+                <template x-for="file in selectedFiles" :key="file.path">
+                  <div class="flex items-center gap-2 py-1 text-sm">
+                    <span x-text="getFileIcon(file)"></span>
+                    <span class="text-white truncate flex-1" x-text="file.name"></span>
+                    <span class="text-slate-400" x-text="formatFileSize(file.size)"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button @click="closeUploadModal()" class="btn btn-secondary" data-testid="upload-cancel-btn">
+            取消
+          </button>
+          <button 
+            @click="handleUpload()"
+            class="btn btn-primary"
+            data-testid="upload-submit-btn"
+          >
+            开始上传
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- JavaScript 文件 -->
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/files.js"></script>
+  <script>
+    /**
+     * 文件页面逻辑
+     */
+    function filesPage() {
+      return {
+        mobileSidebarOpen: false,
+        userName: '用户',
+        notifications: [],
+        // Alpine 响应式状态
+        currentPath: '/',
+        files: [],
+        selectedFiles: [],
+        loading: false,
+        error: null,
+        showUploadModal: false,
+        sortBy: 'name',
+        sortOrder: 'asc',
+        uploadForm: {
+          targetChat: '',
+          sendAsMediaGroup: true,
+          deleteAfterUpload: false,
+        },
+
+        async init() {
+          const authenticated = await authManager.ensureAuthenticated();
+          if (!authenticated) return;
+
+          this.userName = authManager.getDisplayName();
+          await this.loadFiles('/');
+        },
+
+        async loadFiles(path) {
+          this.currentPath = path;
+          this.loading = true;
+          this.error = null;
+          this.selectedFiles = [];
+
+          try {
+            const files = await fileManager.loadFiles(path);
+            this.files = fileManager.sortFiles(files, this.sortBy, this.sortOrder);
+          } catch (error) {
+            this.error = error.message;
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        enterDirectory(dirName) {
+          const newPath = fileManager.enterDirectory(this.currentPath, dirName);
+          this.loadFiles(newPath);
+        },
+
+        goToParentDirectory() {
+          const parentPath = fileManager.goToParentDirectory(this.currentPath);
+          this.loadFiles(parentPath);
+        },
+
+        refreshFiles() {
+          this.loadFiles(this.currentPath);
+        },
+
+        isSelected(file) {
+          return this.selectedFiles.some(f => f.path === file.path);
+        },
+
+        toggleFileSelection(file) {
+          this.selectedFiles = fileManager.toggleFileSelection(this.selectedFiles, file);
+        },
+
+        selectAllFiles() {
+          this.selectedFiles = fileManager.selectAllFiles(this.files);
+        },
+
+        clearSelection() {
+          this.selectedFiles = [];
+        },
+
+        getTotalSelectedSize() {
+          return fileManager.getTotalSelectedSize(this.selectedFiles);
+        },
+
+        toggleSort(newSortBy) {
+          const result = fileManager.toggleSort(this.sortBy, this.sortOrder, newSortBy);
+          this.sortBy = result.sortBy;
+          this.sortOrder = result.sortOrder;
+          this.files = fileManager.sortFiles(this.files, this.sortBy, this.sortOrder);
+        },
+
+        getFileIcon(file) {
+          return fileManager.getFileIcon(file);
+        },
+
+        isMediaFile(file) {
+          return fileManager.isMediaFile(file);
+        },
+
+        getBreadcrumbs() {
+          return fileManager.getBreadcrumbs(this.currentPath);
+        },
+
+        formatFileSize(bytes) {
+          return fileManager.formatFileSize(bytes);
+        },
+
+        formatTime(isoString) {
+          return fileManager.formatTime(isoString);
+        },
+
+        openUploadModal() {
+          if (this.selectedFiles.length === 0) {
+            this.addNotification('warning', '请先选择要上传的文件');
+            return;
+          }
+          this.uploadForm.targetChat = '';
+          this.uploadForm.sendAsMediaGroup = true;
+          this.uploadForm.deleteAfterUpload = false;
+          this.showUploadModal = true;
+        },
+
+        closeUploadModal() {
+          this.showUploadModal = false;
+        },
+
+        async handleUpload() {
+          try {
+            const count = await fileManager.createUploadTask(
+              this.selectedFiles,
+              this.uploadForm.targetChat,
+              this.uploadForm.sendAsMediaGroup,
+              this.uploadForm.deleteAfterUpload
+            );
+            this.closeUploadModal();
+            this.clearSelection();
+            this.addNotification('success', `已创建 ${count} 个上传任务`);
+          } catch (error) {
+            this.addNotification('error', `创建上传任务失败: ${error.message}`);
+          }
+        },
+
+        previewFile(file) {
+          this.addNotification('info', `预览: ${file.name}`);
+        },
+
+        logout() {
+          authManager.logout();
+        },
+
+        addNotification(type, message) {
+          this.notifications.push({ type, message });
+          setTimeout(() => this.notifications.shift(), 5000);
+        },
+      };
+    }
+
+    // 全局通知函数
+    window.showNotification = function(type, message) {
+      const app = document.querySelector('[x-data]');
+      if (app && app.__x) {
+        app.__x.getUnobservedData().addNotification(type, message);
+      }
+    };
+  </script>
+
+  <!-- Alpine.js (本地) - 必须在组件函数定义之后加载 -->
+  <script src="vendor/alpinejs.js"></script>
+</body>
+</html>

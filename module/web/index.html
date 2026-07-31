@@ -1,0 +1,714 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Telegram Restricted Media Downloader</title>
+  
+  <!-- Tailwind 自定义配置 -->
+  <script>
+    window.tailwind = window.tailwind || {};
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: {
+              50: '#eff6ff', 100: '#dbeafe', 200: '#bfdbfe', 300: '#93c5fd',
+              400: '#60a5fa', 500: '#3b82f6', 600: '#2563eb', 700: '#1d4ed8',
+              800: '#1e40af', 900: '#1e3a8a',
+            },
+            slate: {
+              850: '#1e293b', 900: '#0f172a', 950: '#020617',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <!-- Tailwind CSS (本地) -->
+  <script src="vendor/tailwindcss.js"></script>
+  
+  <!-- 自定义样式 -->
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="bg-slate-900 min-h-screen">
+  <div 
+    x-data="dashboardApp()"
+    x-init="init()"
+    class="flex min-h-screen"
+  >
+    <!-- 移动端侧边栏遮罩 -->
+    <div 
+      x-show="mobileSidebarOpen" 
+      x-transition:enter="transition-opacity ease-linear duration-300"
+      x-transition:enter-start="opacity-0"
+      x-transition:enter-end="opacity-100"
+      x-transition:leave="transition-opacity ease-linear duration-300"
+      x-transition:leave-start="opacity-100"
+      x-transition:leave-end="opacity-0"
+      class="fixed inset-0 bg-black/50 z-40 lg:hidden"
+      @click="mobileSidebarOpen = false"
+    ></div>
+
+    <!-- 侧边栏 -->
+    <aside 
+      :class="mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'"
+      class="fixed inset-y-0 left-0 z-50 w-64 bg-slate-800 border-r border-slate-700 transform transition-transform duration-300 lg:translate-x-0 lg:static lg:inset-0"
+    >
+      <!-- Logo -->
+      <div class="flex items-center h-16 px-6 border-b border-slate-700">
+        <div class="flex items-center">
+          <div class="w-8 h-8 bg-primary-600 rounded-lg flex items-center justify-center">
+            <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m0 0V7a3 3 0 013-3h4a3 3 0 013 3v4m-4 4l-4 4m0 0l-4-4m0-8v-2m0 6V8m0 0l4 4m-4-4l4-4"></path>
+            </svg>
+          </div>
+          <span class="ml-3 text-lg font-bold text-white">TRMD</span>
+        </div>
+      </div>
+
+      <!-- 导航链接 -->
+      <nav class="mt-4 px-4 space-y-1" data-testid="sidebar-nav">
+        <a href="index.html" class="sidebar-link active" data-testid="sidebar-dashboard-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+          </svg>
+          <span>Dashboard</span>
+        </a>
+        <a href="tasks.html" class="sidebar-link" data-testid="sidebar-tasks-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"></path>
+          </svg>
+          <span>任务管理</span>
+        </a>
+        <a href="files.html" class="sidebar-link" data-testid="sidebar-files-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+          </svg>
+          <span>文件管理</span>
+        </a>
+        <a href="config.html" class="sidebar-link" data-testid="sidebar-config-link">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+          </svg>
+          <span>系统配置</span>
+        </a>
+      </nav>
+
+      <!-- 用户信息 -->
+      <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-slate-700">
+        <div class="flex items-center">
+          <div class="w-8 h-8 bg-slate-600 rounded-full flex items-center justify-center">
+            <svg class="w-4 h-4 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+            </svg>
+          </div>
+          <div class="ml-3 flex-1 min-w-0">
+            <p class="text-sm font-medium text-white truncate" x-text="userName"></p>
+            <p class="text-xs text-slate-400">在线</p>
+          </div>
+          <button @click="logout" class="text-slate-400 hover:text-white" title="退出登录" data-testid="logout-btn">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <div class="flex-1 flex flex-col min-w-0">
+      <!-- 顶部栏 -->
+      <header class="h-16 bg-slate-800 border-b border-slate-700 flex items-center justify-between px-4 lg:px-6">
+        <div class="flex items-center">
+          <!-- 移动端汉堡菜单 -->
+          <button @click="mobileSidebarOpen = true" class="lg:hidden mr-4 text-slate-400 hover:text-white">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
+            </svg>
+          </button>
+          <h1 class="text-xl font-semibold text-white">Dashboard</h1>
+        </div>
+        <div class="flex items-center space-x-3">
+          <!-- Client 状态指示器 -->
+          <div class="flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium"
+               :class="clientStatusClass"
+               data-testid="client-status-indicator">
+            <span class="w-2 h-2 rounded-full" :class="{'animate-pulse': clientStatus.status === 'not_initialized' || reconnectStatus.is_reconnecting, 'bg-green-400': clientStatus.status === 'connected', 'bg-red-400': clientStatus.status === 'disconnected', 'bg-yellow-400': clientStatus.status === 'not_initialized', 'bg-slate-400': clientStatus.status === 'error'}"></span>
+            <span x-text="clientStatusText"></span>
+          </div>
+          <!-- 手动重连按钮 -->
+          <button
+            x-show="showReconnectButton"
+            @click="manualReconnect()"
+            :disabled="isReconnecting"
+            class="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+            :class="isReconnecting ? 'bg-primary-600 text-white cursor-not-allowed' : 'bg-primary-600 hover:bg-primary-700 text-white'"
+            data-testid="reconnect-btn"
+          >
+            <span x-show="!isReconnecting">重连</span>
+            <span x-show="isReconnecting" class="flex items-center">
+              <svg class="animate-spin -ml-1 mr-1 h-3 w-3 text-white" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+              重连中...
+            </span>
+          </button>
+          <!-- 刷新按钮 -->
+          <button @click="refreshAll" class="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-700" title="刷新" data-testid="refresh-btn">
+            <svg class="w-5 h-5" :class="{'animate-spin': loading}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 内容区域 -->
+      <main class="flex-1 p-4 lg:p-6 overflow-y-auto">
+        <!-- 通知区域 -->
+        <div class="fixed top-4 right-4 z-50 space-y-2 max-w-sm" data-testid="notification-container">
+          <template x-for="(notification, index) in notifications" :key="index">
+            <div 
+              x-show="true"
+              x-transition:enter="transition ease-out duration-300"
+              x-transition:enter-start="opacity-0 translate-y-2"
+              x-transition:enter-end="opacity-100 translate-y-0"
+              x-transition:leave="transition ease-in duration-300"
+              x-transition:leave-start="opacity-100 translate-y-0"
+              x-transition:leave-end="opacity-0 translate-y-2"
+              :class="{
+                'bg-slate-800 border-l-4 border-blue-500': notification.type === 'info',
+                'bg-slate-800 border-l-4 border-green-500': notification.type === 'success',
+                'bg-slate-800 border-l-4 border-yellow-500': notification.type === 'warning',
+                'bg-slate-800 border-l-4 border-red-500': notification.type === 'error',
+              }"
+              class="p-4 rounded-lg shadow-lg"
+            >
+              <div class="flex items-start">
+                <div class="flex-1">
+                  <p class="text-sm text-white" x-text="notification.message"></p>
+                </div>
+                <button @click="removeNotification(index)" class="ml-3 text-slate-400 hover:text-white">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </template>
+        </div>
+
+        <!-- 加载状态 -->
+        <div x-show="loading && !stats.loaded" class="flex items-center justify-center py-12">
+          <div class="spinner spinner-lg"></div>
+          <span class="ml-3 text-slate-400">加载中...</span>
+        </div>
+
+        <!-- 主内容 -->
+        <div x-show="!loading || stats.loaded" class="space-y-6">
+          <!-- 资源状态卡片 -->
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <!-- 磁盘空间 -->
+            <div class="card" data-testid="disk-card">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm text-slate-400">磁盘空间</p>
+                  <p class="text-2xl font-bold text-white mt-1" x-text="formatSize(stats.diskFree)"></p>
+                  <p class="text-xs text-slate-500 mt-1">
+                    可用 / <span x-text="formatSize(stats.diskTotal)"></span>
+                  </p>
+                </div>
+                <div class="w-12 h-12 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                  <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"></path>
+                  </svg>
+                </div>
+              </div>
+              <div class="mt-3">
+                <div class="progress-bar">
+                  <div 
+                    class="progress-bar-fill" 
+                    :style="`width: ${stats.diskPercent}%`"
+                    :class="stats.diskPercent > 90 ? 'error' : stats.diskPercent > 70 ? 'warning' : ''"
+                  ></div>
+                </div>
+                <p class="text-xs text-slate-500 mt-1" x-text="`${stats.diskPercent.toFixed(1)}% 已使用`"></p>
+              </div>
+            </div>
+
+            <!-- 内存使用 -->
+            <div class="card" data-testid="memory-card">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm text-slate-400">内存使用</p>
+                  <p class="text-2xl font-bold text-white mt-1" x-text="formatSize(stats.memoryUsed)"></p>
+                  <p class="text-xs text-slate-500 mt-1">
+                    已用 / <span x-text="formatSize(stats.memoryTotal)"></span>
+                  </p>
+                </div>
+                <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                  <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                  </svg>
+                </div>
+              </div>
+              <div class="mt-3">
+                <div class="progress-bar">
+                  <div 
+                    class="progress-bar-fill" 
+                    :style="`width: ${stats.memoryPercent}%`"
+                    :class="stats.memoryPercent > 90 ? 'error' : stats.memoryPercent > 70 ? 'warning' : ''"
+                  ></div>
+                </div>
+                <p class="text-xs text-slate-500 mt-1" x-text="`${stats.memoryPercent.toFixed(1)}% 已使用`"></p>
+              </div>
+            </div>
+
+            <!-- CPU 使用率 -->
+            <div class="card" data-testid="cpu-card">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm text-slate-400">CPU 使用率</p>
+                  <p class="text-2xl font-bold text-white mt-1" x-text="`${stats.cpuPercent.toFixed(1)}%`"></p>
+                  <p class="text-xs text-slate-500 mt-1">处理器负载</p>
+                </div>
+                <div class="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
+                  <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path>
+                  </svg>
+                </div>
+              </div>
+              <div class="mt-3">
+                <div class="progress-bar">
+                  <div 
+                    class="progress-bar-fill" 
+                    :style="`width: ${stats.cpuPercent}%`"
+                    :class="stats.cpuPercent > 90 ? 'error' : stats.cpuPercent > 70 ? 'warning' : ''"
+                  ></div>
+                </div>
+                <p class="text-xs text-slate-500 mt-1">实时负载</p>
+              </div>
+            </div>
+
+            <!-- 运行任务数 -->
+            <div class="card" data-testid="running-tasks-card">
+              <div class="flex items-center justify-between">
+                <div>
+                  <p class="text-sm text-slate-400">运行任务</p>
+                  <p class="text-2xl font-bold text-white mt-1" x-text="stats.runningTasks"></p>
+                  <p class="text-xs text-slate-500 mt-1">
+                    队列: <span x-text="stats.queuedTasks"></span>
+                  </p>
+                </div>
+                <div class="w-12 h-12 bg-yellow-500/20 rounded-lg flex items-center justify-center">
+                  <svg class="w-6 h-6 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                  </svg>
+                </div>
+              </div>
+              <div class="mt-3 grid grid-cols-3 gap-2 text-center">
+                <div class="bg-slate-700/50 rounded p-1">
+                  <p class="text-xs text-slate-400">运行</p>
+                  <p class="text-sm font-medium text-blue-400" x-text="stats.runningTasks"></p>
+                </div>
+                <div class="bg-slate-700/50 rounded p-1">
+                  <p class="text-xs text-slate-400">队列</p>
+                  <p class="text-sm font-medium text-yellow-400" x-text="stats.queuedTasks"></p>
+                </div>
+                <div class="bg-slate-700/50 rounded p-1">
+                  <p class="text-xs text-slate-400">失败</p>
+                  <p class="text-sm font-medium text-red-400" x-text="stats.failedTasks"></p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 快捷操作 -->
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">快捷操作</h2>
+            </div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <a href="tasks.html?action=create&type=download" class="btn btn-primary" data-testid="quick-download-btn">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+                </svg>
+                <span>新建下载</span>
+              </a>
+              <a href="tasks.html?action=create&type=forward" class="btn btn-success" data-testid="quick-forward-btn">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"></path>
+                </svg>
+                <span>新建转发</span>
+              </a>
+              <a href="tasks.html?action=create&type=upload" class="btn btn-warning" data-testid="quick-upload-btn">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"></path>
+                </svg>
+                <span>新建上传</span>
+              </a>
+              <a href="config.html" class="btn btn-secondary" data-testid="quick-settings-btn">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <span>打开设置</span>
+              </a>
+            </div>
+          </div>
+
+          <!-- 最近任务 -->
+          <div class="card" data-testid="recent-tasks-container">
+            <div class="card-header">
+              <h2 class="card-title">最近任务</h2>
+              <a href="tasks.html" class="text-sm text-primary-400 hover:text-primary-300">查看全部 →</a>
+            </div>
+            
+            <!-- 加载状态 -->
+            <div x-show="tasksLoading" class="py-8 text-center">
+              <div class="spinner mx-auto"></div>
+              <p class="text-slate-400 mt-2 text-sm">加载任务列表...</p>
+            </div>
+
+            <!-- 空状态 -->
+            <div x-show="!tasksLoading && recentTasks.length === 0" class="py-8 text-center">
+              <svg class="w-12 h-12 mx-auto text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"></path>
+              </svg>
+              <p class="text-slate-400 mt-2">暂无任务</p>
+              <a href="tasks.html" class="text-primary-400 hover:text-primary-300 text-sm mt-2 inline-block">创建第一个任务</a>
+            </div>
+
+            <!-- 任务列表 -->
+            <div x-show="!tasksLoading && recentTasks.length > 0" class="overflow-x-auto">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>类型</th>
+                    <th>状态</th>
+                    <th>进度</th>
+                    <th>速度</th>
+                    <th>创建时间</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template x-for="task in recentTasks" :key="task.id">
+                    <tr>
+                      <td class="font-mono text-sm" x-text="`#${task.id}`"></td>
+                      <td>
+                        <span x-text="getTypeText(task.type)"></span>
+                      </td>
+                      <td>
+                        <span 
+                          class="badge" 
+                          :class="getStatusBadgeClass(task.status)"
+                          x-text="getStatusText(task.status)"
+                        ></span>
+                      </td>
+                      <td class="min-w-[120px]">
+                        <div class="flex items-center gap-2">
+                          <div class="progress-bar flex-1">
+                            <div 
+                              class="progress-bar-fill" 
+                              :style="`width: ${task.progress || 0}%`"
+                            ></div>
+                          </div>
+                          <span class="text-xs text-slate-400 w-10" x-text="`${task.progress || 0}%`"></span>
+                        </div>
+                      </td>
+                      <td class="text-sm text-slate-400" x-text="task.speed ? formatSpeed(task.speed) : '-'"></td>
+                      <td class="text-sm text-slate-400" x-text="formatTime(task.created_at)"></td>
+                      <td>
+                        <a :href="`tasks.html?id=${task.id}`" class="text-primary-400 hover:text-primary-300 text-sm">详情</a>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- JavaScript 文件 -->
+  <script src="js/api.js"></script>
+  <script src="js/auth.js"></script>
+  <script src="js/tasks.js"></script>
+  <script>
+    /**
+     * Dashboard 应用逻辑
+     */
+    function dashboardApp() {
+      return {
+        mobileSidebarOpen: false,
+        loading: true,
+        tasksLoading: true,
+        userName: '用户',
+        notifications: [],
+        stats: {
+          loaded: false,
+          diskTotal: 0,
+          diskUsed: 0,
+          diskFree: 0,
+          diskPercent: 0,
+          memoryTotal: 0,
+          memoryUsed: 0,
+          memoryPercent: 0,
+          cpuPercent: 0,
+          runningTasks: 0,
+          queuedTasks: 0,
+          failedTasks: 0,
+        },
+        recentTasks: [],
+
+        // Client 连接状态
+        clientStatus: {
+          connected: false,
+          status: 'not_initialized',
+          bot_connected: false,
+        },
+
+        // 重连状态
+        reconnectStatus: {
+          is_reconnecting: false,
+          reconnect_count: 0,
+          max_retries: 3,
+          manual_required: false,
+          auth_failed: false,
+          last_reconnect_attempt: null,
+        },
+        isReconnecting: false, // 手动重连按钮的 loading 状态
+
+        async init() {
+          // 验证认证
+          const authenticated = await authManager.ensureAuthenticated();
+          if (!authenticated) return;
+
+          this.userName = authManager.getDisplayName();
+          await Promise.all([
+            this.loadStats(),
+            this.loadRecentTasks(),
+          ]);
+          this.loading = false;
+
+          // 定期刷新最近任务（30 秒）
+          this._refreshInterval = setInterval(() => {
+            this.loadRecentTasks();
+          }, 30000);
+
+          // 定期刷新监控数据（10 秒，替代 /ws/monitor）
+          this._statsInterval = setInterval(() => {
+            this.loadStats();
+          }, 10000);
+        },
+
+        destroy() {
+          if (this._refreshInterval) {
+            clearInterval(this._refreshInterval);
+          }
+          // 清理监控定时器
+          if (this._statsInterval) {
+            clearInterval(this._statsInterval);
+          }
+        },
+
+        async loadStats() {
+          try {
+            const status = await api.getResourceStatus();
+            this.stats = {
+              ...this.stats,
+              diskTotal: status.disk_total || 0,
+              diskUsed: status.disk_used || 0,
+              diskFree: status.disk_free || 0,
+              diskPercent: status.disk_percent || 0,
+              memoryTotal: status.memory_total || 0,
+              memoryUsed: status.memory_used || 0,
+              memoryPercent: status.memory_percent || 0,
+              cpuPercent: status.cpu_percent || 0,
+              runningTasks: status.running_tasks || 0,
+              queuedTasks: status.queued_tasks || 0,
+              failedTasks: status.failed_tasks || 0,
+              loaded: true,
+            };
+            // 提取 Client 连接状态
+            if (status.client_status) {
+              this.clientStatus = {
+                connected: status.client_status.connected || false,
+                status: status.client_status.status || 'not_initialized',
+                bot_connected: status.client_status.bot_connected || false,
+              };
+
+              // 同步重连状态到 Alpine 响应式作用域
+              if (status.client_status.reconnect_status) {
+                this.reconnectStatus = status.client_status.reconnect_status;
+              }
+            }
+          } catch (error) {
+            console.error('加载资源状态失败:', error);
+            this.stats.loaded = true;
+          }
+        },
+
+        async loadRecentTasks() {
+          this.tasksLoading = true;
+          try {
+            const response = await api.getTasks({ offset: 0, limit: 5 });
+            this.recentTasks = response.items || [];
+          } catch (error) {
+            console.error('加载最近任务失败:', error);
+          } finally {
+            this.tasksLoading = false;
+          }
+        },
+
+        async refreshAll() {
+          this.loading = true;
+          await Promise.all([
+            this.loadStats(),
+            this.loadRecentTasks(),
+          ]);
+          this.loading = false;
+          this.addNotification('success', '已刷新');
+        },
+
+        logout() {
+          authManager.logout();
+        },
+
+        addNotification(type, message) {
+          this.notifications.push({ type, message });
+          setTimeout(() => this.removeNotification(0), 5000);
+        },
+
+        removeNotification(index) {
+          this.notifications.splice(index, 1);
+        },
+
+        formatSize(bytes) {
+          if (!bytes) return '0 B';
+          const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+          let size = bytes;
+          let unitIndex = 0;
+          while (size >= 1024 && unitIndex < units.length - 1) {
+            size /= 1024;
+            unitIndex++;
+          }
+          return `${size.toFixed(1)} ${units[unitIndex]}`;
+        },
+
+        get clientStatusClass() {
+          const map = {
+            connected: 'bg-green-500/15 text-green-400',
+            disconnected: 'bg-red-500/15 text-red-400',
+            not_initialized: 'bg-yellow-500/15 text-yellow-400',
+            error: 'bg-slate-500/15 text-slate-400',
+          };
+          return map[this.clientStatus.status] || map.error;
+        },
+
+        get clientStatusText() {
+          if (this.reconnectStatus.auth_failed) return '认证失效';
+          if (this.reconnectStatus.is_reconnecting) return '重连中...';
+          if (this.reconnectStatus.manual_required) return '需要手动重连';
+          const map = {
+            connected: 'Telegram 已连接',
+            disconnected: '连接断开',
+            not_initialized: '等待客户端...',
+            error: '状态未知',
+          };
+          return map[this.clientStatus.status] || map.error;
+        },
+
+        get showReconnectButton() {
+          return !this.clientStatus.connected && !this.reconnectStatus.auth_failed && !this.reconnectStatus.is_reconnecting;
+        },
+
+        async manualReconnect() {
+          if (this.isReconnecting) return;
+          this.isReconnecting = true;
+          try {
+            const result = await api.reconnectClient();
+            if (result.connected) {
+              this.addNotification('success', '重连成功');
+              this.reconnectStatus = {
+                is_reconnecting: false,
+                reconnect_count: 0,
+                max_retries: 3,
+                manual_required: false,
+                auth_failed: false,
+                last_reconnect_attempt: null,
+              };
+              // 立即刷新状态
+              await this.loadStats();
+            } else {
+              this.addNotification('error', result.message || '重连失败');
+              // 更新重连状态
+              this.reconnectStatus.manual_required = true;
+            }
+          } catch (error) {
+            this.addNotification('error', `重连失败: ${error.message}`);
+          } finally {
+            this.isReconnecting = false;
+          }
+        },
+
+        formatSpeed(bytesPerSecond) {
+          if (!bytesPerSecond) return '0 B/s';
+          return this.formatSize(bytesPerSecond) + '/s';
+        },
+
+        formatTime(isoString) {
+          if (!isoString) return '-';
+          const date = new Date(isoString);
+          return date.toLocaleString('zh-CN', {
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+        },
+
+        getStatusBadgeClass(status) {
+          const classMap = {
+            pending: 'badge-pending', queued: 'badge-queued', running: 'badge-running',
+            completed: 'badge-completed', failed: 'badge-failed', cancelled: 'badge-cancelled',
+          };
+          return classMap[status] || 'badge-pending';
+        },
+
+        getStatusText(status) {
+          const textMap = {
+            pending: '等待中', queued: '排队中', running: '执行中',
+            completed: '已完成', failed: '失败', cancelled: '已取消',
+          };
+          return textMap[status] || status;
+        },
+
+        getTypeText(type) {
+          const textMap = { download: '下载', forward: '转发', upload: '上传' };
+          return textMap[type] || type;
+        },
+      };
+    }
+
+    // 全局通知函数
+    window.showNotification = function(type, message) {
+      const app = document.querySelector('[x-data]');
+      if (app && window.Alpine) {
+        window.Alpine.$data(app).addNotification(type, message);
+      }
+    };
+  </script>
+
+  <!-- Alpine.js (本地) - 必须在组件函数定义之后加载 -->
+  <script src="vendor/alpinejs.js"></script>
+</body>
+</html>

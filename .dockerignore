@@ -8,12 +8,7 @@ docker-compose.yml
 .dockerignore
 
 # 构建产物
-build.py
 output/
-
-# Windows 二进制（Linux 镜像不需要）
-res/bin/MediaInfo.dll
-res/bin/rar.exe
 
 # 文档和图片资源（运行不需要）
 res/*.png
@@ -36,3 +31,12 @@ dist/
 
 # GitHub Actions
 .github/
+
+# 本地配置文件（Docker 使用挂载）
+config/
+*.yaml
+.venv/
+venv/
+.env
+*.log
+.history

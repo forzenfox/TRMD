@@ -1,0 +1,132 @@
+# coding=UTF-8
+"""依赖注入：Token 校验、核心管理器获取。
+
+所有受保护的 REST API 端点统一使用 require_token 依赖进行认证。
+"""
+
+from fastapi import Header, Query, HTTPException, status, Request
+from typing import Optional
+
+from module.core.auth.token_manager import TokenManager
+
+
+# ==================== 认证依赖 ====================
+
+
+async def require_token(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    token_query: Optional[str] = Query(None, alias="token"),
+) -> str:
+    """校验请求中的 Token。
+
+    支持两种传递方式：
+    1. HTTP Header: `Authorization: Bearer <token>`
+    2. URL Query: `?token=<token>`
+
+    :param authorization: 认证头
+    :param token_query: URL 参数 token
+    :return: 校验通过后的 Token 字符串
+    :raises HTTPException: Token 缺失或无效时抛出 401
+    """
+    raw = authorization or token_query
+    if not raw:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MISSING_TOKEN",
+        )
+
+    # 提取 Bearer Token
+    token = (
+        raw.removeprefix("Bearer ").strip()
+        if raw.startswith("Bearer ")
+        else raw.strip()
+    )
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="MISSING_TOKEN",
+        )
+
+    # 从应用状态获取 TokenManager
+    token_manager: TokenManager = request.app.state.token_manager
+    if not token_manager.is_valid(token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="INVALID_OR_EXPIRED_TOKEN",
+        )
+
+    return token
+
+
+# ==================== 核心管理器依赖 ====================
+
+
+def get_token_manager(request: Request) -> TokenManager:
+    """获取 TokenManager 实例。"""
+    return request.app.state.token_manager
+
+
+def get_task_manager(request: Request):
+    """获取 TaskManager 实例。"""
+    return request.app.state.task_manager
+
+
+def get_file_manager(request: Request):
+    """获取 FileManager 实例。"""
+    return request.app.state.file_manager
+
+
+def get_config_manager(request: Request):
+    """获取配置管理器实例。"""
+    cm = request.app.state.config_manager
+    if cm is None:
+        # 延迟导入，避免循环依赖
+        from module.core.config_manager import ConfigManager
+
+        cm = ConfigManager()
+        request.app.state.config_manager = cm
+    return cm
+
+
+def get_monitor(request: Request):
+    """获取 Monitor 实例。"""
+    return getattr(request.app.state, "monitor", None)
+
+
+def get_task_executor(request: Request):
+    """获取 TaskExecutor 实例。
+
+    TaskExecutor 由 downloader 在 client 启动后延迟初始化，
+    app.state.task_executor 可能为 None，需回退到 AppContext 获取。
+    """
+    executor = getattr(request.app.state, "task_executor", None)
+    if executor is not None:
+        return executor
+    from module.core.integration import get_context
+
+    ctx = get_context()
+    return ctx.task_executor if ctx else None
+
+
+def get_identifier_service(request: Request):
+    """获取 IdentifierService 实例。
+
+    从 AppContext 单例读取已启动的 Telegram Client；若 client 未连接，
+    仍返回 IdentifierService 实例，由 resolve() 在实际解析时抛出 503，
+    避免依赖注入在 Pydantic body 校验前提前失败。
+    """
+    from module.core.integration import get_context
+    from module.core.identifier_service import IdentifierService
+
+    ctx = get_context()
+    client = ctx.client if ctx else None
+    return IdentifierService(client)
+
+
+def get_cache_manager():
+    """获取 CacheManager 实例（从 AppContext 单例读取）。"""
+    from module.core.integration import get_context
+
+    ctx = get_context()
+    return ctx.cache_manager if ctx else None

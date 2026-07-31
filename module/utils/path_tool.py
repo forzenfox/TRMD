@@ -1,0 +1,458 @@
+# coding=UTF-8
+# Author:Gentlesprite
+# Software:PyCharm
+# Time:2023/11/13 20:34:13
+# File:path_tool.py
+import os
+import re
+import struct
+import hashlib
+import shutil
+import datetime
+import mimetypes
+import unicodedata
+
+from io import BytesIO
+from typing import Optional, Union, List
+
+from pyrogram.file_id import (
+    FILE_REFERENCE_FLAG,
+    PHOTO_TYPES,
+    WEB_LOCATION_FLAG,
+    FileType,
+    b64_decode,
+    rle_decode,
+)
+
+from module import log
+from module.core.enums import Extension, KeyWord
+from module.core.language import _t
+
+_mimetypes = mimetypes.MimeTypes()
+
+
+def split_path(path: str) -> dict:
+    """将传入路径拆分为目录名和文件名并以字典形式返回。"""
+    directory, file_name = os.path.split(path)
+    return {"directory": directory, "file_name": file_name}
+
+
+def __is_exist(file_path: str) -> bool:
+    """判断文件路径是否存在。"""
+    return not os.path.isdir(file_path) and os.path.exists(file_path)
+
+
+def compare_file_size(a_size: int, b_size: int) -> bool:
+    """比较文件的大小是否一致。"""
+    return a_size == b_size
+
+
+def is_file_duplicate(save_directory: str, sever_file_size: int) -> bool:
+    """判断文件是否重复。"""
+    return __is_exist(save_directory) and compare_file_size(
+        os.path.getsize(save_directory), sever_file_size
+    )
+
+
+def validate_title(title: str) -> str:
+    """验证并修改(如果不合法)标题的合法性。"""
+    r_str = r"[/\\:*?\"<>|\n]"  # '/ \ : * ? " < > |'
+    new_title = re.sub(r_str, "_", title)
+    return new_title
+
+
+def truncate_filename(path: str, limit: int = 230) -> str:
+    # https://github.com/tangyoha/telegram_media_downloader/blob/a3a9c2bed89ea8fd4db0b6616f055dfa11208362/utils/format.py#L195
+    """将文件名截断到最大长度。
+    Parameters
+    ----------
+    path: str
+        文件名路径
+
+    limit: int
+        文件名长度限制（以UTF-8 字节为单位）
+
+    Returns
+    -------
+    str
+        如果文件名的长度超过限制，则返回截断后的文件名;否则返回原始文件名。
+    """
+    p, f = os.path.split(os.path.normpath(path))
+    f, e = os.path.splitext(f)
+    f_max = limit - len(e.encode("utf-8"))
+    f = unicodedata.normalize("NFC", f)
+    f_trunc = f.encode()[:f_max].decode("utf-8", errors="ignore")
+    return os.path.join(p, f_trunc + e)
+
+
+def gen_backup_config(
+    old_path: str, absolute_backup_dir: str, error_config: bool = False
+) -> str:
+    """备份配置文件。"""
+
+    try:
+        os.makedirs(absolute_backup_dir, exist_ok=True)
+    except PermissionError as e:
+        log.error(
+            f'权限不足,无法创建目录"{absolute_backup_dir}",{_t(KeyWord.REASON)}:"{e}"'
+        )
+        raise SystemExit(1)
+    except OSError as e:
+        log.error(f'无法创建目录"{absolute_backup_dir}",{_t(KeyWord.REASON)}:"{e}"')
+        raise SystemExit(1)
+
+    time_format: str = "%Y-%m-%d_%H-%M-%S"
+    error_flag: str = "error_" if error_config else ""
+    new_path: str = os.path.join(
+        absolute_backup_dir,
+        f"{error_flag}history_{datetime.datetime.now().strftime(time_format)}_config.yaml",
+    )
+
+    try:
+        shutil.move(old_path, new_path)
+        return new_path
+    except FileNotFoundError as e:
+        log.error(f'源文件"{old_path}"不存在,{_t(KeyWord.REASON)}:"{e}"')
+        raise SystemExit(1)
+    except PermissionError as e:
+        log.error(
+            f'权限不足,无法移动"{old_path}"->"{new_path}",{_t(KeyWord.REASON)}:"{e}"'
+        )
+        raise SystemExit(1)
+    except Exception as e:
+        log.error(f'无法移动"{old_path}"->"{new_path}",{_t(KeyWord.REASON)}:"{e}"')
+        raise SystemExit(1)
+
+
+def safe_delete(file_p_d: str) -> bool:
+    """删除文件或目录。"""
+    try:
+        if os.path.isdir(file_p_d):
+            shutil.rmtree(file_p_d)
+            return True
+        elif os.path.isfile(file_p_d):
+            os.remove(file_p_d)
+            return True
+        else:
+            log.warning(f'"{file_p_d}"不是有效的文件或目录,无法删除。')
+            return False
+    except FileNotFoundError:
+        return True
+    except PermissionError as e:
+        log.error(f'权限不足,无法删除"{file_p_d}",{_t(KeyWord.REASON)}:"{e}"')
+        return False
+    except Exception as e:
+        log.error(f'无法删除"{file_p_d}",{_t(KeyWord.REASON)}:"{e}"', exc_info=True)
+        return False
+
+
+def safe_scan_directory_file(directory: str) -> List[str]:
+    """扫描目录下的文件并返回文件名的列表。"""
+    with os.scandir(directory) as entries:
+        return [entry.name for entry in entries if entry.is_file()]
+
+
+def safe_replace(origin_file: str, overwrite_file: str) -> dict:
+    e_code = None
+    if not os.path.isfile(origin_file):
+        e_code = f'"{origin_file}"不存在或不是一个文件。'
+        return {"e_code": e_code}
+
+    try:
+        os.replace(origin_file, overwrite_file)
+    except OSError as e:
+        if "Invalid cross-device link" in str(e):
+            try:
+                shutil.move(origin_file, overwrite_file)
+            except Exception as e2:
+                e_code = f'移动文件失败,原因:"{e2}"'
+        else:
+            e_code = f'覆盖文件失败,原因:"{e}"'
+
+    return {"e_code": e_code}
+
+
+def move_to_save_directory(temp_file_path: str, save_directory: str) -> dict:
+    """移动文件到指定路径。"""
+    try:
+        os.makedirs(save_directory, exist_ok=True)
+        if os.path.isdir(save_directory):
+            file_name: str = split_path(temp_file_path).get("file_name")
+            if os.path.exists(os.path.join(save_directory, file_name)):
+                return {
+                    "e_code": f'"{file_name}"已存在于保存路径无法移动,请手动解决冲突。'
+                }
+            shutil.move(temp_file_path, save_directory)
+            return {"e_code": None}
+        else:
+            save_directory: str = os.path.join(os.getcwd(), "downloads")
+            os.makedirs(save_directory, exist_ok=True)
+            shutil.move(temp_file_path, save_directory)
+            return {
+                "e_code": f'"{save_directory}"不是一个目录,已将文件下载到默认目录。'
+            }
+    except FileExistsError as e:
+        return {"e_code": f'"{save_directory}"已存在,不能重复保存,原因:"{e}'}
+    except PermissionError as e:
+        return {
+            "e_code": f'"{save_directory}"进程无法访问,可能是任务重复分配问题,原因:"{e}"'
+        }
+    except Exception as e:
+        return {"e_code": f'意外的错误,原因:"{e}"'}
+
+
+def get_extension(file_id: str, mime_type: str, dot: bool = True) -> str:
+    """获取文件的扩展名。
+    更多扩展名见: https://www.iana.org/assignments/media-types/media-types.xhtml
+    """
+
+    if not file_id:
+        if dot:
+            return ".unknown"
+        return "unknown"
+
+    file_type = __get_file_type(file_id)
+
+    guessed_extension = __guess_extension(mime_type)
+
+    if file_type in PHOTO_TYPES:
+        extension = Extension.PHOTO.get(mime_type, "jpg")
+    elif file_type == FileType.VOICE:
+        extension = guessed_extension or "ogg"
+    elif file_type in (FileType.VIDEO, FileType.ANIMATION, FileType.VIDEO_NOTE):
+        extension = guessed_extension or Extension.VIDEO.get(mime_type, "mp4")
+    elif file_type == FileType.DOCUMENT:
+        if "video" in mime_type:
+            extension = guessed_extension or Extension.VIDEO.get(mime_type, "mp4")
+        elif "image" in mime_type:
+            extension = guessed_extension or Extension.PHOTO.get(
+                mime_type, "jpg"
+            )  # v1.2.8 修复获取图片格式时,实际指向为视频字典的错误。
+        else:
+            extension = guessed_extension or "zip"
+    elif file_type == FileType.STICKER:
+        extension = guessed_extension or "webp"
+    elif file_type == FileType.AUDIO:
+        extension = guessed_extension or "mp3"
+    else:
+        extension = "unknown"
+
+    if dot:
+        extension = "." + extension
+    return extension
+
+
+def __guess_extension(mime_type: str) -> Optional[str]:
+    """如果扩展名不是None，则从没有点的MIME类型返回中猜测文件扩展名。"""
+    extension = _mimetypes.guess_extension(mime_type, strict=True)
+    return extension[1:] if extension and extension.startswith(".") else extension
+
+
+def __get_file_type(file_id: str) -> FileType:
+    """获取文件类型。"""
+    decoded = rle_decode(b64_decode(file_id))
+
+    # File id versioning. Major versions lower than 4 don't have a minor version
+    major = decoded[-1]
+
+    if major < 4:
+        buffer = BytesIO(decoded[:-1])
+    else:
+        buffer = BytesIO(decoded[:-2])
+
+    file_type, _ = struct.unpack("<ii", buffer.read(8))
+
+    file_type &= ~WEB_LOCATION_FLAG
+    file_type &= ~FILE_REFERENCE_FLAG
+
+    try:
+        file_type = FileType(file_type)
+    except ValueError as exc:
+        raise ValueError(f'文件ID:"{file_id}",未知的文件类型:"{file_type}"。') from exc
+    return file_type
+
+
+def get_file_size(file_path: str, temp_ext: str = ".temp") -> int:
+    """获取文件大小，支持临时扩展名。"""
+    if os.path.exists(file_path):
+        return os.path.getsize(file_path)
+    elif os.path.exists(file_path + temp_ext):
+        return os.path.getsize(file_path + temp_ext)
+    else:
+        return 0
+
+
+def get_mime_from_extension(file_path: str) -> str:
+    ext = file_path.split(".")[-1].lower()
+    return Extension.ALL_REVERSE.get(ext, "application/octet-stream")
+
+
+def extract_full_extension(filename: Union[str, None]):
+    """
+    提取完整的文件扩展名，支持多段扩展名。
+    """
+    if not filename or not isinstance(filename, str):
+        return None
+
+    filename = filename.strip()
+    if not filename:
+        return None
+
+    multi_ext_patterns = [
+        r"\.(7z|rar|zip|r\d+|z\d+|s\d+|t\d+)\.\d+$",  # 压缩文件分卷格式。
+        r"\.(tar|zip|7z|rar)(\.(gz|bz2|xz|zip|7z|rar))+$",  # 多段压缩格式
+        r"\.(tar\.(gz|bz2|xz)|[a-z0-9]+\.\d+)$",  # 常见的多段扩展名
+    ]
+
+    for pattern in multi_ext_patterns:
+        match = re.search(pattern, filename, re.IGNORECASE)
+        if match:
+            full_ext = match.group(0).lstrip(".")
+            return full_ext
+
+    # 普通文件,返回最后一个扩展名。
+    base_ext = os.path.splitext(filename)[-1]
+    if base_ext:
+        return base_ext.lstrip(".")
+
+    return None
+
+
+def is_compressed_file(filename: Union[str, None]) -> bool:
+    """
+    判断是否为压缩包文件。
+    """
+    if not filename:
+        return False
+
+    # 压缩文件扩展名模式。
+    compressed_patterns = [
+        # 单扩展名压缩格式。
+        r"\.(7z|rar|zip|tar|gz|bz2|xz|arj|cab|lzh|lzma|tgz|tbz2|txz|z|Z)$",
+        # 多段扩展名压缩格式。
+        r"\.(tar\.(gz|bz2|xz)|7z\.\d+|rar\.\d+|zip\.\d+)$",
+        # 旧格式分卷。
+        r"\.(r\d+|z\d+|s\d+|t\d+)$",
+    ]
+
+    for pattern in compressed_patterns:
+        if re.search(pattern, filename, re.IGNORECASE):
+            return True
+
+    return False
+
+
+def calc_sha256(file_path, chunk_size=8192) -> Union[str, None]:
+    sha256_hash = hashlib.sha256()
+
+    try:
+        with open(file_path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                sha256_hash.update(chunk)
+        return sha256_hash.hexdigest()
+    except PermissionError as e:
+        log.error(f'权限不足,无法计算文件SHA256,{_t(KeyWord.REASON)}:"{e}"')
+    except Exception as e:
+        log.exception(f'计算文件SHA256失败,{_t(KeyWord.REASON)}:"{e}"')
+
+
+def to_portable_path(file_path: str, save_root: str) -> str:
+    """将文件路径转换为可移植的相对路径（/ 分隔符）。
+
+    用于数据库存储：将绝对路径转为相对于 save_root 的路径，
+    统一使用 `/` 分隔符（POSIX 风格），确保跨平台可移植。
+
+    Args:
+        file_path: 文件的绝对路径或相对路径
+        save_root: 保存根目录（如 save_directory 配置值）
+
+    Returns:
+        相对于 save_root 的路径，使用 / 分隔符
+        （如 "MyChannel/photo/112063.jpg"）
+    """
+    abs_path = os.path.abspath(file_path)
+    abs_root = os.path.abspath(save_root)
+    rel = os.path.relpath(abs_path, abs_root)
+    return rel.replace(os.sep, "/")
+
+
+def from_portable_path(portable_path: str, save_root: str) -> str:
+    """将可移植相对路径还原为当前环境的绝对路径。
+
+    用于从数据库读取：将 `/` 分隔的相对路径还原为
+    当前操作系统可用的绝对路径。
+
+    Args:
+        portable_path: 数据库中存储的可移植相对路径（/ 分隔符）
+        save_root: 保存根目录（如 save_directory 配置值）
+
+    Returns:
+        当前环境的绝对路径
+    """
+    local_path = portable_path.replace("/", os.sep)
+    abs_root = os.path.abspath(save_root)
+    return os.path.normpath(os.path.join(abs_root, local_path))
+
+
+def resolve_data_directory(
+    raw_value: Optional[str], project_root: str
+) -> str:
+    """将配置中的 data_directory 值解析为绝对路径。
+
+    统一 UserConfig.data_directory 和 AppContext.data_dir 的解析逻辑，
+    确保两者使用相同的路径解析规则。
+
+    Args:
+        raw_value: 配置文件中的 data_directory 原始值，可为 None、空字符串、
+                   相对路径（如 "./.trmd"）或绝对路径。
+        project_root: 项目根目录，用于解析相对路径。
+
+    Returns:
+        规范化后的绝对路径字符串。
+    """
+    if not raw_value:
+        return os.path.normpath(os.path.join(project_root, ".trmd"))
+    if os.path.isabs(raw_value):
+        return os.path.normpath(raw_value)
+    return os.path.normpath(os.path.join(project_root, raw_value))
+
+
+def migrate_repository_db_if_needed(
+    project_root: str, data_dir: str
+) -> None:
+    """检查并迁移项目根目录下遗留的 repository.db 到配置的数据目录。
+
+    当 downloader.py 旧代码使用 DIRECTORY_NAME 创建了根目录下的
+    repository.db 时，此函数将其迁移到正确的数据目录下。
+
+    迁移规则：
+    - 根目录有 + data_dir 没有 → 移动到 data_dir
+    - 两边都有 → 删除根目录的，保留 data_dir 的
+    - 根目录没有 → 空操作
+
+    Args:
+        project_root: 项目根目录（旧 repository.db 可能存在的位置）
+        data_dir: 配置的数据目录（repository.db 的正确位置）
+    """
+    old_db_path = os.path.join(project_root, "repository.db")
+    new_db_path = os.path.join(data_dir, "repository.db")
+
+    if not os.path.exists(old_db_path):
+        return
+
+    if os.path.exists(new_db_path):
+        # 两边都有：删除根目录的，保留 data_dir 下的
+        os.remove(old_db_path)
+        log.warning(
+            f"检测到根目录下存在遗留的 repository.db，已删除（保留 {new_db_path}）"
+        )
+    else:
+        # 只有根目录有：移动到 data_dir
+        os.makedirs(data_dir, exist_ok=True)
+        shutil.move(old_db_path, new_db_path)
+        log.info(
+            f"已将 repository.db 从根目录迁移到 {new_db_path}"
+        )
