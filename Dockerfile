@@ -1,4 +1,5 @@
-FROM trmd-base:latest
+ARG BASE_IMAGE=trmd-base:latest
+FROM ${BASE_IMAGE}
 
 # 复制项目代码
 COPY main.py .
