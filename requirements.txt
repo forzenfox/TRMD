@@ -12,3 +12,5 @@ uvicorn
 websockets
 httpx
 psutil
+sqlmodel
+sqlalchemy

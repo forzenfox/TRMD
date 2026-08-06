@@ -49,11 +49,42 @@ docker compose down 2>/dev/null || true
 info "拉取镜像: ${IMAGE_NAME}:${IMAGE_TAG}..."
 docker compose pull
 
-# 7. 启动新容器
+# 7. 检测是否需要 Telegram 登录
+NEED_LOGIN=false
+if [ ! -d "sessions" ] || [ -z "$(ls -A sessions 2>/dev/null)" ]; then
+    warn "检测到 sessions/ 目录为空，需要进行 Telegram 客户端登录"
+    NEED_LOGIN=true
+fi
+
+# 8. 首次登录流程（交互式）
+if [ "$NEED_LOGIN" = true ]; then
+    echo ""
+    info "=========================================="
+    info "首次部署 - Telegram 客户端登录"
+    info "=========================================="
+    echo ""
+    info "登录流程："
+    echo "  1. 输入电话号码（带国际区号，如 +861500000000）"
+    echo "  2. 确认号码（输入 y）"
+    echo "  3. 输入收到的验证码（通过 SMS/Telegram App/电话发送）"
+    echo "  4. 如开启了两步验证，输入密码"
+    echo ""
+    info "登录成功后，按 Ctrl+C 退出容器"
+    echo ""
+    read -p "按回车键开始登录流程..."
+
+    # 以前台交互模式启动容器
+    docker compose run --rm trmd
+
+    echo ""
+    info "登录完成！正在重启为后台模式..."
+fi
+
+# 9. 启动新容器（后台模式）
 info "启动新容器..."
 docker compose up -d
 
-# 8. 等待后检查状态
+# 10. 等待后检查状态
 sleep 3
 if docker compose ps --status running 2>/dev/null | grep -q "trmd"; then
     info "部署成功！"
