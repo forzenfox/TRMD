@@ -14,6 +14,5 @@ httpx
 psutil
 sqlmodel
 sqlalchemy
-TgCrypto
 aiofiles
 python-multipart
