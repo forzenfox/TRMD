@@ -1,0 +1,23 @@
+services:
+  trmd:
+    image: ${IMAGE_NAME}:${IMAGE_TAG}
+    container_name: ${CONTAINER_NAME}
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    ports:
+      - "${HOST_PORT}:8000"
+    volumes:
+      # 配置（只读挂载）
+      - ./config/config.yaml:/app/config.yaml:ro
+      # 数据库及运行时数据
+      - ./data/.trmd:/app/.trmd
+      # 日志（文件挂载，需提前创建 logs/trmd.log）
+      - ./logs/trmd.log:/app/trmd.log
+      # 数据目录
+      - ./sessions:/app/sessions
+      - ./downloads:/app/downloads
+      - ./temp:/app/temp
+      - ./form:/app/form
+    environment:
+      - TZ=${TZ}
