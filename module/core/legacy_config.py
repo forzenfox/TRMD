@@ -197,6 +197,9 @@ class UserConfig(BaseConfig):
             "auto_sync_enabled": False,
             "auto_sync_interval_minutes": 60,
         },
+        "webui": {
+            "base_url": "http://localhost:8000",
+        },
     }
     # 旧版扁平 TEMPLATE，用于向后兼容和历史配置迁移。
     LEGACY_FLAT_TEMPLATE: dict = {
@@ -474,6 +477,8 @@ class UserConfig(BaseConfig):
         self.process_nesting(param_name="log", config=config)
         # repository 分组
         self.process_nesting(param_name="repository", config=config)
+        # webui 分组
+        self.process_nesting(param_name="webui", config=config)
 
         # 删除父级模板中没有的字段。
         self.remove_extra_keys(
