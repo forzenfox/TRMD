@@ -12,20 +12,39 @@
 import fnmatch
 import logging
 import time
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from starlette.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
 
+# 默认允许的Host列表（单用户场景）
+DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", "*.local"]
 
-def setup_middleware(app: FastAPI) -> None:
+
+def setup_middleware(app: FastAPI, config_manager=None) -> None:
     """注册所有中间件到 FastAPI 应用。
 
     :param app: FastAPI 应用实例
+    :param config_manager: 可选，ConfigManager 实例，用于读取自定义 Host 白名单
     """
+    # 构建允许的 Host 列表
+    allowed_hosts = list(DEFAULT_ALLOWED_HOSTS)
+
+    # 从配置读取 webui.base_url 并提取 host
+    if config_manager:
+        try:
+            base_url = config_manager.get("webui.base_url", "")
+            if base_url:
+                parsed = urlparse(base_url)
+                if parsed.hostname:
+                    allowed_hosts.append(parsed.hostname)
+        except Exception as e:
+            logger.warning("从配置读取 webui.base_url 失败: %s", e)
+
     # 1. TrustedHost 中间件（首个中间件，防止Host头攻击）
-    app.add_middleware(TrustedHostMiddleware)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 
     # 2. CORS 中间件（严格模式，仅允许同源）
     app.add_middleware(
