@@ -5,6 +5,7 @@
 # File:bot.py
 import asyncio
 import datetime
+import os
 from typing import List, Dict, Union, Optional, Callable
 
 import pyrogram
@@ -318,10 +319,18 @@ class Bot:
             from module.core.integration import init_context
 
             ctx = init_context()
+
+            # 读取 WebUI 地址：环境变量 > config.yaml > 默认值
+            webui_base_url = os.environ.get("TRMD_WEBUI_URL", "")
+            if not webui_base_url and ctx.config_manager:
+                webui_base_url = ctx.config_manager.get("webui.base_url", "")
+            if not webui_base_url:
+                webui_base_url = "http://localhost:8000"
+
             self.bot_commands = BotCommands(
                 token_manager=ctx.token_manager,
                 interaction_manager=ctx.interaction_manager,
-                webui_base_url="http://localhost:8000",
+                webui_base_url=webui_base_url,
                 task_manager=ctx.task_manager,
                 task_executor=ctx.task_executor,
             )

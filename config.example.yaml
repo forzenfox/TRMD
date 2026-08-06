@@ -76,6 +76,10 @@ repository:
   auto_sync_enabled: false             # 是否启用自动同步
   auto_sync_interval_minutes: 60       # 自动同步间隔（分钟）
 
+# ======================== WebUI 配置 ========================
+webui:
+  base_url: http://localhost:8000   # WebUI 访问地址（部署到服务器时需改为实际域名，如 https://trmd.example.com）
+
 # ======================== 任务配置 ========================
 # 控制下载和上传任务的行为与并发限制
 task:
