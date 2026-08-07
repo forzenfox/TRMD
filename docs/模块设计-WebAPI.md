@@ -172,11 +172,12 @@ def create_app(
 
 | 顺序 | 中间件 | 职责 |
 |------|--------|------|
-| 1 | **TrustedHostMiddleware** | 限制 Host 头，防止 Host 头攻击 |
-| 2 | **CORSMiddleware** | 允许同源或配置白名单，WebUI 同源部署时严格限制 |
-| 3 | **ProcessTimeMiddleware** | 记录响应时间，超过阈值告警 |
-| 4 | **RequestLogMiddleware** | 记录请求方法、路径、状态码（不记录敏感 Token） |
-| 5 | **SecurityHeadersMiddleware** | 添加安全响应头（X-Content-Type-Options 等） |
+| 1 | **CORSMiddleware** | 单用户场景下允许所有来源，认证由 Token 机制保障 |
+| 2 | **ProcessTimeMiddleware** | 记录响应时间，超过阈值告警 |
+| 3 | **RequestLogMiddleware** | 记录请求方法、路径、状态码（不记录敏感 Token） |
+| 4 | **SecurityHeadersMiddleware** | 添加安全响应头（X-Content-Type-Options 等） |
+
+> 说明：原 TrustedHostMiddleware（Host 头白名单）已移除。单用户 + Token 认证场景下收益有限，且会拦截自定义域名访问。
 
 > 认证不通过全局中间件实现，而是使用 FastAPI `Depends` 依赖注入，便于按路由精确控制。
 

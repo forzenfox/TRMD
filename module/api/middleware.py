@@ -1,67 +1,43 @@
 # coding=UTF-8
-"""自定义中间件：TrustedHost、CORS、请求日志、安全头、响应时间。
+"""自定义中间件：CORS、请求日志、安全头、响应时间。
 
 中间件执行顺序（按设计文档 §2.4）：
-1. TrustedHost - 限制Host头，防止Host头攻击
-2. CORS - 跨域资源共享
-3. ProcessTime - 响应时间记录
-4. RequestLog - 请求日志
-5. SecurityHeaders - 安全响应头
+1. CORS - 跨域资源共享
+2. ProcessTime - 响应时间记录
+3. RequestLog - 请求日志
+4. SecurityHeaders - 安全响应头
 """
 
-import fnmatch
 import logging
 import time
-from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from starlette.middleware.cors import CORSMiddleware
 
 logger = logging.getLogger(__name__)
 
-# 默认允许的Host列表（单用户场景）
-DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", "*.local"]
 
-
-def setup_middleware(app: FastAPI, config_manager=None) -> None:
+def setup_middleware(app: FastAPI) -> None:
     """注册所有中间件到 FastAPI 应用。
 
     :param app: FastAPI 应用实例
-    :param config_manager: 可选，ConfigManager 实例，用于读取自定义 Host 白名单
     """
-    # 构建允许的 Host 列表
-    allowed_hosts = list(DEFAULT_ALLOWED_HOSTS)
-
-    # 从配置读取 webui.base_url 并提取 host
-    if config_manager:
-        try:
-            base_url = config_manager.get("webui.base_url", "")
-            if base_url:
-                parsed = urlparse(base_url)
-                if parsed.hostname:
-                    allowed_hosts.append(parsed.hostname)
-        except Exception as e:
-            logger.warning("从配置读取 webui.base_url 失败: %s", e)
-
-    # 1. TrustedHost 中间件（首个中间件，防止Host头攻击）
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
-
-    # 2. CORS 中间件（严格模式，仅允许同源）
+    # 1. CORS 中间件（单用户场景下允许所有来源，认证由 Token 机制保障）
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # 单用户场景下允许所有来源，生产环境应配置白名单
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # 3. 响应时间中间件
+    # 2. 响应时间中间件
     app.add_middleware(ProcessTimeMiddleware)
 
-    # 4. 请求日志中间件
+    # 3. 请求日志中间件
     app.add_middleware(RequestLogMiddleware)
 
-    # 5. 安全头中间件
+    # 4. 安全头中间件
     app.add_middleware(SecurityHeadersMiddleware)
 
 
@@ -147,95 +123,3 @@ class SecurityHeadersMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
-
-
-class TrustedHostMiddleware:
-    """限制Host头，防止Host头攻击。
-
-    设计依据: 模块设计-WebAPI.md §2.4 中间件栈(第174行)
-
-    单用户场景下默认允许localhost和本地IP，可通过配置扩展Host列表。
-    """
-
-    # 默认允许的Host列表（单用户场景）
-    DEFAULT_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "::1", "*.local"]
-
-    def __init__(self, app, allowed_hosts=None):
-        """初始化TrustedHost中间件。
-
-        :param app: ASGI应用
-        :param allowed_hosts: 允许的Host列表（可选）
-        """
-        self.app = app
-        self.allowed_hosts = allowed_hosts or self.DEFAULT_ALLOWED_HOSTS
-
-    async def __call__(self, scope, receive, send):
-        """中间件执行逻辑。
-
-        :param scope: ASGI scope
-        :param receive: ASGI receive
-        :param send: ASGI send
-        """
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        # 提取Host头
-        headers = dict(scope.get("headers", []))
-        host_header = headers.get(b"host", b"").decode("utf-8", errors="ignore")
-
-        # 移除端口部分（如 localhost:8000 -> localhost）
-        host = host_header.split(":")[0].lower()
-
-        # 检查Host是否在允许列表中
-        if not self._is_allowed_host(host):
-            logger.warning("非法Host请求被拦截: %s", host)
-            await self._send_400_response(send, f"Host '{host}' not allowed")
-            return
-
-        await self.app(scope, receive, send)
-
-    def _is_allowed_host(self, host: str) -> bool:
-        """检查Host是否在允许列表中。
-
-        支持通配符匹配（如 *.local）。
-
-        :param host: 待检查的Host
-        :return: 是否允许
-        """
-        if not host:
-            return False
-
-        for pattern in self.allowed_hosts:
-            # 使用fnmatch进行通配符匹配
-            if fnmatch.fnmatch(host, pattern.lower()):
-                return True
-
-        return False
-
-    async def _send_400_response(self, send, message: str):
-        """发送400 Bad Request响应。
-
-        :param send: ASGI send函数
-        :param message: 错误消息
-        """
-        response_body = f'{{"error": "INVALID_HOST", "message": "{message}"}}'.encode(
-            "utf-8"
-        )
-
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 400,
-                "headers": [
-                    (b"content-type", b"application/json"),
-                    (b"content-length", str(len(response_body)).encode()),
-                ],
-            }
-        )
-        await send(
-            {
-                "type": "http.response.body",
-                "body": response_body,
-            }
-        )

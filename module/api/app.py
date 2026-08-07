@@ -92,7 +92,7 @@ def create_app(
     app.state.task_executor = getattr(ctx, "task_executor", None) if ctx else None
 
     # 注册中间件
-    setup_middleware(app, config_manager=config_manager)
+    setup_middleware(app)
 
     # 注册异常处理器
     setup_exception_handlers(app)
