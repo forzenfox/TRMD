@@ -66,6 +66,8 @@ def create_app(
 
         ctx = init_context()
         token_manager = ctx.token_manager
+        if config_manager is None:
+            config_manager = ctx.config_manager
 
     app = FastAPI(
         title="TRMD Web API",
